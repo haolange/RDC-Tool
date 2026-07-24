@@ -1024,6 +1024,7 @@ async def _cmd_facade(args: argparse.Namespace) -> int:
 async def _cmd_capture_open(args: argparse.Namespace) -> int:
     file_path = str(Path(args.file).resolve())
     context = str(args.daemon_context)
+    remote_id = str(getattr(args, "remote_id", "") or "").strip()
     capture_file_id = ""
     session_id = ""
     active_event_id = 0
@@ -1070,10 +1071,15 @@ async def _cmd_capture_open(args: argparse.Namespace) -> int:
         return _print_capture_open_error("open_file", source_payload=open_file)
     capture_file_id = str(_extract(open_file, "capture_file_id") or "")
 
+    open_replay_options: Dict[str, Any] = {}
+    if remote_id:
+        # Explicit remote handle — never silent-fallback to local OpenCapture.
+        open_replay_options["remote_id"] = remote_id
+
     try:
         open_replay = _daemon_exec(
             "rd.capture.open_replay",
-            {"capture_file_id": capture_file_id, "options": {}},
+            {"capture_file_id": capture_file_id, "options": open_replay_options},
             context=context,
         )
     except Exception as exc:  # noqa: BLE001
@@ -1136,6 +1142,8 @@ async def _cmd_capture_open(args: argparse.Namespace) -> int:
             "session_id": session_id,
             "active_event_id": active_event_id,
             "recovery_status": recovery_status or "ready",
+            "backend": "remote" if remote_id else "local",
+            "remote_id": remote_id or None,
             "runtime": runtime_snapshot if isinstance(runtime_snapshot, dict) else {},
             "context": context_data,
         },
@@ -1431,6 +1439,11 @@ def _build_parser() -> argparse.ArgumentParser:
     p_capture_open.add_argument("--file", required=True)
     p_capture_open.add_argument("--frame-index", type=int, default=0)
     p_capture_open.add_argument("--artifact-dir", default=str(artifacts_dir().resolve()))
+    p_capture_open.add_argument(
+        "--remote-id",
+        default=None,
+        help="Live remote handle from rd.remote.connect; when set, open_replay must use that remote backend (no local fallback).",
+    )
     p_capture_open.add_argument("--preview", action="store_true")
     s_capture.add_parser("status")
 

@@ -65,6 +65,7 @@ def test_capture_open_success_returns_machine_readable_payload(monkeypatch, tmp_
         frame_index=0,
         artifact_dir=str(tmp_path / "artifacts"),
         daemon_context="ctx-demo",
+        remote_id=None,
         preview=False,
     )
     exit_code = asyncio.run(rdx_cli._cmd_capture_open(args))
@@ -85,8 +86,75 @@ def test_capture_open_success_returns_machine_readable_payload(monkeypatch, tmp_
     assert captured[0]["data"]["session_id"] == "sess_demo"
     assert captured[0]["data"]["active_event_id"] == 6152
     assert captured[0]["data"]["recovery_status"] == "ready"
+    assert captured[0]["data"]["backend"] == "local"
+    assert captured[0]["data"]["remote_id"] is None
     assert captured[0]["data"]["runtime"]["session_id"] == "sess_demo"
     assert captured[0]["data"]["context"]["current_session_id"] == "sess_demo"
+
+
+def test_capture_open_passes_remote_id_to_open_replay(monkeypatch, tmp_path) -> None:
+    captured: list[dict] = []
+    seen_replay_options: list[dict] = []
+    capture_path = tmp_path / "android.rdc"
+    capture_path.write_text("rdc", encoding="utf-8")
+
+    def _fake_daemon_exec(operation: str, args: dict[str, object], *, remote: bool = False, context: str = "default"):  # type: ignore[no-untyped-def]
+        assert context == "ctx-remote"
+        if operation == "rd.core.init":
+            return {"ok": True, "data": {}}
+        if operation == "rd.capture.open_file":
+            return {"ok": True, "data": {"capture_file_id": "capf_remote"}}
+        if operation == "rd.capture.open_replay":
+            options = args.get("options")
+            assert isinstance(options, dict)
+            seen_replay_options.append(dict(options))
+            return {
+                "ok": True,
+                "data": {
+                    "session_id": "sess_remote",
+                    "capture_file_id": "capf_remote",
+                    "active_event_id": 10,
+                    "recovery_status": "ready",
+                },
+            }
+        if operation == "rd.replay.set_frame":
+            return {"ok": True, "data": {"active_event_id": 10}}
+        if operation == "rd.session.get_context":
+            return {
+                "ok": True,
+                "data": {
+                    "context_id": "ctx-remote",
+                    "current_session_id": "sess_remote",
+                    "runtime": {
+                        "session_id": "sess_remote",
+                        "capture_file_id": "capf_remote",
+                        "backend_type": "remote",
+                    },
+                    "sessions": [{"session_id": "sess_remote", "recovery": {"status": "ready"}}],
+                },
+            }
+        raise AssertionError(f"unexpected operation: {operation}")
+
+    monkeypatch.setattr(rdx_cli, "_daemon_exec", _fake_daemon_exec)
+    monkeypatch.setattr(rdx_cli, "_print_json", lambda payload: captured.append(payload))
+
+    args = argparse.Namespace(
+        command="capture",
+        capture_cmd="open",
+        file=str(capture_path),
+        frame_index=0,
+        artifact_dir=str(tmp_path / "artifacts"),
+        daemon_context="ctx-remote",
+        remote_id="remote_abc",
+        preview=False,
+    )
+    exit_code = asyncio.run(rdx_cli._cmd_capture_open(args))
+
+    assert exit_code == rdx_cli.EXIT_OK
+    assert seen_replay_options == [{"remote_id": "remote_abc"}]
+    assert captured[0]["data"]["backend"] == "remote"
+    assert captured[0]["data"]["remote_id"] == "remote_abc"
+    assert captured[0]["data"]["session_id"] == "sess_remote"
 
 
 def test_capture_open_wraps_open_replay_failure_with_step_state(monkeypatch, tmp_path) -> None:
@@ -157,6 +225,8 @@ def test_capture_open_wraps_open_replay_failure_with_step_state(monkeypatch, tmp
         frame_index=0,
         artifact_dir=str(tmp_path / "artifacts"),
         daemon_context="ctx-demo",
+        remote_id=None,
+        preview=False,
     )
     exit_code = asyncio.run(rdx_cli._cmd_capture_open(args))
 
@@ -225,6 +295,7 @@ def test_capture_open_wraps_open_replay_exception_with_step_state(monkeypatch, t
         frame_index=0,
         artifact_dir=str(tmp_path / "artifacts"),
         daemon_context="ctx-demo",
+        remote_id=None,
         preview=False,
     )
     exit_code = asyncio.run(rdx_cli._cmd_capture_open(args))
@@ -283,6 +354,8 @@ def test_capture_open_wraps_get_context_exception_with_step_state(monkeypatch, t
         frame_index=0,
         artifact_dir=str(tmp_path / "artifacts"),
         daemon_context="ctx-demo",
+        remote_id=None,
+        preview=False,
     )
     exit_code = asyncio.run(rdx_cli._cmd_capture_open(args))
 
@@ -344,6 +417,7 @@ def test_capture_open_with_preview_invokes_session_open_preview(monkeypatch, tmp
         frame_index=0,
         artifact_dir=str(tmp_path / "artifacts"),
         daemon_context="ctx-demo",
+        remote_id=None,
         preview=True,
     )
     exit_code = asyncio.run(rdx_cli._cmd_capture_open(args))
