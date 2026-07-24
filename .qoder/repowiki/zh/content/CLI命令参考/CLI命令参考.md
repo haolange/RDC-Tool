@@ -8,7 +8,14 @@
 - [rdx/__init__.py](file://rdx/__init__.py)
 - [rdx.bat](file://rdx.bat)
 - [scripts/smoke_cli.sh](file://scripts/smoke_cli.sh)
+- [tests/test_cli_capture_open.py](file://tests/test_cli_capture_open.py)
 </cite>
+
+## 更新摘要
+**变更内容**   
+- 新增 `capture open` 命令的 `--remote-id` 参数文档说明
+- 更新捕获命令部分，包含远程回放功能的使用示例
+- 增强错误处理和故障排查指南中的远程相关说明
 
 ## 目录
 1. [简介](#简介)
@@ -25,7 +32,7 @@
 ## 简介
 本文件为 RDX Agent Tools 的 CLI 命令参考，覆盖基础命令、工具管理命令、会话控制命令与守护进程命令。内容基于仓库中的 CLI 实现与启动器，提供命令语法、参数、选项、输入输出格式、错误处理、使用示例与最佳实践。读者可据此快速掌握命令用法、组合使用方式以及在不同平台（Windows、POSIX Shell）下的运行方式。
 
-**更新** 新增6个面向用户的友好CLI Facade（event、pipeline、shader、export、pixel、resource），这些命令映射到现有的rd.*工具，同时增强TSV投影支持功能。
+**更新** 新增6个面向用户的友好CLI Facade（event、pipeline、shader、export、pixel、resource），这些命令映射到现有的rd.*工具，同时增强TSV投影支持功能。**新增 capture open 命令的 --remote-id 参数，支持显式指定远程句柄进行远程回放功能。**
 
 ## 项目结构
 RDX CLI 由两层组成：
@@ -51,14 +58,14 @@ CORECLI --> VERSION
 
 **图表来源**
 - [cli/run_cli.py:1-290](file://cli/run_cli.py#L1-L290)
-- [rdx/cli.py:1-1447](file://rdx/cli.py#L1-L1447)
+- [rdx/cli.py:1-1733](file://rdx/cli.py#L1-L1733)
 - [rdx/core/tsv_projection.py](file://rdx/core/tsv_projection.py)
 - [rdx/__init__.py:1-4](file://rdx/__init__.py#L1-L4)
 - [rdx.bat](file://rdx.bat)
 
 **章节来源**
 - [cli/run_cli.py:1-290](file://cli/run_cli.py#L1-L290)
-- [rdx/cli.py:1-1447](file://rdx/cli.py#L1-L1447)
+- [rdx/cli.py:1-1733](file://rdx/cli.py#L1-L1733)
 - [rdx/core/tsv_projection.py](file://rdx/core/tsv_projection.py)
 - [rdx/__init__.py:1-4](file://rdx/__init__.py#L1-L4)
 
@@ -381,25 +388,32 @@ end
 
 #### 捕获命令
 - 语法
-  - rdx capture open --file <path> [--frame-index <n>] [--preview] [--daemon-context <id>]
+  - rdx capture open --file <path> [--frame-index <n>] [--preview] [--remote-id <handle>] [--daemon-context <id>]
   - rdx capture status
 - 选项
   - --file：捕获文件路径
   - --frame-index：帧索引
   - --preview：打开预览
+  - **--remote-id：显式指定远程句柄，强制使用远程后端进行回放（无本地回退）**
 - 输入
   - 捕获文件路径与可选参数
 - 输出
-  - 成功：返回捕获状态与上下文快照
+  - 成功：返回捕获状态与上下文快照，包含 backend 类型（local/remote）和 remote_id 信息
+  - 失败：返回多步骤失败时的详细错误与恢复建议
 - 错误处理
   - 多步骤失败时返回详细错误与恢复建议
 - 使用示例
   - rdx capture open --file D:\path\capture.rdc --frame-index 0 --preview
+  - rdx capture open --file D:\path\capture.rdc --remote-id remote_abc --frame-index 0
   - rdx capture status
+
+**更新** 新增 `--remote-id` 参数支持，允许显式指定远程句柄进行远程回放功能。当设置此参数时，系统将强制使用指定的远程后端，不会回退到本地 OpenCapture。
 
 **章节来源**
 - [rdx/cli.py:844-1222](file://rdx/cli.py#L844-L1222)
 - [rdx/cli.py:717-725](file://rdx/cli.py#L717-L725)
+- [rdx/cli.py:1442-1446](file://rdx/cli.py#L1442-L1446)
+- [tests/test_cli_capture_open.py:95-157](file://tests/test_cli_capture_open.py#L95-L157)
 
 #### 差异与断言
 - 语法
@@ -637,6 +651,10 @@ BAT["rdx.bat"] --> CORECLI
 - **新增** TSV投影问题
   - TSV格式输出失败时，检查后端工具是否支持投影
   - 大量数据导出时注意内存使用情况
+- **新增** 远程回放问题
+  - 使用 --remote-id 参数时，确保指定的远程句柄有效且可用
+  - 远程连接失败时检查网络连接和远程服务状态
+  - 远程句柄过期或被回收时，需要重新建立连接
 - 自动补全
   - 生成对应 Shell 的补全脚本，确保命令与参数可被正确补全。
 
@@ -649,7 +667,7 @@ BAT["rdx.bat"] --> CORECLI
 - [rdx/cli.py:601-643](file://rdx/cli.py#L601-L643)
 
 ## 结论
-本参考文档系统梳理了 RDX CLI 的全部命令族，明确了语法、参数、选项、输入输出格式与错误处理策略，并提供了跨平台入口与最佳实践。**新增的6个CLI Facade命令（event、pipeline、shader、export、pixel、resource）为用户提供了更友好的操作界面，映射到现有的rd.*工具，同时增强的TSV投影支持使得批量数据处理更加便捷。** 建议在自动化脚本中优先使用 --json 输出，配合 doctor 命令进行环境自检，结合会话与上下文管理命令完成端到端工作流。
+本参考文档系统梳理了 RDX CLI 的全部命令族，明确了语法、参数、选项、输入输出格式与错误处理策略，并提供了跨平台入口与最佳实践。**新增的6个CLI Facade命令（event、pipeline、shader、export、pixel、resource）为用户提供了更友好的操作界面，映射到现有的rd.*工具，同时增强的TSV投影支持使得批量数据处理更加便捷。** **新增的 capture open 命令 --remote-id 参数支持显式指定远程句柄进行远程回放，增强了分布式调试和分析能力。** 建议在自动化脚本中优先使用 --json 输出，配合 doctor 命令进行环境自检，结合会话与上下文管理命令完成端到端工作流。
 
 ## 附录
 
@@ -678,6 +696,7 @@ BAT["rdx.bat"] --> CORECLI
   - 在捕获操作前先 context clear，确保干净状态
   - **新增** 利用TSV格式进行批量数据处理
   - **新增** 使用CLI Facade命令简化常用操作
+  - **新增** 使用 --remote-id 参数进行远程回放时，确保远程句柄的有效性
 
 **章节来源**
 - [scripts/smoke_cli.sh:176-195](file://scripts/smoke_cli.sh#L176-L195)
@@ -711,5 +730,30 @@ rdx resource list --format tsv > textures.tsv
 rdx resource stats --resource-id texture0 --format json
 ```
 
+### **新增** 远程回放使用示例
+
+#### 基本远程回放
+```bash
+# 使用指定的远程句柄打开捕获文件
+rdx capture open --file D:\path\capture.rdc --remote-id remote_abc --frame-index 0
+
+# 带预览的远程回放
+rdx capture open --file D:\path\capture.rdc --remote-id remote_abc --preview
+```
+
+#### 远程回放最佳实践
+```bash
+# 先检查远程句柄状态
+rdx call rd.remote.list --format json
+
+# 使用有效的远程句柄进行回放
+rdx capture open --file D:\path\capture.rdc --remote-id $(rdx call rd.remote.list --format json | jq -r '.data[0].remote_id')
+
+# 验证回放状态
+rdx capture status --json
+```
+
 **章节来源**
 - [rdx/cli.py:1219-770](file://rdx/cli.py#L1219-L770)
+- [tests/test_cli_capture_open.py:95-157](file://tests/test_cli_capture_open.py#L95-L157)
+- [rdx/cli.py:1442-1446](file://rdx/cli.py#L1442-L1446)
