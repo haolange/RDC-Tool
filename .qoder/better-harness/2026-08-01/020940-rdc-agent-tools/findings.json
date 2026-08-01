@@ -1,0 +1,90 @@
+{
+  "summary": {
+    "projectName": "rdx-tools",
+    "locale": "zh-CN",
+    "modelId": "agent-work-loop-v4",
+    "reportContractVersion": 25,
+    "overview": "项目拥有清晰的 CLI 工具目录、稳定契约和全面的发布门禁，但唯一的治理资产引用了不存在的范围路径，且会话证据为空使整体评估置信度受限。",
+    "aiAgentPractice": {
+      "inspectedSurfaces": [
+        "Rules"
+      ],
+      "coverageRows": [
+        {
+          "surface": "Rules",
+          "scopes": [
+            "Project"
+          ],
+          "count": 1,
+          "paths": [
+            "AGENTS.md"
+          ]
+        },
+        {
+          "surface": "Custom Agents",
+          "scopes": [
+            "Project"
+          ],
+          "count": 0
+        }
+      ]
+    },
+    "assignmentSummaries": [],
+    "dimensions": [
+      {
+        "id": "task-understanding",
+        "label": "任务理解",
+        "score": 62,
+        "summary": "AGENTS.md 和项目目录提供了清晰的入口与契约，但范围声明引用了不存在的路径。",
+        "findingRefs": [
+          "agents-md-scope-path"
+        ]
+      },
+      {
+        "id": "controlled-execution",
+        "label": "可控执行",
+        "score": 55,
+        "summary": "rdx 启动器和 doctor 命令提供了可复现的启动路径，但数据源配置警告限制了会话级执行观察。",
+        "findingRefs": []
+      },
+      {
+        "id": "change-validation",
+        "label": "改动验证",
+        "score": 59,
+        "summary": "375 个测试文件和全面的发布门禁存在，但在本次审查中未被观察到的任务 Episode 所行使。",
+        "findingRefs": []
+      },
+      {
+        "id": "reliable-delivery",
+        "label": "可靠交付",
+        "score": 55,
+        "summary": "发布打包验证完整，但无已观察到的交付接受或恢复证据。",
+        "findingRefs": []
+      },
+      {
+        "id": "learning-capture",
+        "label": "经验沉淀",
+        "score": 35,
+        "summary": "无可比较的后续结果验证可复用的改进；无已观察到的重复需求被路由至可复用资产。",
+        "findingRefs": []
+      }
+    ]
+  },
+  "findings": [
+    {
+      "id": "agents-md-scope-path",
+      "title": "AGENTS.md 范围声明引用了项目中不存在的路径",
+      "severity": "Low",
+      "reason": "AGENTS.md 第三行声明 'Scope: this file governs resources/tools changes only'，但项目目录中不存在 resources/tools 路径。此不一致可能误导 agent 对治理范围的理解——agent 可能推断该规则不适用于当前项目结构，或尝试导航到不存在的目录。实际治理内容（CLI 文档同步、远程自测、预览约束）覆盖的是 rdx/handlers/、docs/ 和 scripts/ 中的文件。",
+      "expectedOutput": [
+        "将范围声明更新为与实际项目结构一致的路径或逻辑范围描述。",
+        "确保声明的治理覆盖范围与文件实际约束的变更面匹配。"
+      ],
+      "expectedArtifact": "AGENTS.md",
+      "aiFixPrompt": "/better-harness fix this issue\n\n更新 AGENTS.md 中的范围声明，使其准确反映当前项目结构。\n\n## Validation\n\n- 确认范围声明引用的路径存在于项目中\n- 确认声明的治理范围覆盖了文件实际的约束内容（CLI 文档同步、远程自测、预览/几何观察面）",
+      "dimensionRefs": [
+        "task-understanding"
+      ]
+    }
+  ]
+}

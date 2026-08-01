@@ -1,6 +1,6 @@
 ﻿# AGENTS.md
 
-Scope: this file governs `resources/tools` changes only.
+Scope: this file governs the `rdx-tools` CLI project (`rdx/`, `cli/`, `docs/`, `scripts/`, `tests/`, `spec/`).
 
 `rdx-tools` is CLI-only. Use `rdx` as the public user command; keep `rdx.bat`, `bin/rdx`, and `python cli/run_cli.py` as package launcher files.
 
