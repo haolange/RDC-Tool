@@ -23,37 +23,36 @@ def test_tool_reference_is_generated_from_catalog() -> None:
         assert str(tool["name"]) in doc_path.read_text(encoding="utf-8-sig")
 
 
-def test_rdx_native_playbook_has_fixed_recipe_set_and_required_sop_topics() -> None:
+def test_rdx_native_playbook_covers_cli_and_runtime_contracts() -> None:
     text = (ROOT / "docs" / "rdx-native-agent-playbook.md").read_text(encoding="utf-8-sig")
-    recipes = [line for line in text.splitlines() if line.startswith("### ")]
-
-    assert recipes == [
-        "### 1. Open Capture",
-        "### 2. Unknown Frame Triage",
-        "### 3. Pipeline And Resource Inspect",
-        "### 4. Visual Export And Preview",
-        "### 5. Pixel Debug",
-        "### 6. Shader Edit With edit_plan",
-        "### 7. Android Remote Open And Replay",
-        "### 8. Bug Report Pack",
-    ]
     required_terms = [
         "rdx --json doctor",
         "--daemon-context",
         "rdx context status --json",
         "rdx context update",
         "rdx context clear",
-        "VFS first",
+        "capture open --file",
+        "event list --format tsv",
+        "pipeline show --event-id",
+        "resource show --resource-id",
+        "export screenshot --event-id",
+        "pixel history --event-id",
+        "shader source --event-id",
         "preview.display",
         "rd.remote.connect",
         "rd.remote.ping",
         "rd.capture.open_replay",
         "edit_plan",
-        "Output Size Management",
-        "Failure Recovery",
+        "captured_source_editable=false",
+        "runtime_full_replace_supported=false",
+        "remote_handle_consumed",
+        "rd.capture.close_replay",
+        "stale_session_requires_restart",
+        "--max-nodes",
+        "--args-file",
     ]
     for term in required_terms:
-        assert term in text
+        assert term in text, term
 
 
 def test_public_rdc_fixtures_have_expected_size_and_hash() -> None:

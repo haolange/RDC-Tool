@@ -1,6 +1,6 @@
 ﻿# Android Remote CLI Smoke Prompt
 
-Use this prompt for Android remote-only smoke through CLI transport. Start from [../README.md](../README.md), then keep [session-model.md](session-model.md), [agent-model.md](agent-model.md), [troubleshooting.md](troubleshooting.md), [doc-governance.md](doc-governance.md), and [../scripts/README.md](../scripts/README.md) aligned.
+Use this prompt for Android remote-only smoke through CLI transport. Consult [../README.md](../README.md) for package orientation when needed. When changing this workflow, check and update references for the affected topic: [session-model.md](session-model.md) for session lifecycle, [agent-model.md](agent-model.md) for agent usage, [troubleshooting.md](troubleshooting.md) for recovery, [doc-governance.md](doc-governance.md) for documentation rules, and [../scripts/README.md](../scripts/README.md) for smoke script usage.
 
 Core sequence:
 

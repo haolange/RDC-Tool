@@ -10,17 +10,17 @@ Use `rdx call <rd.*> --format json` when the exact catalog operation matters. Us
 
 ## Ground Rules
 
-- Run `rdx --json doctor` before assuming the local runtime is ready.
-- Use `--daemon-context <id>` for every non-trivial task so state does not leak between agent jobs.
-- Inspect state with `rdx context status --json`; write notes with `rdx context update --key notes --value "..." --json`; clear finished or confused state with `rdx context clear --json`.
-- Explore with VFS first: `rdx vfs ls --path / --format tsv`, then `rdx vfs cat --path /context --format json`, then bounded trees such as `rdx vfs tree --path /draws --depth 2 --max-nodes 2000 --format json`. Broad `/draws` tree nodes intentionally defer full event details with `detail_deferred=true`; use `event show`, targeted `vfs cat`, or canonical tools for a chosen event. Do not broad-expand `/resources`, `/textures`, or `/buffers`; use `vfs ls`, targeted `vfs cat`, or canonical tools.
+- Run `rdx --json doctor` when runtime readiness is unknown or the environment has changed; reuse a current successful result otherwise.
+- Use `--daemon-context <id>` for non-trivial capture tasks and keep it consistent across calls so state does not leak between agent jobs.
+- Before operations that depend on session state, inspect the selected context with `rdx context status --json`. Write notes with `rdx context update --key notes --value "..." --json` when it helps task continuity. Use `rdx context clear --json` for intentional cleanup of that task's context, following the recovery sequence below when state is stale.
+- When the target is unknown, use bounded VFS exploration as needed: `rdx vfs ls --path / --format tsv`, `rdx vfs cat --path /context --format json`, or a bounded tree such as `rdx vfs tree --path /draws --depth 2 --max-nodes 2000 --format json`. When the event, resource, or required tool is known, query it directly. Broad `/draws` tree nodes intentionally defer full event details with `detail_deferred=true`; use `event show`, targeted `vfs cat`, or canonical tools for a chosen event. Do not broad-expand `/resources`, `/textures`, or `/buffers`; use `vfs ls`, targeted `vfs cat`, or canonical tools.
 - Treat JSON as canonical. TSV is only a projection for list/navigation surfaces.
 - Keep output bounded. Prefer summaries, VFS paths, and specific resource/event IDs before requesting large payloads.
 - Never guess a session. Open a capture or pass `--session-id` when the selected daemon context has no active session.
 
 ## Output Size Management
 
-Start with list and summary commands before deep payloads:
+Use list and summary commands to locate unknown targets or bound large payloads; query a known target directly:
 
 ```bat
 rdx --daemon-context case-1 event list --format tsv
@@ -46,6 +46,8 @@ rdx --daemon-context case-1 daemon stop
 ```
 
 ## Recipes
+
+Choose the relevant recipe and run only the steps needed for the task. Readiness checks and exploration follow the conditions above; the examples are not a mandatory sequence across recipes.
 
 ### 1. Open Capture
 

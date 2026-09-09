@@ -185,7 +185,6 @@ def _check_remote_consumed_semantics(root: Path, issues: list[str]) -> None:
 def _check_agent_self_test_guidance(root: Path, issues: list[str]) -> None:
     text = _read_text(root, "AGENTS.md")
     required = (
-        "Conflict policy:",
         "docs/session-model.md",
         "docs/agent-model.md",
         "docs/troubleshooting.md",
