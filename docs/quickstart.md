@@ -45,4 +45,4 @@ Remote-only smoke still uses CLI transport. Watch for `remote_handle_consumed` a
 
 For task-level recipes, see [rdx-native agent playbook](rdx-native-agent-playbook.md). The full generated tool list is [Tool reference](tool-reference.md).
 
-Texture export is truthful about requested precision. ile_format is canonical; the legacy ormat alias is accepted only at the boundary. Explicit HDR/EXR/DDS requests fail closed with structured format metadata if the encoder cannot produce that format; PNG is display-mapped evidence, not proof of retained HDR data.
+Texture export is truthful about requested precision. `file_format` is the only format parameter. Explicit HDR/EXR/DDS requests fail closed with structured format metadata if the encoder cannot produce that format; PNG is display-mapped evidence, not proof of retained HDR data.

@@ -90,7 +90,7 @@ def _print_launcher_help() -> None:
         "commands:",
         "  version",
         "  doctor",
-        "  tools list|search",
+        "  tools list|search|describe",
         "  daemon start|stop|status",
         "  context status|update|list|clear",
         "  session preview on|off|status",

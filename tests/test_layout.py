@@ -21,7 +21,8 @@ def test_catalog_has_unique_tools_and_declared_count() -> None:
 def test_catalog_uses_repo_relative_source_path_and_readable_groups() -> None:
     catalog = ROOT / "spec" / "tool_catalog.json"
     payload = json.loads(catalog.read_text(encoding="utf-8"))
-    assert payload.get("source_path") == "spec/doc_extracted.txt"
+    assert payload.get("source_path") == "rdx/operation_definitions.py"
+    assert isinstance(payload.get("fingerprint"), str) and len(payload["fingerprint"]) == 64
     groups = payload.get("groups", {})
     assert isinstance(groups, dict)
     assert groups
@@ -37,7 +38,9 @@ def test_catalog_boundaries_remove_pre_ga_surfaces_and_expand_export_params() ->
     payload = json.loads(catalog.read_text(encoding="utf-8"))
     tools = payload.get("tools", [])
     names = {str(t.get("name", "")).strip() for t in tools}
-    assert int(payload.get("tool_count") or 0) == 196
+    from rdx.operation_definitions import OPERATIONS
+    assert int(payload.get("tool_count") or 0) == len(OPERATIONS)
+    assert names == {item["name"] for item in OPERATIONS}
 
     removed = {
         "rd.resource.rename",
@@ -62,8 +65,79 @@ def test_catalog_boundaries_remove_pre_ga_surfaces_and_expand_export_params() ->
         "rd.macro.locate_draw_affecting_pixel",
         "rd.macro.trace_resource_lifetime",
         "rd.macro.find_nan_inf_in_targets",
+        "rd.core.search_tools",
+        "rd.capture.list_frames",
+        "rd.session.select_context",
+        "rd.event.get_actions",
+        "rd.event.get_drawcall_children",
+        "rd.event.get_marker_stack",
+        "rd.pipeline.get_state_summary",
+        "rd.pipeline.get_vertex_input",
+        "rd.pipeline.get_primitive_topology",
+        "rd.pipeline.get_viewports_scissors",
+        "rd.pipeline.get_rasterizer_state",
+        "rd.pipeline.get_multisample_state",
+        "rd.pipeline.get_blend_state",
+        "rd.pipeline.get_depth_stencil_state",
+        "rd.pipeline.get_output_targets",
+        "rd.pipeline.get_render_targets",
+        "rd.pipeline.get_depth_target",
+        "rd.pipeline.get_uav_bindings",
+        "rd.pipeline.get_sampler_bindings",
+        "rd.pipeline.get_push_constants",
+        "rd.pipeline.get_dynamic_state",
+        "rd.pipeline.get_root_signature",
+        "rd.pipeline.get_descriptor_heaps",
+        "rd.pipeline.get_resource_states",
+        "rd.resource.list_textures",
+        "rd.resource.list_buffers",
+        "rd.resource.get_history",
+        "rd.resource.get_initial_contents",
+        "rd.resource.get_current_contents",
+        "rd.resource.get_descriptor_info",
+        "rd.resource.get_creation_context",
+        "rd.texture.get_subresource_data",
+        "rd.texture.get_min_max",
+        "rd.texture.save_mip_chain",
+        "rd.mesh.get_post_vs_data",
+        "rd.mesh.get_post_gs_data",
+        "rd.mesh.decode_vertex_data",
+        "rd.mesh.get_mesh_preview",
+        "rd.debug.pixel_history",
+        "rd.debug.explain_test_failure",
+        "rd.perf.get_pipeline_statistics",
+        "rd.diag.check_render_targets",
+        "rd.diag.check_depth_stencil",
+        "rd.diag.check_viewport_scissor",
+        "rd.diag.check_culling",
+        "rd.diag.check_blend",
+        "rd.diag.check_srgb",
+        "rd.diag.check_resource_bindings",
+        "rd.diag.check_constant_buffers",
+        "rd.diag.check_d3d12_resource_states",
+        "rd.diag.check_vk_dynamic_state",
+        "rd.export.pipeline_state_json",
+        "rd.export.event_tree_json",
+        "rd.export.resource_list_csv",
+        "rd.export.pixel_history_json",
+        "rd.export.repro_bundle_zip",
+        "rd.export.markdown_report",
+        "rd.remote.set_overlay_options",
+        "rd.macro.summarize_frame",
+        "rd.macro.find_pass_by_marker",
+        "rd.macro.explain_pixel",
+        "rd.macro.resource_dependency_graph",
+        "rd.macro.compare_events_report",
+        "rd.macro.find_unexpected_clear",
+        "rd.macro.quick_triage_missing_draw",
+        "rd.macro.build_bug_report_pack",
+        "rd.macro.shader_hotfix_validate",
+        "rd.util.compute_hash",
+        "rd.util.diff_text",
+        "rd.util.pack_zip",
     }
     assert not (removed & names)
+    assert "rd.mesh.get_post_transform_data" in names
 
     export_texture = next(tool for tool in tools if tool.get("name") == "rd.export.texture")
     export_buffer = next(tool for tool in tools if tool.get("name") == "rd.export.buffer")
@@ -73,6 +147,10 @@ def test_catalog_boundaries_remove_pre_ga_surfaces_and_expand_export_params() ->
     assert {"channels", "flip_y", "subresource", "file_format", "remap"} <= set(export_texture.get("param_names", []))
     assert {"buffer_id", "offset", "size", "output_path"} <= set(export_buffer.get("param_names", []))
     assert {"include_attributes", "space", "format", "output_path"} <= set(export_mesh.get("param_names", []))
+    mesh_properties = export_mesh["input_schema"]["properties"]
+    assert mesh_properties["format"]["enum"] == ["obj"]
+    assert mesh_properties["space"]["enum"] == ["postvs"]
+    assert mesh_properties["include_attributes"]["enum"] == [False]
     assert "enable_app_api" not in set(core_init.get("param_names", []))
 
 

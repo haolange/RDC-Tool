@@ -10,7 +10,7 @@ Set `RDX_TOOLS_ROOT` only when launching `bin/rdx` from another directory and th
 
 `RDX_PYTHON` is a maintainer/debug override for Python selection. It is not part of the user install path and should not be required by a GA release package.
 
-Runtime artifacts live under `intermediate/runtime`, `intermediate/artifacts`, and `intermediate/logs` during development, tests, and release validation.
+Runtime artifacts live under `intermediate/runtime`, `intermediate/artifacts`, and `intermediate/logs` during development, tests, and release validation. Set `RDX_INTERMEDIATE_ROOT` for an isolated task-owned test or smoke root; every runtime path derives from it.
 
 ## preview 运行约束
 

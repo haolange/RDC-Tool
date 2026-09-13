@@ -4,7 +4,11 @@ Agents should treat `rdx-tools` as CLI-only. Use the `rdx` command through the a
 
 Run `rdx --json doctor` when runtime readiness is unknown or the environment has changed; reuse a current successful result otherwise. Before operations that depend on session state, inspect the selected context with `rdx context status`. Use `rdx context update` for scoped notes or focus when it helps task continuity. `session_locator` summarizes the active capture/session/event for the selected daemon context. Multiple daemon contexts are isolated from each other; use an explicit `--daemon-context <id>` for non-trivial capture tasks and keep it consistent across calls.
 
+Discover narrowly: `rdx tools search <term>` finds related operations, `rdx tools list --namespace <domain>` lists an exact domain, and `rdx tools describe <rd.*>` returns one complete parameter/result/effect contract. Search may cross domains because it matches descriptions and parameters. A declared scope or effect informs orchestration but never grants permission; the embedding host still validates identity, session ownership, paths, and operation effects before execution.
+
 When the target is unknown, use bounded VFS exploration as needed: `rdx vfs ls --path / --format tsv`, `rdx vfs cat --path /context --format json`, or a bounded tree such as `rdx vfs tree --path /draws --depth 2 --max-nodes 2000 --format json`. When the event, resource, or required tool is known, query it directly. Broad `/draws` tree nodes are summaries; when a node reports `detail_deferred=true`, use `event show`, targeted `vfs cat`, or the canonical `rd.event.get_action_details` tool for that event. Do not broad-expand `/resources`, `/textures`, or `/buffers`; use `vfs ls` and targeted `vfs cat` or canonical `rd.*` tools. JSON is canonical; TSV is only for tabular navigation and list projections.
+
+Use `rd.pipeline.get_state(detail=summary, sections=[...])` for bounded pipeline reads; request `full` only when the complete state is needed. `rd.event.get_action_tree` reports pagination, emitted nodes, and truncation for browsing. Do not treat it as a complete frame index; embedded hosts use `rd.session.get_replay_events`. Resource history is `rd.resource.get_usage`, whose entries retain raw event IDs and identify writes. Statistical texture queries remain in memory; persist data only on an explicit readback/export request.
 
 When remote state reports `remote_handle_consumed`, do not reuse that remote handle. Use the remote lifecycle tools to reconnect, ping, or reopen replay as needed.
 
@@ -21,3 +25,7 @@ for complete event navigation and window-free PNG observation. See
 [session-model.md](session-model.md#embedded-replay-observations) for the atomic
 apply and partial-failure contract. These operations do not replace the independent
 CLI `rd.session.open_preview` / `preview.display` window workflow.
+
+## Restored data queries
+
+Capture-scoped thumbnail reads use the application's owning capture identity. Structured calls, descriptors, initialization relationships and pipeline sections provide primitive facts; Skills compose causal analysis and reports. Temporary replay reads return restoration proof and remain under the application's serial lease. Frame evidence compares the native method, full range, sampling conditions and capture identity, with the actual replacement state checked by the host.

@@ -19,6 +19,7 @@ if str(SCRIPT_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPT_ROOT))
 
 from rdx.python_runtime import validate_bundled_python_layout
+from rdx.runtime_catalog import catalog_payload
 from scripts import package_release as release_packager
 from scripts._shared import run_subprocess, tools_root, write_text
 from scripts.generate_tool_reference import generate_tool_reference
@@ -345,12 +346,18 @@ def _check_catalog_public_surface(root: Path) -> tuple[bool, str]:
     declared_count = int(payload.get("tool_count") or len(tools))
     if declared_count != len(tools):
         return False, f"catalog tool_count mismatch: declared={declared_count} actual={len(tools)}"
-    if len(tools) != 194:
-        return False, f"expected 194 active tools after alias convergence, got {len(tools)}"
+    expected = catalog_payload()
+    expected_names = {str(item.get("name") or "").strip() for item in expected["tools"]}
+    if names != expected_names:
+        missing = sorted(expected_names - names)
+        extra = sorted(names - expected_names)
+        return False, f"catalog differs from code-owned definitions: missing={missing[:5]} extra={extra[:5]}"
+    if str(payload.get("fingerprint") or "") != str(expected.get("fingerprint") or ""):
+        return False, "catalog fingerprint differs from code-owned definitions"
     catalog_text = json.dumps(payload, ensure_ascii=False)
     if "\u517c\u5bb9\u5de5\u5177" in catalog_text:
         return False, "active catalog contains removed alias-tool wording"
-    return True, "active catalog has 194 tools and no removed aliases"
+    return True, f"active catalog matches {len(expected_names)} code-owned definitions"
 
 
 def _check_tool_reference_fresh(root: Path) -> tuple[bool, str]:
@@ -361,13 +368,13 @@ def _check_tool_reference_fresh(root: Path) -> tuple[bool, str]:
     if not doc_path.is_file():
         return False, f"missing tool reference: {doc_path}"
     try:
-        expected = generate_tool_reference(catalog_path)
+        expected = generate_tool_reference()
         current = doc_path.read_text(encoding="utf-8-sig")
     except Exception as exc:
         return False, f"tool reference freshness check failed: {exc}"
     if current != expected:
         return False, "docs/tool-reference.md is stale; run python scripts/generate_tool_reference.py"
-    return True, "docs/tool-reference.md matches spec/tool_catalog.json"
+    return True, "docs/tool-reference.md matches code-owned operation definitions"
 
 
 def _check_no_mcp_public_surface(root: Path) -> tuple[bool, str]:
@@ -419,6 +426,12 @@ def _find_release_package(root: Path, raw_package: str) -> Path | None:
 
 
 def _check_release_package(root: Path, *, raw_package: str, required: bool) -> tuple[bool, str]:
+    if not raw_package and not required:
+        return (
+            True,
+            "release package check skipped in source-only gate; pass --release-package or "
+            "--require-release-package for GA",
+        )
     package_path = _find_release_package(root, raw_package)
     if package_path is None:
         if required:

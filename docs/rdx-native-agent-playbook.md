@@ -11,6 +11,7 @@ Use `rdx call <rd.*> --format json` when the exact catalog operation matters. Us
 ## Ground Rules
 
 - Run `rdx --json doctor` when runtime readiness is unknown or the environment has changed; reuse a current successful result otherwise.
+- Discover narrowly. Use `rdx tools search <term>` for semantic search, `rdx tools list --namespace <domain>` for an exact domain, and `rdx tools describe <rd.*> --json` before using an unfamiliar operation. Search can return related operations from several domains.
 - Use `--daemon-context <id>` for non-trivial capture tasks and keep it consistent across calls so state does not leak between agent jobs.
 - Before operations that depend on session state, inspect the selected context with `rdx context status --json`. Write notes with `rdx context update --key notes --value "..." --json` when it helps task continuity. Use `rdx context clear --json` for intentional cleanup of that task's context, following the recovery sequence below when state is stale.
 - When the target is unknown, use bounded VFS exploration as needed: `rdx vfs ls --path / --format tsv`, `rdx vfs cat --path /context --format json`, or a bounded tree such as `rdx vfs tree --path /draws --depth 2 --max-nodes 2000 --format json`. When the event, resource, or required tool is known, query it directly. Broad `/draws` tree nodes intentionally defer full event details with `detail_deferred=true`; use `event show`, targeted `vfs cat`, or canonical tools for a chosen event. Do not broad-expand `/resources`, `/textures`, or `/buffers`; use `vfs ls`, targeted `vfs cat`, or canonical tools.
@@ -28,7 +29,7 @@ rdx --daemon-context case-1 pipeline show --event-id 42 --format json
 rdx --daemon-context case-1 resource list --format tsv
 ```
 
-Use raw `rdx call` for catalog options such as `max_nodes`, `max_events`, projections, or filters when a facade intentionally hides low-frequency parameters. Store large artifacts under `intermediate/artifacts` or a task-specific output directory instead of printing them. Use `--args-file` for complex JSON, especially multiline HLSL/GLSL replacement source.
+Use raw `rdx call` for catalog options such as `max_nodes`, `max_events`, projections, or filters when a facade intentionally hides low-frequency parameters. Texture statistics, histograms, differences, and base64 buffer reads remain in memory. Store files under the configured `RDX_INTERMEDIATE_ROOT` only when an export or evidence request requires persistence. Use `--args-file` for complex JSON, especially multiline HLSL/GLSL replacement source.
 
 ## Failure Recovery
 
@@ -80,7 +81,7 @@ rdx --daemon-context case-1 resource show --resource-id <resource-id> --format j
 rdx --daemon-context case-1 resource usage --resource-id <resource-id> --format json
 ```
 
-Use `pipeline show` for the compact state, `pipeline section` for one shader stage, and resource usage to prove where a texture/buffer is bound or written.
+Use `pipeline show` for compact state and `pipeline section` for one shader stage. Raw callers can bound `rd.pipeline.get_state` with `detail=summary|full` and `sections`. Resource discovery is `rd.resource.list_all(kind=all|texture|buffer)`; resource usage preserves real event IDs and write classification.
 
 ### 4. Visual Export And Preview
 
@@ -91,6 +92,8 @@ rdx --daemon-context case-1 export screenshot --event-id 42 --out intermediate\a
 ```
 
 Inspect `preview.display` in `context status --json` when geometry matters. It is the stable preview state surface for framebuffer, fit, and window dimensions.
+
+`rd.export.mesh` writes real post-VS float32 positions and primitive indices as OBJ. It rejects pre-VS space, PLY/glTF, attributes, unsupported topology, and incomplete readback without writing a placeholder file.
 
 ### 5. Pixel Debug
 
@@ -124,9 +127,9 @@ rdx --daemon-context android-1 context status --json
 
 After `rd.capture.open_replay`, a consumed remote handle must not be reused as a free connection. Reconnect or recover through the remote lifecycle tools when state reports `remote_handle_consumed`.
 
-### 8. Bug Report Pack
+### 8. Bug Report Evidence
 
-Collect the smallest reproducible evidence set:
+Collect the smallest reproducible evidence set. There is no fixed report-pack operation; the specialist workflow chooses each observation and export explicitly:
 
 ```bat
 rdx --daemon-context case-1 version --json

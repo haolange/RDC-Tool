@@ -17,6 +17,7 @@ if str(SCRIPT_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPT_ROOT))
 
 from rdx import __version__ as TOOL_VERSION
+from rdx.runtime_paths import intermediate_root
 from scripts._shared import tools_root, write_text
 
 
@@ -176,7 +177,7 @@ def main(argv: list[str] | None = None) -> int:
 
     root = _tools_root().resolve()
     out_dir = (root / str(args.out_dir)).resolve()
-    staging_parent = root / "intermediate" / "release"
+    staging_parent = intermediate_root() / "release"
     staging_root = staging_parent / PACKAGE_PREFIX
     if staging_root.exists():
         shutil.rmtree(staging_root)

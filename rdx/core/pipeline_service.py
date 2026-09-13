@@ -8,6 +8,8 @@ import json
 import logging
 from typing import Any, Dict, List, Optional, Protocol, Tuple, runtime_checkable
 
+from rdx.core.native_values import native_value
+
 from rdx.models import (
     ArtifactRef,
     BlendState,
@@ -213,9 +215,12 @@ def _extract_blend_state(api_state: Any, api: GraphicsAPI) -> List[BlendState]:
                 src_alpha=str(b.alphaBlend.source),
                 dst_alpha=str(b.alphaBlend.destination),
                 alpha_op=str(b.alphaBlend.operation),
+                write_mask=int(b.writeMask) if hasattr(b, "writeMask") else None,
+                logic_op=str(b.logicOperation) if hasattr(b, "logicOperation") else None,
+                logic_op_enabled=bool(b.logicOperationEnabled) if hasattr(b, "logicOperationEnabled") else None,
             ))
     except (AttributeError, TypeError) as exc:
-        logger.debug("_extract_blend_state: %s", exc)
+        raise RuntimeError("Pipeline blend read failed") from exc
 
     return blends
 
@@ -224,41 +229,24 @@ def _extract_blend_state(api_state: Any, api: GraphicsAPI) -> List[BlendState]:
 # ---------------------------------------------------------------------------
 
 
-def _extract_depth_stencil(
-    api_state: Any,
-    api: GraphicsAPI,
-) -> DepthStencilState:
-    """Internal helper."""
-    ds = DepthStencilState()
-    if api_state is None:
-        return ds
-
-    try:
-        if api in (GraphicsAPI.D3D11, GraphicsAPI.D3D12):
-            raw = api_state.outputMerger.depthStencilState
-            ds.depth_test_enabled = bool(raw.depthEnable)
-            ds.depth_write_enabled = bool(raw.depthWrites)
-            ds.depth_func = str(raw.depthFunction)
-            ds.stencil_enabled = bool(raw.stencilEnable)
-        elif api == GraphicsAPI.VULKAN:
-            raw = api_state.depthStencil
-            ds.depth_test_enabled = bool(raw.depthTestEnable)
-            ds.depth_write_enabled = bool(raw.depthWriteEnable)
-            ds.depth_func = str(raw.depthFunction)
-            ds.stencil_enabled = bool(raw.stencilTestEnable)
-        elif api == GraphicsAPI.OPENGL:
-            ds.depth_test_enabled = bool(api_state.depthState.depthEnable)
-            ds.depth_write_enabled = bool(api_state.depthState.depthWrites)
-            ds.depth_func = str(api_state.depthState.depthFunction)
-            ds.stencil_enabled = bool(api_state.stencilState.stencilEnable)
-    except (AttributeError, TypeError) as exc:
-        logger.debug("_extract_depth_stencil: %s", exc)
-
-    return ds
-
-
-# ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
+def _extract_depth_stencil(api_state: Any, api: GraphicsAPI) -> DepthStencilState:
+    if api in (GraphicsAPI.D3D11, GraphicsAPI.D3D12):
+        raw = api_state.outputMerger.depthStencilState
+        depth_enable, depth_write, stencil_enable = raw.depthEnable, raw.depthWrites, raw.stencilEnable
+        depth_function = raw.depthFunction
+    elif api == GraphicsAPI.VULKAN:
+        raw = api_state.depthStencil
+        depth_enable, depth_write, stencil_enable = raw.depthTestEnable, raw.depthWriteEnable, raw.stencilTestEnable
+        depth_function = raw.depthFunction
+    elif api == GraphicsAPI.OPENGL:
+        raw = api_state.stencilState
+        depth_enable, depth_write = api_state.depthState.depthEnable, api_state.depthState.depthWrites
+        depth_function, stencil_enable = api_state.depthState.depthFunction, raw.stencilEnable
+    else:
+        raise ValueError("Unsupported graphics API depth/stencil state")
+    return DepthStencilState(depth_test_enabled=bool(depth_enable), depth_write_enabled=bool(depth_write),
+        depth_func=str(depth_function), stencil_enabled=bool(stencil_enable),
+        front=native_value(raw.frontFace), back=native_value(raw.backFace), details=native_value(raw))
 
 
 async def _extract_render_targets(
@@ -276,12 +264,10 @@ async def _extract_render_targets(
     # ---- colour outputs ----
     try:
         output_descriptors = pipe_state.GetOutputTargets()
-        for desc in output_descriptors:
-            rid = desc.resourceId
-            if _is_null_id(rid):
-                continue
+        for slot, desc in enumerate(output_descriptors):
+            rid = desc.resource
             tex = tex_by_id.get(rid)
-            rt = RenderTargetInfo(resource_id=str(rid))
+            rt = RenderTargetInfo(resource_id=str(rid), slot=slot, descriptor=native_value(desc))
             if tex is not None:
                 rt.format = str(tex.format.Name()) if hasattr(tex.format, "Name") else str(tex.format)
                 rt.width = int(tex.width)
@@ -289,22 +275,22 @@ async def _extract_render_targets(
                 rt.is_srgb = "srgb" in rt.format.lower()
             colour_targets.append(rt)
     except (AttributeError, TypeError) as exc:
-        logger.debug("_extract_render_targets (colour): %s", exc)
+        raise RuntimeError("Pipeline color target read failed") from exc
 
     # ---- depth target ----
     try:
         depth_desc = pipe_state.GetDepthTarget()
-        rid = depth_desc.resourceId
+        rid = depth_desc.resource
         if not _is_null_id(rid):
             tex = tex_by_id.get(rid)
-            dt = RenderTargetInfo(resource_id=str(rid))
+            dt = RenderTargetInfo(resource_id=str(rid), descriptor=native_value(depth_desc))
             if tex is not None:
                 dt.format = str(tex.format.Name()) if hasattr(tex.format, "Name") else str(tex.format)
                 dt.width = int(tex.width)
                 dt.height = int(tex.height)
             depth_target = dt
     except (AttributeError, TypeError) as exc:
-        logger.debug("_extract_render_targets (depth): %s", exc)
+        raise RuntimeError("Pipeline depth target read failed") from exc
 
     return colour_targets, depth_target
 
@@ -313,62 +299,78 @@ async def _extract_render_targets(
 # ---------------------------------------------------------------------------
 
 
-def _extract_viewport(api_state: Any, api: GraphicsAPI) -> Dict[str, float]:
-    """Internal helper."""
-    try:
-        if api in (GraphicsAPI.D3D11, GraphicsAPI.D3D12, GraphicsAPI.OPENGL):
-            vp = api_state.rasterizer.viewports[0]
-            return {
-                "x": float(vp.x),
-                "y": float(vp.y),
-                "width": float(vp.width),
-                "height": float(vp.height),
-                "min_depth": float(vp.minDepth),
-                "max_depth": float(vp.maxDepth),
-            }
-        if api == GraphicsAPI.VULKAN:
-            vs = api_state.viewportScissor.viewportScissors[0]
-            vp = vs.vp
-            return {
-                "x": float(vp.x),
-                "y": float(vp.y),
-                "width": float(vp.width),
-                "height": float(vp.height),
-                "min_depth": float(vp.minDepth),
-                "max_depth": float(vp.maxDepth),
-            }
-    except (AttributeError, IndexError, TypeError) as exc:
-        logger.debug("_extract_viewport: %s", exc)
-    return {}
+def _extract_viewport(api_state: Any, api: GraphicsAPI) -> List[Dict[str, Any]]:
+    if api == GraphicsAPI.VULKAN:
+        raw = [entry.vp for entry in api_state.viewportScissor.viewportScissors]
+    else:
+        raw = api_state.rasterizer.viewports
+    return [dict(native_value(value), index=index) for index, value in enumerate(raw)]
 
 
-def _extract_scissor(api_state: Any, api: GraphicsAPI) -> Dict[str, int]:
-    """Internal helper."""
-    try:
-        if api in (GraphicsAPI.D3D11, GraphicsAPI.D3D12, GraphicsAPI.OPENGL):
-            sc = api_state.rasterizer.scissors[0]
-            return {
-                "x": int(sc.x),
-                "y": int(sc.y),
-                "width": int(sc.width),
-                "height": int(sc.height),
-            }
-        if api == GraphicsAPI.VULKAN:
-            vs = api_state.viewportScissor.viewportScissors[0]
-            sc = vs.scissor
-            return {
-                "x": int(sc.x),
-                "y": int(sc.y),
-                "width": int(sc.width),
-                "height": int(sc.height),
-            }
-    except (AttributeError, IndexError, TypeError) as exc:
-        logger.debug("_extract_scissor: %s", exc)
-    return {}
+def _extract_scissor(api_state: Any, api: GraphicsAPI) -> List[Dict[str, Any]]:
+    if api == GraphicsAPI.VULKAN:
+        raw = [entry.scissor for entry in api_state.viewportScissor.viewportScissors]
+    else:
+        raw = api_state.rasterizer.scissors
+    return [dict(native_value(value), index=index) for index, value in enumerate(raw)]
 
 
-# ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
+PIPELINE_SECTIONS = {
+    "shaders": ["shaders"], "output_targets": ["render_targets", "depth_target"],
+    "topology": ["topology"], "viewports_scissors": ["viewports", "scissors"],
+    "blend": ["blend_states", "blend_options"], "depth_stencil": ["depth_stencil"],
+    "bindings": ["bindings"], "vertex_input": ["vertex_inputs"],
+    "rasterizer": ["rasterizer"], "multisample": ["multisample"],
+    "push_constants": ["push_constants"], "dynamic_state": ["dynamic_state"],
+    "root_signature": ["root_signature"], "descriptor_heaps": ["descriptor_heaps"],
+    "resource_states": ["resource_states"],
+}
+
+
+def _state_section(state: Any, api: GraphicsAPI, section: str) -> Dict[str, Any]:
+    """Project an API's recorded state without inventing unavailable declarations."""
+    paths = {
+        "rasterizer": {"D3D11": "rasterizer.state", "D3D12": "rasterizer.state",
+                       "Vulkan": "rasterizer", "OpenGL": "rasterizer.state"},
+        "multisample": {"D3D11": "outputMerger", "D3D12": "outputMerger",
+                        "Vulkan": "multisample", "OpenGL": "rasterizer.state"},
+        "push_constants": {"Vulkan": "pushconsts"},
+        "root_signature": {"D3D12": "rootSignature"},
+        "descriptor_heaps": {"D3D12": "descriptorHeaps"},
+        "resource_states": {"D3D12": "resourceStates", "Vulkan": "images"},
+    }
+    key = {GraphicsAPI.D3D11: "D3D11", GraphicsAPI.D3D12: "D3D12",
+           GraphicsAPI.VULKAN: "Vulkan", GraphicsAPI.OPENGL: "OpenGL"}.get(api, "unknown")
+    if section == "push_constants" and api == GraphicsAPI.VULKAN:
+        data = bytes(state.pushconsts)
+        ranges = []
+        for stage in ("vertexShader", "tessControlShader", "tessEvalShader", "geometryShader",
+                      "fragmentShader", "computeShader"):
+            shader = getattr(state, stage)
+            offset, size = int(shader.pushConstantRangeByteOffset), int(shader.pushConstantRangeByteSize)
+            if size:
+                if offset < 0 or offset + size > len(data):
+                    raise ValueError("Recorded push constant range exceeds available bytes")
+                ranges.append({"stage": stage, "byte_offset": offset, "byte_size": size,
+                               "shader_id": str(shader.resourceId)})
+        layouts = {name: {field: native_value(getattr(getattr(state, name), field)) for field in
+                   ("pipelineComputeLayoutResourceId", "pipelinePreRastLayoutResourceId", "pipelineFragmentLayoutResourceId")}
+                   for name in ("graphics", "compute")}
+        return {"api": key, "status": "available", "data": native_value(data),
+                "stage_ranges": ranges, "layouts": layouts}
+    if section == "dynamic_state":
+        if api != GraphicsAPI.VULKAN:
+            return {"api": key, "status": "not_applicable"}
+        return {"api": key, "status": "available", "declarations_status": "not_recorded",
+                "effective_state": {name: native_value(getattr(state, name)) for name in
+                    ("viewportScissor", "rasterizer", "multisample", "colorBlend", "depthStencil")}}
+    path = paths[section].get(key)
+    if path is None:
+        return {"api": key, "status": "not_applicable"}
+    value = state
+    for part in path.split("."):
+        value = getattr(value, part)
+    return {"api": key, "status": "available", "data": native_value(value)}
 
 
 def _extract_topology(api_state: Any, api: GraphicsAPI) -> str:
@@ -395,7 +397,8 @@ def _collect_bindings_for_stage(
     """Extract resource bindings for one shader stage across API variants."""
     rd = _get_rd()
     entries: List[ResourceBindingEntry] = []
-    seen: set[tuple[int, int, str, str]] = set()
+    reflection = pipe.GetShaderReflection(rd_stage)
+    seen: set[tuple[Any, ...]] = set()
 
     def _descriptor_kind(raw_type: Any, default_kind: str) -> str:
         try:
@@ -434,8 +437,16 @@ def _collect_bindings_for_stage(
         resource_id: str,
         binding_type: str,
         fmt: str = "",
+        resource_name: str = "",
+        array_index: int = 0,
+        binding_source: str = "shader_reflection",
+        descriptor: Optional[Dict[str, Any]] = None,
+        sampler: Optional[Dict[str, Any]] = None,
+        access: Optional[Dict[str, Any]] = None,
     ) -> None:
-        key = (set_or_space, binding, binding_type, resource_id)
+        location = access or {}
+        key = (set_or_space, binding, binding_type, resource_id, array_index,
+               location.get("descriptorStore"), location.get("byteOffset"))
         if key in seen:
             return
         seen.add(key)
@@ -444,99 +455,49 @@ def _collect_bindings_for_stage(
                 set_or_space=set_or_space,
                 binding=binding,
                 resource_id=resource_id,
-                resource_name="",
+                resource_name=resource_name,
+                stage=our_stage.value,
+                array_index=array_index,
+                binding_source=binding_source,
                 type=binding_type,
                 format=fmt,
+                descriptor=descriptor or {}, sampler=sampler or {}, access=access or {},
             ),
         )
 
     def _iter_new_descriptors(raw_items: Any, default_kind: str) -> None:
-        try:
-            items = list(raw_items or [])
-        except Exception:
-            return
+        items = list(raw_items or [])
         for item in items:
-            access = getattr(item, "access", None)
-            descriptor = getattr(item, "descriptor", None)
-            if access is None or descriptor is None:
-                continue
-            try:
-                binding = int(getattr(access, "index", 0))
-            except Exception:
-                binding = 0
-            try:
-                set_or_space = int(getattr(access, "type", 0))
-            except Exception:
-                set_or_space = 0
+            access = item.access
+            descriptor = item.descriptor
+            index = int(access.index)
+            reflection_list = getattr(reflection, {"SRV": "readOnlyResources", "UAV": "readWriteResources", "CBV": "constantBlocks", "Sampler": "samplers"}[default_kind], []) if reflection is not None else []
+            reflected = reflection_list[index] if 0 <= index < len(reflection_list) else None
+            binding = int(reflected.fixedBindNumber) if reflected is not None else -1
+            set_or_space = int(reflected.fixedBindSetOrSpace) if reflected is not None else -1
             rid_raw = getattr(descriptor, "resource", None)
             resource_id = ""
             if rid_raw is not None and not _is_null_id(rid_raw):
                 resource_id = str(rid_raw)
-            kind = _descriptor_kind(getattr(descriptor, "type", None), default_kind)
-            fmt = str(getattr(descriptor, "format", "")) if hasattr(descriptor, "format") else ""
-            if resource_id or kind in {"Sampler", "CBV"}:
-                _append_entry(
-                    set_or_space=set_or_space,
-                    binding=binding,
-                    resource_id=resource_id,
-                    binding_type=kind,
-                    fmt=fmt,
-                )
+            kind = "Sampler" if default_kind == "Sampler" else _descriptor_kind(getattr(descriptor, "type", None), default_kind)
+            fmt = str(descriptor.format.Name()) if hasattr(descriptor, "format") else ""
+            _append_entry(
+                set_or_space=set_or_space,
+                binding=binding,
+                resource_id=resource_id,
+                binding_type=kind,
+                fmt=fmt,
+                resource_name=str(reflected.name) if reflected is not None else "",
+                array_index=int(access.arrayElement),
+                binding_source="shader_reflection" if reflected is not None else "direct_descriptor_access",
+                descriptor=native_value(descriptor), access=native_value(access),
+                sampler=native_value(item.sampler) if default_kind == "Sampler" else {},
+            )
 
-    def _iter_old_arrays(raw_items: Any, default_kind: str, resource_attr: str) -> None:
-        try:
-            arrays = list(raw_items or [])
-        except Exception:
-            return
-        for bound_array in arrays:
-            bind_point = getattr(bound_array, "bindPoint", None)
-            if bind_point is None:
-                continue
-            set_or_space = int(getattr(bind_point, "bindset", 0)) if hasattr(bind_point, "bindset") else 0
-            binding = int(getattr(bind_point, "bind", 0)) if hasattr(bind_point, "bind") else 0
-            resources = getattr(bound_array, resource_attr, None)
-            if resources is None:
-                continue
-            for res in resources:
-                rid_raw = getattr(res, "resourceId", None)
-                resource_id = "" if rid_raw is None or _is_null_id(rid_raw) else str(rid_raw)
-                if not resource_id and default_kind not in {"Sampler", "CBV"}:
-                    continue
-                _append_entry(
-                    set_or_space=set_or_space,
-                    binding=binding,
-                    resource_id=resource_id,
-                    binding_type=default_kind,
-                )
-
-    # Newer RenderDoc returns UsedDescriptor entries.
-    try:
-        _iter_new_descriptors(pipe.GetReadOnlyResources(rd_stage), "SRV")
-    except Exception:
-        pass
-    try:
-        _iter_new_descriptors(pipe.GetReadWriteResources(rd_stage), "UAV")
-    except Exception:
-        pass
-    try:
-        _iter_new_descriptors(pipe.GetConstantBlocks(rd_stage), "CBV")
-    except Exception:
-        pass
-
-    # Fallback for older bindings arrays.
-    if not entries:
-        try:
-            _iter_old_arrays(pipe.GetReadOnlyResources(rd_stage), "SRV", "resources")
-        except Exception:
-            pass
-        try:
-            _iter_old_arrays(pipe.GetReadWriteResources(rd_stage), "UAV", "resources")
-        except Exception:
-            pass
-        try:
-            _iter_old_arrays(pipe.GetConstantBlocks(rd_stage), "CBV", "buffers")
-        except Exception:
-            pass
+    _iter_new_descriptors(pipe.GetReadOnlyResources(rd_stage), "SRV")
+    _iter_new_descriptors(pipe.GetReadWriteResources(rd_stage), "UAV")
+    _iter_new_descriptors(pipe.GetConstantBlocks(rd_stage), "CBV")
+    _iter_new_descriptors(pipe.GetSamplers(rd_stage), "Sampler")
 
     return entries
 # ---------------------------------------------------------------------------
@@ -638,8 +599,11 @@ class PipelineService:
         session_id: str,
         event_id: int,
         session_manager: SessionManager,
+        *,
+        sections: Optional[List[str]] = None,
     ) -> PipelineSnapshot:
         """Internal helper."""
+        selected = set(sections) if sections is not None else set(PIPELINE_SECTIONS)
         rd = _get_rd()
         controller = session_manager.get_controller(session_id)
 
@@ -650,12 +614,12 @@ class PipelineService:
         api = _map_graphics_api(api_props.pipelineType)
 
         # API-specific state for blend / depth / viewport / topology.
-        api_state = await asyncio.to_thread(
-            _get_api_specific_state, controller, api_props.pipelineType,
-        )
+        api_state = None
+        if selected - {"shaders", "output_targets", "bindings", "vertex_input"}:
+            api_state = await asyncio.to_thread(_get_api_specific_state, controller, api_props.pipelineType)
 
         shaders: List[ShaderInfo] = []
-        for rd_stage in _rd_shader_stages():
+        for rd_stage in (_rd_shader_stages() if "shaders" in selected else []):
             try:
                 shader_id = pipe.GetShader(rd_stage)
                 if _is_null_id(shader_id):
@@ -677,29 +641,36 @@ class PipelineService:
                     encoding=encoding,
                 ))
             except Exception as exc:
-                logger.debug(
-                    "snapshot_pipeline: skipping stage %s: %s",
-                    rd_stage, exc,
-                )
+                raise RuntimeError(f"Pipeline shader read failed at stage {rd_stage}") from exc
 
-        render_targets, depth_target = await _extract_render_targets(
-            pipe, api, controller,
-        )
+        render_targets, depth_target = [], None
+        if "output_targets" in selected:
+            render_targets, depth_target = await _extract_render_targets(pipe, api, controller)
 
-        blend_states = _extract_blend_state(api_state, api)
+        blend_states = _extract_blend_state(api_state, api) if "blend" in selected else []
+
+        blend_options = {}
+        if "blend" in selected:
+            if api in (GraphicsAPI.D3D11, GraphicsAPI.D3D12):
+                blend_options = native_value(api_state.outputMerger.blendState)
+            elif api == GraphicsAPI.VULKAN:
+                blend_options = native_value(api_state.colorBlend)
+            elif api == GraphicsAPI.OPENGL:
+                blend_options = native_value(api_state.framebuffer.blendState)
+            blend_options.pop("blends", None)
 
         # ---- Depth / stencil state -----------------------------------
-        depth_stencil = _extract_depth_stencil(api_state, api)
+        depth_stencil = _extract_depth_stencil(api_state, api) if "depth_stencil" in selected else DepthStencilState()
 
         # ---- Viewport / scissor --------------------------------------
-        viewport = _extract_viewport(api_state, api)
-        scissor = _extract_scissor(api_state, api)
+        viewport = _extract_viewport(api_state, api) if "viewports_scissors" in selected else []
+        scissor = _extract_scissor(api_state, api) if "viewports_scissors" in selected else []
 
         # ---- Topology ------------------------------------------------
-        topology = _extract_topology(api_state, api)
+        topology = _extract_topology(api_state, api) if "topology" in selected else ""
 
         bindings: List[ResourceBindingEntry] = []
-        for rd_stage in _rd_shader_stages():
+        for rd_stage in (_rd_shader_stages() if "bindings" in selected else []):
             try:
                 shader_id = pipe.GetShader(rd_stage)
                 if _is_null_id(shader_id):
@@ -708,8 +679,8 @@ class PipelineService:
                     pipe, rd_stage, _map_shader_stage(rd_stage),
                 )
                 bindings.extend(stage_bindings)
-            except Exception:
-                pass
+            except Exception as exc:
+                raise RuntimeError(f"Pipeline binding read failed at stage {rd_stage}") from exc
 
         return PipelineSnapshot(
             event_id=event_id,
@@ -718,10 +689,15 @@ class PipelineService:
             render_targets=render_targets,
             depth_target=depth_target,
             blend_states=blend_states,
+            blend_options=blend_options,
             depth_stencil=depth_stencil,
             bindings=bindings,
-            viewport=viewport,
-            scissor=scissor,
+            viewports=viewport,
+            scissors=scissor,
+            vertex_inputs=[native_value(v) for v in pipe.GetVertexInputs()] if "vertex_input" in selected else [],
+            **{name: _state_section(api_state, api, name) for name in selected & {
+                "rasterizer", "multisample", "push_constants", "dynamic_state",
+                "root_signature", "descriptor_heaps", "resource_states"}},
             topology=topology,
         )
 
@@ -864,6 +840,7 @@ class PipelineService:
         session_id: str,
         event_id: int,
         session_manager: SessionManager,
+        *, stage: Optional[ShaderStage] = None,
     ) -> List[ResourceBindingEntry]:
         """Internal helper."""
         rd = _get_rd()
@@ -874,7 +851,7 @@ class PipelineService:
         pipe = await asyncio.to_thread(controller.GetPipelineState)
 
         entries: List[ResourceBindingEntry] = []
-        for rd_stage in _rd_shader_stages():
+        for rd_stage in ([_our_stage_to_rd(stage)] if stage is not None else _rd_shader_stages()):
             try:
                 shader_id = pipe.GetShader(rd_stage)
                 if _is_null_id(shader_id):
@@ -885,60 +862,12 @@ class PipelineService:
                     pipe, rd_stage, our_stage,
                 )
 
-                refl = pipe.GetShaderReflection(rd_stage)
-                if refl is not None:
-                    _enrich_binding_names(stage_entries, refl)
-
                 entries.extend(stage_entries)
             except Exception as exc:
-                logger.debug(
-                    "get_resource_bindings: stage %s: %s", rd_stage, exc,
-                )
+                raise RuntimeError(f"Pipeline binding read failed at stage {rd_stage}") from exc
 
         return entries
 
 
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
-
-
-def _enrich_binding_names(
-    entries: List[ResourceBindingEntry],
-    refl: Any,
-) -> None:
-    """Internal helper."""
-    ro_by_bind: Dict[int, Any] = {}
-    rw_by_bind: Dict[int, Any] = {}
-    cb_by_bind: Dict[int, Any] = {}
-
-    try:
-        for r in (refl.readOnlyResources or []):
-            ro_by_bind[int(r.bindPoint)] = r
-    except (AttributeError, TypeError):
-        pass
-    try:
-        for r in (refl.readWriteResources or []):
-            rw_by_bind[int(r.bindPoint)] = r
-    except (AttributeError, TypeError):
-        pass
-    try:
-        for cb in (refl.constantBlocks or []):
-            cb_by_bind[int(cb.bindPoint)] = cb
-    except (AttributeError, TypeError):
-        pass
-
-    for entry in entries:
-        b = entry.binding
-        if entry.type == "SRV" and b in ro_by_bind:
-            r = ro_by_bind[b]
-            entry.resource_name = str(r.name)
-            if hasattr(r, "resType"):
-                entry.format = str(r.resType)
-        elif entry.type == "UAV" and b in rw_by_bind:
-            r = rw_by_bind[b]
-            entry.resource_name = str(r.name)
-            if hasattr(r, "resType"):
-                entry.format = str(r.resType)
-        elif entry.type == "CBV" and b in cb_by_bind:
-            entry.resource_name = str(cb_by_bind[b].name)
-

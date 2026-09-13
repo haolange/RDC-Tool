@@ -11,6 +11,7 @@ These documents describe the CLI-only `rdx-tools` runtime.
 - [Documentation governance](doc-governance.md)
 - [Tools](tools.md)
 - [Tool reference](tool-reference.md)
+- [Tool interface convergence](tool-interface-upgrade.md)
 - [Troubleshooting](troubleshooting.md)
 - [Configuration](configuration.md)
 - [Public contract](public-contract.md)

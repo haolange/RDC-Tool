@@ -9,6 +9,7 @@ import pytest
 
 from rdx import server
 from rdx.context_snapshot import clear_context_snapshot
+from rdx.core import pipeline_service as pipeline_module
 
 
 class _FakeActionFlags:
@@ -114,6 +115,9 @@ class _FakeController:
     def GetBuffers(self) -> list[object]:
         return []
 
+    def GetDescriptorStores(self) -> list[object]:
+        return []
+
     def GetResources(self) -> list[object]:
         return []
 
@@ -129,7 +133,7 @@ class _FakeSnapshot:
             "render_targets": [{"resource_id": f"rt@{self._event_id}"}],
             "bindings": [{"resource_id": f"bind@{self._event_id}"}],
             "topology": "trianglelist",
-            "viewport": {"x": 0.0, "y": 0.0},
+            "viewports": [{"index": 0, "enabled": True, "x": 0.0, "y": 0.0}],
             "blend_states": [],
             "depth_stencil": {},
             "depth_target": {"resource_id": f"depth@{self._event_id}"},
@@ -150,14 +154,14 @@ class _FakeBinding:
 
 class _FakePipelineService:
     def __init__(self) -> None:
-        self.snapshot_calls: list[int] = []
+        self.snapshot_calls: list[tuple[int, tuple[str, ...]]] = []
         self.binding_calls: list[int] = []
 
-    async def snapshot_pipeline(self, session_id: str, event_id: int, session_manager: object) -> _FakeSnapshot:
-        self.snapshot_calls.append(int(event_id))
+    async def snapshot_pipeline(self, session_id: str, event_id: int, session_manager: object, *, sections: list[str] | None = None) -> _FakeSnapshot:
+        self.snapshot_calls.append((int(event_id), tuple(sections or [])))
         return _FakeSnapshot(event_id)
 
-    async def get_resource_bindings(self, session_id: str, event_id: int, session_manager: object) -> list[_FakeBinding]:
+    async def get_resource_bindings(self, session_id: str, event_id: int, session_manager: object, *, stage: object = None) -> list[_FakeBinding]:
         self.binding_calls.append(int(event_id))
         return [
             _FakeBinding(event_id, "SRV"),
@@ -300,6 +304,8 @@ def test_get_action_tree_paginates_and_bounds_nodes(monkeypatch: pytest.MonkeyPa
         "returned_root_count": 1,
         "total_root_count": 3,
         "truncated": True,
+        "emitted_nodes": 2,
+        "visited_nodes": 2,
     }
     assert payload["root"]["children"][0]["event_id"] == 201
     assert payload["root"]["children"][0]["children"][0]["event_id"] == 211
@@ -340,7 +346,7 @@ def test_get_action_tree_does_not_materialize_children_past_node_budget(monkeypa
     assert root["children"][0]["children"] == []
 
 
-def test_get_actions_reports_root_browse_lookup_hint(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_get_action_tree_supports_targeted_subtree(monkeypatch: pytest.MonkeyPatch) -> None:
     controller = _FakeController(
         roots=[
             _FakeAction(101, name="root_a", children=[_FakeAction(111, name="child_a")]),
@@ -350,14 +356,14 @@ def test_get_actions_reports_root_browse_lookup_hint(monkeypatch: pytest.MonkeyP
     _seed_capture()
     _seed_session(101)
 
-    payload = json.loads(asyncio.run(server._dispatch_event("get_actions", {"session_id": "sess_demo"})))
+    payload = json.loads(asyncio.run(server._dispatch_event("get_action_tree", {"session_id": "sess_demo", "event_id": 111})))
 
     assert payload["success"] is True
-    assert payload["lookup_scope"] == "root_browse"
-    assert payload["recommended_followup_tool"] == "rd.event.get_action_tree"
+    assert payload["root"]["children"][0]["event_id"] == 111
+    assert payload["pagination"]["total_root_count"] == 1
 
 
-def test_get_actions_tabular_projection_flattens_actions(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_get_action_tree_tabular_projection_flattens_actions(monkeypatch: pytest.MonkeyPatch) -> None:
     controller = _FakeController(
         roots=[
             _FakeAction(
@@ -376,7 +382,7 @@ def test_get_actions_tabular_projection_flattens_actions(monkeypatch: pytest.Mon
     payload = json.loads(
         asyncio.run(
             server._dispatch_event(
-                "get_actions",
+                "get_action_tree",
                 {"session_id": "sess_demo", "projection": {"kind": "tabular", "include_tsv_text": True}},
             )
         )
@@ -422,39 +428,79 @@ def test_pipeline_dispatch_uses_one_resolved_event_context(monkeypatch: pytest.M
     _seed_capture()
     _seed_session(53)
 
-    summary = json.loads(asyncio.run(server._dispatch_pipeline("get_state_summary", {"session_id": "sess_demo"})))
-    assert summary["success"] is True
-    assert summary["summary"]["render_targets"][0]["resource_id"] == "rt@101"
-    assert summary["summary"]["summary_status"] == "verified"
-    assert summary["summary"]["binding_truth_level"] == "binding_verified"
-    assert pipeline_service.snapshot_calls == [101]
-
-    _poison_active_event(53)
-    render_targets = json.loads(asyncio.run(server._dispatch_pipeline("get_render_targets", {"session_id": "sess_demo"})))
-    assert render_targets["success"] is True
-    assert render_targets["render_targets"][0]["resource_id"] == "rt@101"
-    assert render_targets["binding_truth_level"] == "binding_verified"
-    assert pipeline_service.snapshot_calls == [101, 101]
-
-    _poison_active_event(53)
-    output_targets = json.loads(asyncio.run(server._dispatch_pipeline("get_output_targets", {"session_id": "sess_demo"})))
-    assert output_targets["success"] is True
-    assert output_targets["framebuffer"]["depth_target"]["resource_id"] == "depth@101"
-    assert output_targets["framebuffer"]["summary_status"] == "verified"
-    assert pipeline_service.snapshot_calls == [101, 101, 101]
+    state = json.loads(asyncio.run(server._dispatch_pipeline("get_state", {"session_id": "sess_demo", "detail": "summary"})))
+    assert state["success"] is True
+    assert state["pipeline_state"]["render_targets"][0]["resource_id"] == "rt@101"
+    assert state["pipeline_state"]["summary_status"] == "verified"
+    assert state["pipeline_state"]["binding_truth_level"] == "binding_verified"
+    assert pipeline_service.snapshot_calls == [(101, ("shaders", "output_targets", "topology", "viewports_scissors"))]
 
     _poison_active_event(53)
     shader = json.loads(asyncio.run(server._dispatch_pipeline("get_shader", {"session_id": "sess_demo", "stage": "ps"})))
     assert shader["success"] is True
     assert shader["shader"]["shader_id"] == "shader@101"
-    assert pipeline_service.snapshot_calls == [101, 101, 101, 101]
+    assert len(pipeline_service.snapshot_calls) == 1
 
     _poison_active_event(53)
     bindings = json.loads(asyncio.run(server._dispatch_pipeline("get_resource_bindings", {"session_id": "sess_demo"})))
     assert bindings["success"] is True
     assert bindings["bindings"][0]["resource_id"] == "srv@101"
-    assert pipeline_service.snapshot_calls == [101, 101, 101, 101, 101]
+    assert len(pipeline_service.snapshot_calls) == 1
     assert pipeline_service.binding_calls == [101]
+
+
+def test_find_state_change_point_reports_match_and_budget_or_range_exhaustion(monkeypatch: pytest.MonkeyPatch) -> None:
+    controller = _FakeController(
+        roots=[
+            _FakeAction(101, flags=_FakeActionFlags.Drawcall),
+            _FakeAction(202, flags=_FakeActionFlags.Drawcall),
+            _FakeAction(303, flags=_FakeActionFlags.Drawcall),
+        ]
+    )
+    pipeline_service = _FakePipelineService()
+    _install_common_env(monkeypatch, controller)
+    server.server_runtime._pipeline_service = pipeline_service
+    server.server_runtime._session_manager = SimpleNamespace()
+    _seed_capture()
+    _seed_session(101)
+
+    base_args = {
+        "session_id": "sess_demo",
+        "event_range": {"start_event_id": 100, "end_event_id": 400},
+        "state_path": "shaders.0.shader_id",
+        "target_value": "shader@202",
+    }
+    budgeted = json.loads(asyncio.run(server._dispatch_macro("find_state_change_point", {**base_args, "max_events": 1})))
+    found = json.loads(asyncio.run(server._dispatch_macro("find_state_change_point", {**base_args, "max_events": 3})))
+    exhausted = json.loads(
+        asyncio.run(
+            server._dispatch_macro(
+                "find_state_change_point",
+                {**base_args, "target_value": "shader@999", "max_events": 3},
+            )
+        )
+    )
+
+    assert budgeted == {
+        "success": True,
+        "found_event_id": None,
+        "examined_events": 1,
+        "complete": False,
+        "range_exhausted": False,
+        "budget_exhausted": True,
+    }
+    assert found["found_event_id"] == 202
+    assert found["examined_events"] == 2
+    assert found["complete"] is True
+    assert found["range_exhausted"] is False
+    assert found["budget_exhausted"] is False
+    assert exhausted["found_event_id"] is None
+    assert exhausted["examined_events"] == 3
+    assert exhausted["complete"] is True
+    assert exhausted["range_exhausted"] is True
+    assert exhausted["budget_exhausted"] is False
+    assert all(sections == ("shaders",) for _, sections in pipeline_service.snapshot_calls)
+    assert server._runtime.replays["sess_demo"].active_event_id == 303
 
 
 def test_pipeline_summary_and_outputs_include_selected_visual_target(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -470,7 +516,10 @@ def test_pipeline_summary_and_outputs_include_selected_visual_target(monkeypatch
     _seed_capture()
     _seed_session(101)
 
+    target_requests: list[tuple[int, dict[str, object], bool]] = []
+
     async def _fake_resolve_visual_target_for_event(session_id: str, event_id: int, *, target=None, allow_framebuffer_fallback=True):  # type: ignore[no-untyped-def]
+        target_requests.append((int(event_id), dict(target or {}), bool(allow_framebuffer_fallback)))
         return (
             "ResourceId::777",
             SimpleNamespace(name="SceneColor"),
@@ -490,15 +539,59 @@ def test_pipeline_summary_and_outputs_include_selected_visual_target(monkeypatch
 
     monkeypatch.setattr(server.server_runtime, "_resolve_visual_target_for_event", _fake_resolve_visual_target_for_event)
 
-    summary = json.loads(asyncio.run(server._dispatch_pipeline("get_state_summary", {"session_id": "sess_demo"})))
-    outputs = json.loads(asyncio.run(server._dispatch_pipeline("get_output_targets", {"session_id": "sess_demo"})))
+    state = json.loads(asyncio.run(server._dispatch_pipeline("get_state", {"session_id": "sess_demo", "sections": ["output_targets"]})))
 
-    assert summary["success"] is True
-    assert summary["summary"]["selected_visual_target"]["target_source"] == "event_binding_uav_3"
-    assert summary["summary"]["export_target_available"] is True
-    assert outputs["success"] is True
-    assert outputs["framebuffer"]["selected_visual_target"]["texture_id"] == "ResourceId::777"
-    assert outputs["framebuffer"]["export_target_available"] is True
+    assert state["success"] is True
+    assert state["pipeline_state"]["selected_visual_target"]["target_source"] == "event_binding_uav_3"
+    assert state["pipeline_state"]["export_target_available"] is True
+    assert pipeline_service.snapshot_calls == [(101, ("output_targets",))]
+    assert target_requests == [(101, {"semantic": "event_output"}, True)]
+
+
+def test_pipeline_render_targets_use_current_descriptor_resource(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _ResourceId:
+        def __init__(self, value: str = "") -> None:
+            self.value = value
+
+        def __hash__(self) -> int:
+            return hash(self.value)
+
+        def __eq__(self, other: object) -> bool:
+            return isinstance(other, _ResourceId) and self.value == other.value
+
+        def __str__(self) -> str:
+            return self.value
+
+    color_id = _ResourceId("color")
+    depth_id = _ResourceId("depth")
+    pipe = SimpleNamespace(
+        GetOutputTargets=lambda: [SimpleNamespace(resource=color_id)],
+        GetDepthTarget=lambda: SimpleNamespace(resource=depth_id),
+    )
+    controller = SimpleNamespace(
+        GetTextures=lambda: [
+            SimpleNamespace(resourceId=color_id, format=SimpleNamespace(Name=lambda: "R8G8B8A8_UNORM"), width=32, height=16),
+            SimpleNamespace(resourceId=depth_id, format=SimpleNamespace(Name=lambda: "D32_FLOAT"), width=32, height=16),
+        ]
+    )
+    monkeypatch.setattr(pipeline_module, "_get_rd", lambda: SimpleNamespace(ResourceId=_ResourceId))
+
+    colors, depth = asyncio.run(
+        pipeline_module._extract_render_targets(pipe, pipeline_module.GraphicsAPI.VULKAN, controller)
+    )
+
+    assert [item.resource_id for item in colors] == ["color"]
+    assert colors[0].format == "R8G8B8A8_UNORM"
+    assert depth is not None and depth.resource_id == "depth" and depth.format == "D32_FLOAT"
+
+
+def test_present_detection_accepts_only_present_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(server.server_runtime, "_get_rd", lambda: SimpleNamespace(ActionFlags=_FakeActionFlags))
+
+    assert server.server_runtime._is_present_action(SimpleNamespace(flags=_FakeActionFlags.Present)) is True
+    assert server.server_runtime._is_present_action(SimpleNamespace(flags=_FakeActionFlags.Clear)) is False
+    assert server.server_runtime._is_present_action(SimpleNamespace(flags=_FakeActionFlags.PassBoundary)) is False
+    assert server.server_runtime._is_present_action(SimpleNamespace(flags=_FakeActionFlags.Clear | _FakeActionFlags.PassBoundary)) is False
 
 
 def test_pipeline_get_constant_buffers_uses_collected_entries(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -567,7 +660,7 @@ def test_pipeline_get_shader_returns_runtime_error_when_stage_is_unbound(monkeyp
     assert payload["details"]["stage"] == "PS"
 
 
-def test_resource_usage_and_history_expose_canonical_and_raw_event_ids(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_resource_usage_exposes_write_classification_and_raw_event_ids(monkeypatch: pytest.MonkeyPatch) -> None:
     controller = _FakeController(
         roots=[
             _FakeAction(101, flags=_FakeActionFlags.Drawcall),
@@ -604,21 +697,6 @@ def test_resource_usage_and_history_expose_canonical_and_raw_event_ids(monkeypat
     )
     assert usage["success"] is True
     assert usage["usage"] == [
-        {"event_id": 101, "raw_event_id": 101, "event_resolvable": True, "usage": "Read"},
-        {"event_id": None, "raw_event_id": 53, "event_resolvable": False, "usage": "Write"},
-        {"event_id": None, "raw_event_id": 1042, "event_resolvable": False, "usage": "Read"},
-    ]
-
-    history = json.loads(
-        asyncio.run(
-            server._dispatch_resource(
-                "get_history",
-                {"session_id": "sess_demo", "resource_id": "ResourceId::7"},
-            )
-        )
-    )
-    assert history["success"] is True
-    assert history["history"] == [
         {"event_id": 101, "raw_event_id": 101, "event_resolvable": True, "usage": "Read", "is_write": False},
         {"event_id": None, "raw_event_id": 53, "event_resolvable": False, "usage": "Write", "is_write": True},
         {"event_id": None, "raw_event_id": 1042, "event_resolvable": False, "usage": "Read", "is_write": False},
@@ -661,6 +739,18 @@ def test_resource_list_all_tabular_projection(monkeypatch: pytest.MonkeyPatch) -
     assert "ResourceId::7" in tabular["tsv_text"]
     assert "main_color" in tabular["tsv_text"]
 
+    textures_only = json.loads(
+        asyncio.run(server._dispatch_resource("list_all", {"session_id": "sess_demo", "kind": "texture"}))
+    )
+    assert textures_only["success"] is True
+    assert {item["texture_id"] for item in textures_only["resources"]} == {"ResourceId::7"}
+
+    invalid = json.loads(
+        asyncio.run(server._dispatch_resource("list_all", {"session_id": "sess_demo", "kind": "shader"}))
+    )
+    assert invalid["success"] is False
+    assert invalid["code"] == "validation_error"
+
 
 def test_capture_close_file_rejects_unknown_handle() -> None:
     payload = json.loads(asyncio.run(server._dispatch_capture("close_file", {"capture_file_id": "capf_missing"})))
@@ -668,18 +758,17 @@ def test_capture_close_file_rejects_unknown_handle() -> None:
     assert payload["error_message"] == "Unknown capture_file_id: capf_missing"
 
 
-def test_capture_get_thumbnail_returns_unavailable_error() -> None:
-    _seed_capture()
-
-    payload = json.loads(
-        asyncio.run(server._dispatch_capture("get_thumbnail", {"capture_file_id": "capf_demo", "max_size_px": 640}))
+def test_restored_capture_thumbnail_rejects_obsolete_size_parameter() -> None:
+    payload = asyncio.run(
+        server.dispatch_operation(
+            "rd.capture.get_thumbnail",
+            {"capture_file_id": "capf_demo", "max_size_px": 640},
+            transport="test",
+        )
     )
 
-    assert payload["success"] is False
-    assert payload["code"] == "thumbnail_unavailable"
-    assert payload["category"] == "runtime"
-    assert payload["details"]["capture_file_id"] == "capf_demo"
-    assert payload["details"]["max_size_px"] == 640
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "validation_error"
 
 
 

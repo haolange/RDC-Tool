@@ -1,4 +1,4 @@
-"""
+﻿"""
 RDX daemon/runtime server with registry-driven tool registration.
 
 - Registers all catalog-defined tools from `rdx/spec/tool_catalog.json`
@@ -8,6 +8,7 @@ RDX daemon/runtime server with registry-driven tool registration.
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextvars
 import ctypes
 import csv
@@ -16,6 +17,7 @@ import hashlib
 import inspect
 import io
 import json
+import math
 import logging
 import os
 import re
@@ -69,6 +71,8 @@ from rdx.core.render_service import RenderService
 from rdx.core.session_manager import SessionError, SessionManager
 from rdx.models import PatchSpec, ShaderStage, _new_id
 from rdx.remote_bootstrap import (
+    ConnectionBudget,
+    _connection_budget,
     AndroidBootstrapOptions,
     AndroidRemoteBootstrapError,
     bootstrap_android_remote,
@@ -1674,11 +1678,7 @@ def _requested_visual_target_semantic(target: Optional[Dict[str, Any]]) -> str:
 
 
 def _is_present_action(action: Any) -> bool:
-    flags = _map_action_flags(getattr(action, "flags", 0))
-    if flags.get("is_pass_boundary"):
-        return True
-    name = _action_name(action).lower()
-    return "present" in name or "swapchain" in name
+    return bool(int(getattr(action, "flags", 0)) & int(_get_rd().ActionFlags.Present))
 
 
 def _usage_event_id(entry: Any) -> int:
@@ -1734,7 +1734,7 @@ async def _resolve_swapchain_present_target(
     if not present_actions:
         raise _preview_error(
             "swapchain_present_event_unavailable",
-            "Capture action tree does not expose a Present / PassBoundary event",
+            "Capture action tree does not expose a Present event",
             context_id=_runtime_context_id(),
             session_id=session_id,
             event_id=int(requested_event_id or 0),
@@ -2730,7 +2730,7 @@ def _append_context_artifacts(artifacts: Sequence[Dict[str, Any]], source_tool: 
 def _sync_focus_from_args(operation: str, args: Dict[str, Any], *, context_id: Optional[str] = None) -> Dict[str, Any]:
     snapshot = _context_snapshot(context_id)
     changed = False
-    if operation in {"rd.macro.explain_pixel", "rd.debug.pixel_history"}:
+    if operation in {"rd.texture.get_pixel_history", "rd.texture.get_pixel_history"}:
         if args.get("x") is not None and args.get("y") is not None:
             pixel = {"x": int(args.get("x") or 0), "y": int(args.get("y") or 0)}
             target = args.get("target")
@@ -2818,61 +2818,18 @@ async def _rehydrate_remote_handle_from_snapshot(remote_id: str) -> RemoteHandle
         or bootstrap_detail.get("device_serial")
         or ""
     ).strip()
-    bootstrap_result = None
-    if transport == "adb_android":
-        try:
-            bootstrap_result = await _offload(
-                bootstrap_android_remote,
-                remote_port=_as_int(options.get("remote_port"), requested_port or 38920),
-                options=AndroidBootstrapOptions(
-                    device_serial=device_serial,
-                    local_port=_as_int(options.get("local_port"), 0),
-                    install_apk=_as_bool(options.get("install_apk"), True),
-                    push_config=_as_bool(options.get("push_config"), True),
-                ),
-            )
-            bootstrap_detail = describe_android_remote(bootstrap_result)
-            host = str(bootstrap_result.host)
-            port = int(bootstrap_result.port)
-            requested_host = "127.0.0.1"
-            requested_port = _as_int(bootstrap_detail.get("remote_port"), requested_port or 38920)
-            device_serial = str(bootstrap_detail.get("device_serial") or device_serial or "").strip()
-        except Exception:
-            return None
-    if not host or int(port or 0) <= 0:
+    try:
+        bootstrap_result, remote_server, server_info = await _connect_remote_endpoint(
+            "127.0.0.1" if transport == "adb_android" else host,
+            requested_port if transport == "adb_android" else port,
+            transport, {**options, "device_serial": device_serial}, remote_connect_timeout_ms({}))
         if bootstrap_result is not None:
-            try:
-                await _offload(cleanup_android_remote, bootstrap_result)
-            except Exception:
-                pass
+            bootstrap_detail = describe_android_remote(bootstrap_result)
+            host, port = bootstrap_result.host, bootstrap_result.port
+            requested_host, requested_port = "127.0.0.1", bootstrap_result.remote_port
+    except Exception:
         return None
     url = _remote_url(host, port)
-    try:
-        await _offload(_wait_for_remote_endpoint, url, remote_connect_timeout_ms({}))
-        remote_server = await _offload(_create_remote_server_connection, url)
-        ping_status = await _offload(remote_server.Ping)
-        if not _status_ok(ping_status):
-            if bootstrap_result is not None:
-                try:
-                    await _offload(cleanup_android_remote, bootstrap_result)
-                except Exception:
-                    pass
-            return None
-        server_info = await _offload(
-            _collect_remote_server_info,
-            remote_server,
-            host=host,
-            port=port,
-            transport=transport,
-            bootstrap=bootstrap_detail,
-        )
-    except Exception:
-        if bootstrap_result is not None:
-            try:
-                await _offload(cleanup_android_remote, bootstrap_result)
-            except Exception:
-                pass
-        return None
     scope = _remote_context_scope(rid, origin_context_id=str(remote_payload.get("origin_context_id") or ""), context_id=ctx)
     handle = RemoteHandle(
         remote_id=rid,
@@ -3314,6 +3271,9 @@ def _wait_for_remote_endpoint(url: str, timeout_ms: int) -> None:
     last_status: Any = None
     last_progress_ts = 0.0
     while True:
+        budget = _connection_budget.get()
+        if budget:
+            budget.remaining()
         status = rd.CheckRemoteServerConnection(url)
         if _status_ok(status):
             return
@@ -3327,7 +3287,9 @@ def _wait_for_remote_endpoint(url: str, timeout_ms: int) -> None:
                 progress_pct=0.35,
                 details={"endpoint": url},
             )
-        if time.perf_counter() >= deadline:
+        status_name = _status_text(status).lower()
+        terminal = "busy" in status_name or "incompatible" in status_name or "versionmismatch" in status_name
+        if terminal or time.perf_counter() >= deadline:
             details = build_renderdoc_error_details(
                 status if last_status is None else last_status,
                 operation=f"CheckRemoteServerConnection({url})",
@@ -3397,14 +3359,81 @@ def _collect_remote_server_info(
     return info
 
 
+async def _connect_remote_endpoint(host: str, port: int, transport: str, options: Dict[str, Any], timeout_ms: int) -> tuple[Any, Any, Dict[str, Any]]:
+    """Join cancellation before publishing a connection; roll back only acquired resources."""
+    budget = ConnectionBudget(timeout_ms)
+    def connect() -> tuple[Any, Any, Dict[str, Any]]:
+        token = _connection_budget.set(budget)
+        bootstrap = None
+        remote = None
+        try:
+            endpoint_host, endpoint_port = host, port
+            if transport == "adb_android":
+                _progress("bootstrap_start", "Preparing Android remote connection", progress_pct=0.05)
+                bootstrap = bootstrap_android_remote(remote_port=port, options=AndroidBootstrapOptions(
+                    device_serial=str(options.get("device_serial") or ""),
+                    local_port=_as_int(options.get("local_port"), 0),
+                    install_apk=_as_bool(options.get("install_apk"), True),
+                    push_config=_as_bool(options.get("push_config"), True)))
+                endpoint_host, endpoint_port = bootstrap.host, bootstrap.port
+            detail = describe_android_remote(bootstrap) if bootstrap else {}
+            url = _remote_url(endpoint_host, endpoint_port)
+            _wait_for_remote_endpoint(url, max(1, int(budget.remaining() * 1000)))
+            remote = _create_remote_server_connection(url)
+            budget.remaining()
+            ping = remote.Ping()
+            if not _status_ok(ping):
+                _check_status(ping, "RemoteServer.Ping", backend_type="remote", capture_context={"endpoint": url})
+            info = _collect_remote_server_info(remote, host=endpoint_host, port=endpoint_port, transport=transport, bootstrap=detail)
+            budget.remaining()
+            return bootstrap, remote, info
+        except BaseException as exc:
+            # Cleanup is separately bounded; the expired/cancelled connection budget must not suppress it.
+            _connection_budget.reset(token)
+            token = _connection_budget.set(None)
+            errors = []
+            if remote is not None:
+                try:
+                    remote.ShutdownConnection()
+                except Exception as cleanup_error:
+                    errors.append(str(cleanup_error))
+            if bootstrap is not None:
+                errors.extend(cleanup_android_remote(bootstrap))
+            if errors:
+                if isinstance(exc, AndroidRemoteBootstrapError):
+                    exc.details.setdefault("cleanup_errors", []).extend(errors)
+                elif isinstance(exc, CoreError):
+                    exc.details.setdefault("cleanup_errors", []).extend(errors)
+                else:
+                    raise RuntimeToolError(str(exc), details={"cleanup_errors": errors}) from exc
+            raise
+        finally:
+            _connection_budget.reset(token)
+    ctx = contextvars.copy_context()
+    future = asyncio.get_running_loop().run_in_executor(None, ctx.run, connect)
+    try:
+        return await asyncio.shield(future)
+    except asyncio.CancelledError:
+        budget.cancelled.set()
+        try:
+            bootstrap, remote, _ = await asyncio.shield(future)
+        except Exception:
+            pass  # The connection worker has finished its own rollback.
+        else:
+            # Cancellation can race with a completed worker, before handle publication.
+            try:
+                await _offload(remote.ShutdownConnection)
+            finally:
+                if bootstrap is not None:
+                    await _offload(cleanup_android_remote, bootstrap)
+        raise
+
+
 def _disconnect_remote_handle_sync(handle: RemoteHandle) -> List[str]:
     errors: List[str] = []
     if handle.remote_server is not None:
         try:
-            if handle.transport == "adb_android" and hasattr(handle.remote_server, "ShutdownServerAndConnection"):
-                handle.remote_server.ShutdownServerAndConnection()
-            else:
-                handle.remote_server.ShutdownConnection()
+            handle.remote_server.ShutdownConnection()
         except Exception as exc:
             errors.append(f"remote shutdown failed: {exc}")
     if handle.transport == "adb_android" and handle.bootstrap_result is not None:
@@ -4215,9 +4244,9 @@ def _pipeline_truth_metadata(
     render_targets = list(snapshot_dict.get("render_targets") or [])
     api_name = str(snapshot_dict.get("api") or "").strip().upper()
     degraded_reasons: List[str] = []
-    if not shaders:
+    if "shaders" in snapshot_dict and not shaders:
         degraded_reasons.append("binding_unavailable")
-    if not render_targets:
+    if "render_targets" in snapshot_dict and not render_targets:
         degraded_reasons.append("event_bound_pipeline_state_partial")
     if backend == "remote" and degraded_reasons:
         degraded_reasons.append("summary_degraded")
@@ -4715,6 +4744,10 @@ def _stage_candidates() -> List[str]:
 
 async def _ensure_live_session(session_id: str) -> ReplayHandle:
     assert _session_manager is not None
+    record = (_context_state(_runtime_context_id()).get("sessions") or {}).get(str(session_id), {})
+    if (record.get("recovery") or {}).get("status") == "requires_restart":
+        raise CoreError(code="session_requires_restart", message="Replay restoration failed; close and reopen the capture",
+                        category="runtime", details={"session_id": session_id, "last_error": record.get("last_error")})
     replay = _runtime.replays.get(str(session_id))
     if replay is not None:
         try:
@@ -5284,80 +5317,19 @@ async def _restore_remote_handle_from_session_record(
                 live_handle.bootstrap = dict(bootstrap_detail)
             return live_handle
 
-    if transport == "adb_android":
-        bootstrap_result = await _offload(
-            bootstrap_android_remote,
-            remote_port=_as_int(
-                options.get("remote_port"),
-                _as_int(bootstrap_detail.get("remote_port"), requested_port or 38920),
-            ),
-            options=AndroidBootstrapOptions(
-                device_serial=device_serial,
-                local_port=_as_int(options.get("local_port"), 0),
-                install_apk=_as_bool(options.get("install_apk"), True),
-                push_config=_as_bool(options.get("push_config"), True),
-            ),
-        )
-        bootstrap_detail = describe_android_remote(bootstrap_result)
-        endpoint_host = str(bootstrap_result.host)
-        endpoint_port = int(bootstrap_result.port)
-        requested_host = "127.0.0.1"
-        requested_port = _as_int(bootstrap_detail.get("remote_port"), requested_port or 38920)
-    else:
+    if transport != "adb_android":
         if (not endpoint_host or endpoint_port <= 0) and endpoint:
             endpoint_host, endpoint_port = _parse_remote_endpoint(endpoint)
-        if not endpoint_host:
-            endpoint_host = requested_host
-        if endpoint_port <= 0:
-            endpoint_port = requested_port
-
-    if not endpoint_host or endpoint_port <= 0:
-        if bootstrap_result is not None:
-            try:
-                await _offload(cleanup_android_remote, bootstrap_result)
-            except Exception:
-                pass
-        raise RuntimeToolError(
-            "Remote recovery metadata is incomplete",
-            details={
-                "session_id": session_id,
-                "remote": remote_record,
-            },
-        )
-
-    url = _remote_url(endpoint_host, endpoint_port)
-    try:
-        await _offload(_wait_for_remote_endpoint, url, remote_connect_timeout_ms({}))
-        remote_server = await _offload(_create_remote_server_connection, url)
-        ping_status = await _offload(remote_server.Ping)
-        if not _status_ok(ping_status):
-            raise RuntimeToolError(
-                f"RemoteServer.Ping({url}) failed: {_status_text(ping_status)}",
-                details=build_renderdoc_error_details(
-                    ping_status,
-                    operation=f"RemoteServer.Ping({url})",
-                    source_layer="renderdoc_status",
-                    backend_type="remote",
-                    capture_context={"session_id": session_id, "endpoint": url},
-                    classification="remote_endpoint",
-                    fix_hint="Reconnect or re-bootstrap the remote endpoint before retrying recovery.",
-                ),
-            )
-        server_info = await _offload(
-            _collect_remote_server_info,
-            remote_server,
-            host=endpoint_host,
-            port=endpoint_port,
-            transport=transport,
-            bootstrap=bootstrap_detail,
-        )
-    except Exception:
-        if bootstrap_result is not None:
-            try:
-                await _offload(cleanup_android_remote, bootstrap_result)
-            except Exception:
-                pass
-        raise
+        endpoint_host = endpoint_host or requested_host
+        endpoint_port = endpoint_port if endpoint_port > 0 else requested_port
+    bootstrap_result, remote_server, server_info = await _connect_remote_endpoint(
+        "127.0.0.1" if transport == "adb_android" else endpoint_host,
+        requested_port if transport == "adb_android" else endpoint_port,
+        transport, {**options, "device_serial": device_serial}, remote_connect_timeout_ms({}))
+    if bootstrap_result is not None:
+        bootstrap_detail = describe_android_remote(bootstrap_result)
+        endpoint_host, endpoint_port = bootstrap_result.host, bootstrap_result.port
+        requested_host, requested_port = "127.0.0.1", bootstrap_result.remote_port
 
     return RemoteHandle(
         remote_id=origin_remote_id or _new_id("remote"),
@@ -6002,6 +5974,7 @@ async def _dispatch_core(action: str, args: Dict[str, Any]) -> str:
     if action == "list_tools":
         detail_level = str(args.get("detail_level") or "summary").strip().lower() or "summary"
         tools = _filter_tool_profiles(
+            query=str(args.get("query") or ""),
             namespace=str(args.get("namespace") or ""),
             group=str(args.get("group") or ""),
             capability=str(args.get("capability") or ""),
@@ -6016,17 +5989,6 @@ async def _dispatch_core(action: str, args: Dict[str, Any]) -> str:
         )
         return _ok(tool_count=len(tools), tools=tools)
 
-    if action == "search_tools":
-        detail_level = str(args.get("detail_level") or "summary").strip().lower() or "summary"
-        tools = _filter_tool_profiles(
-            query=str(args.get("query") or ""),
-            namespace=str(args.get("namespace") or ""),
-            capability=str(args.get("capability") or ""),
-            role=str(args.get("role") or ""),
-            intent=str(args.get("intent") or ""),
-            detail_level="full" if detail_level == "full" else "summary",
-        )
-        return _ok(tool_count=len(tools), tools=tools)
 
     if action == "get_tool_graph":
         return _ok(
@@ -6190,45 +6152,9 @@ async def _core_capabilities(*, detail: str) -> Dict[str, Any]:
 
 
 _MACRO_GUIDE: Dict[str, Dict[str, Any]] = {
-    "rd.macro.summarize_frame": {
-        "canonical_tools": ["rd.event.get_actions", "rd.pipeline.get_state_summary"],
-        "guidance": "Use the macro for a quick frame summary; switch to event/pipeline tools when you need exact event-level control.",
-    },
-    "rd.macro.find_pass_by_marker": {
-        "canonical_tools": ["rd.event.search_actions", "rd.event.list_passes"],
-        "guidance": "Use the macro when you only know marker text; switch to event.list_passes for structured pass ranges.",
-    },
-    "rd.macro.explain_pixel": {
-        "canonical_tools": ["rd.debug.pixel_history", "rd.event.get_action_details", "rd.pipeline.get_state"],
-        "guidance": "Use the macro for narrative explanation; use canonical tools when you need raw evidence objects.",
-    },
-    "rd.macro.resource_dependency_graph": {
-        "canonical_tools": ["rd.event.get_action_tree", "rd.resource.get_usage", "rd.resource.get_history"],
-        "guidance": "Use the macro to build a coarse causal graph first; switch to event/resource tools when you need exact edges.",
-    },
     "rd.macro.find_state_change_point": {
         "canonical_tools": ["rd.pipeline.get_state", "rd.event.diff_pipeline_state"],
-        "guidance": "Use the macro to search a state transition window; switch to pipeline/event diff tools when you need exact snapshots.",
-    },
-    "rd.macro.compare_events_report": {
-        "canonical_tools": ["rd.event.diff_pipeline_state", "rd.event.get_action_details"],
-        "guidance": "Use the macro for a readable diff report; switch to event diff/details tools when you need raw change objects.",
-    },
-    "rd.macro.find_unexpected_clear": {
-        "canonical_tools": ["rd.event.search_actions"],
-        "guidance": "Use the macro to hunt clear/discard anomalies quickly; switch to event search when you need precise filters.",
-    },
-    "rd.macro.quick_triage_missing_draw": {
-        "canonical_tools": ["rd.diag.scan_common_issues", "rd.event.get_action_details", "rd.pipeline.get_state", "rd.debug.pixel_history"],
-        "guidance": "Use the macro to assemble an initial missing-draw triage; switch to canonical tools when you need exact evidence objects.",
-    },
-    "rd.macro.build_bug_report_pack": {
-        "canonical_tools": ["rd.export.repro_bundle_zip", "rd.export.markdown_report", "rd.session.get_context"],
-        "guidance": "Use the macro to package a report bundle; switch to export/session tools when you need direct artifact control.",
-    },
-    "rd.macro.shader_hotfix_validate": {
-        "canonical_tools": ["rd.shader.edit_and_replace", "rd.export.screenshot"],
-        "guidance": "Use the macro for closed-loop hotfix validation; switch to shader/export tools when you need each step independently.",
+        "guidance": "Search real events within a bounded state-transition window.",
     },
 }
 
@@ -6286,26 +6212,8 @@ def _tool_role(tool_name: str) -> str:
 
 
 def _tool_mutates_state(tool_name: str) -> bool:
-    if tool_name.startswith("rd.vfs."):
-        return False
-    write_prefixes = (
-        "rd.core.init",
-        "rd.core.shutdown",
-        "rd.core.set_",
-        "rd.capture.open_",
-        "rd.capture.close_",
-        "rd.replay.set_",
-        "rd.event.set_",
-        "rd.remote.connect",
-        "rd.remote.disconnect",
-        "rd.session.update_context",
-        "rd.session.observe",
-        "rd.session.open_preview",
-        "rd.session.close_preview",
-        "rd.session.select_session",
-        "rd.session.resume",
-    )
-    return any(tool_name.startswith(prefix) for prefix in write_prefixes)
+    definition = next((tool for tool in _load_tool_catalog() if tool["name"] == tool_name), None)
+    return bool(definition and definition.get("effects"))
 
 
 def _tool_capabilities(tool: Dict[str, Any]) -> List[str]:
@@ -6332,16 +6240,16 @@ def _tool_intents(tool: Dict[str, Any]) -> List[str]:
     intents: set[str] = set()
     if name.startswith("rd.session.") or name.startswith("rd.capture.") or name.startswith("rd.replay."):
         intents.add("session")
-    if name.startswith("rd.vfs.") or name.startswith("rd.core.list_tools") or name.startswith("rd.core.search_tools"):
+    if name.startswith("rd.vfs.") or name.startswith("rd.core.list_tools"):
         intents.add("discovery")
     if name.startswith("rd.remote."):
         intents.add("remote")
     if (
         name.startswith("rd.macro.")
-        or name in {"rd.diag.scan_common_issues", "rd.event.get_action_details", "rd.debug.pixel_history", "rd.texture.get_histogram", "rd.texture.compute_stats"}
+        or name in {"rd.diag.scan_common_issues", "rd.event.get_action_details", "rd.texture.get_pixel_history", "rd.texture.get_histogram", "rd.texture.compute_stats"}
     ):
         intents.add("analysis")
-    if name.startswith("rd.export.") or name.startswith("rd.util.pack_zip") or name in {"rd.texture.save_mip_chain"}:
+    if "artifact_write" in tool.get("effects", []):
         intents.add("export")
     if name.startswith("rd.debug.") or name.startswith("rd.shader."):
         intents.add("debug")
@@ -6702,31 +6610,32 @@ async def _dispatch_session(action: str, args: Dict[str, Any]) -> str:
         context_ids = sorted({normalize_context_id(item) for item in list_context_ids()} | {context_id})
         return _ok(context_id=context_id, contexts=[_context_summary(item) for item in context_ids])
 
-    if action == "select_context":
-        _require(args, "target_context_id")
-        requested_context = normalize_context_id(args.get("target_context_id"))
-        if not _context_state_exists(requested_context):
-            return _err(
-                f"Unknown context_id: {requested_context}",
-                code="context_not_found",
-                category="not_found",
-                details={"context_id": requested_context},
-            )
-        state = _context_state(requested_context)
-        snapshot = _sync_context_snapshot_from_state(requested_context)
-        return _ok(
-            **snapshot,
-            selected_context_id=requested_context,
-            current_session_id=str(state.get("current_session_id") or ""),
-            sessions=list(state.get("sessions", {}).values()),
-            recovery=dict(state.get("recovery") or {}),
-            limits=dict(state.get("limits") or {}),
-            recent_operations=list(state.get("recent_operations") or []),
-        )
 
     if action == "clear_context":
         requested_context = normalize_context_id(args.get("target_context_id") or args.get("context_id") or context_id)
         await _close_preview_binding(requested_context)
+        # Release live resources before discarding the only ownership record.
+        current = _context_state(requested_context)
+        cleanup_errors = []
+        for sid in list(current.get("sessions", {})):
+            try:
+                await _session_manager.close_session(sid)
+                _release_remote_session_lease(sid, context_id=requested_context)
+                _runtime.replays.pop(sid, None)
+            except Exception as exc:
+                cleanup_errors.append(str(exc))
+        if cleanup_errors:
+            return _err("Context cleanup failed", code="context_cleanup_failed", details={"cleanup_errors": cleanup_errors})
+        for rid, handle in list(_runtime.remotes.items()):
+            if normalize_context_id(handle.origin_context_id) != requested_context:
+                continue
+            errors = await _offload(_disconnect_remote_handle_sync, handle)
+            if errors:
+                cleanup_errors.extend(errors)
+            else:
+                _runtime.remotes.pop(rid, None)
+        if cleanup_errors:
+            return _err("Context cleanup failed", code="context_cleanup_failed", details={"cleanup_errors": cleanup_errors})
         snapshot = _reset_context_snapshot(requested_context)
         state = _context_state(requested_context)
         return _ok(
@@ -6928,7 +6837,7 @@ async def _dispatch_capture(action: str, args: Dict[str, Any]) -> str:
             driver=driver,
         )
         _set_context_capture_file(capture_file_id)
-        return _ok(capture_file_id=capture_file_id, driver=driver)
+        return _ok(context_id=_runtime_context_id(), capture_file_id=capture_file_id, driver=driver)
 
     if action == "close_file":
         _require(args, "capture_file_id")
@@ -6951,6 +6860,30 @@ async def _dispatch_capture(action: str, args: Dict[str, Any]) -> str:
         _clear_context_capture_file(capture_file_id)
         return _ok()
 
+    if action == "get_thumbnail":
+        from rdx.core.capture_queries import read_thumbnail
+        _require(args, "capture_file_id")
+        handle = _runtime.captures.get(str(args["capture_file_id"]))
+        if handle is None:
+            return _err("Unknown capture_file_id", code="capture_not_found")
+        image_format = str(args.get("format", "png")).lower()
+        max_size = int(args.get("max_size", 256))
+        if image_format not in {"png", "jpg"} or not 1 <= max_size <= 2048:
+            return _err("Invalid thumbnail format or size", code="validation_error")
+        data = await _offload(read_thumbnail, _get_rd(), handle.file_path, image_format, max_size)
+        if not data:
+            return _err("Capture has no embedded thumbnail", code="thumbnail_unavailable")
+        result = {"capture_file_id": str(args["capture_file_id"]), "format": image_format,
+                  "byte_size": len(data), "source": "embedded_capture_thumbnail"}
+        if args.get("output_path"):
+            path = Path(str(args["output_path"]))
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+            result["saved_path"] = str(path)
+        else:
+            result["base64"] = base64.b64encode(data).decode("ascii")
+        return _ok(**result)
+
     if action == "get_info":
         _require(args, "capture_file_id")
         handle = _runtime.captures.get(str(args["capture_file_id"]))
@@ -6966,31 +6899,7 @@ async def _dispatch_capture(action: str, args: Dict[str, Any]) -> str:
         }
         return _ok(metadata=_sanitize_dict(metadata))
 
-    if action == "get_thumbnail":
-        _require(args, "capture_file_id")
-        capture_file_id = str(args["capture_file_id"])
-        handle = _runtime.captures.get(capture_file_id)
-        if handle is None:
-            return _err(f"Unknown capture_file_id: {args['capture_file_id']}")
-        return _err(
-            f"Capture thumbnail is unavailable for capture_file_id: {capture_file_id}",
-            code="thumbnail_unavailable",
-            category="runtime",
-            details={
-                "capture_file_id": capture_file_id,
-                "file_path": str(handle.file_path),
-                "max_size_px": _as_int(args.get("max_size_px"), 256),
-                "source": "renderdoc_runtime",
-            },
-        )
 
-    if action == "list_frames":
-        _require(args, "capture_file_id")
-        handle = _runtime.captures.get(str(args["capture_file_id"]))
-        if handle is None:
-            return _err(f"Unknown capture_file_id: {args['capture_file_id']}")
-        frames = [{"frame_index": 0, "timestamp": None, "has_thumbnail": False}]
-        return _ok(frames=frames)
 
     if action == "open_replay":
         _require(args, "capture_file_id")
@@ -7182,8 +7091,10 @@ async def _dispatch_capture(action: str, args: Dict[str, Any]) -> str:
                 details={"session_id": session_info.session_id, "capture_file_id": capture_file_id},
             )
             return _ok(
+                context_id=_runtime_context_id(),
                 session_id=session_info.session_id,
                 capture_file_id=capture_file_id,
+                remote_id=remote_id or None,
                 active_event_id=int(active_event_id or 0),
                 recovery_status="ready",
                 frame_count=max(1, int(getattr(cap_info, "frame_count", 1))),
@@ -7286,6 +7197,17 @@ async def _dispatch_replay(action: str, args: Dict[str, Any]) -> str:
 
 
 async def _dispatch_event(action: str, args: Dict[str, Any]) -> str:
+    if action == "get_api_calls":
+        from rdx.core.capture_queries import query_calls
+        _require(args, "session_id")
+        if (args.get("event_id") is None) == (args.get("chunk_indices") is None):
+            return _err("Specify exactly one of event_id and chunk_indices", code="validation_error")
+        controller = await _get_controller(str(args["session_id"]))
+        return _ok(**(await _offload(query_calls, _get_rd(), controller,
+            event_id=args.get("event_id"), chunk_indices=args.get("chunk_indices"),
+            offset=int(args.get("offset", 0)), limit=int(args.get("limit", 50)),
+            max_nodes=int(args.get("max_nodes", 4096)), object_path=args.get("object_path"),
+            child_offset=int(args.get("child_offset", 0)), value_offset=int(args.get("value_offset", 0)))))
     _require(args, "session_id")
     session_id = str(args["session_id"])
     controller = await _get_controller(session_id)
@@ -7322,102 +7244,55 @@ async def _dispatch_event(action: str, args: Dict[str, Any]) -> str:
     if action == "get_active":
         return _ok(active_event_id=_active_event(session_id))
 
-    if action == "get_actions":
-        include_markers = _as_bool(args.get("include_markers"), True)
-        include_drawcalls = _as_bool(args.get("include_drawcalls"), True)
-        max_nodes = max(1, _as_int(args.get("max_nodes"), 2000))
-        emitted = 0
-
-        def bounded_action(action_obj: Any, depth: int = 0) -> Optional[Dict[str, Any]]:
-            nonlocal emitted
-            if emitted >= max_nodes:
-                return None
-            item = _action_to_dict(action_obj, include_children=False, depth=depth)
-            flags = item.get("flags", {})
-            if flags.get("is_marker") and not include_markers:
-                return None
-            if flags.get("is_draw") and not include_drawcalls:
-                return None
-            emitted += 1
-            children = []
-            for child in getattr(action_obj, "children", None) or []:
-                if emitted >= max_nodes:
-                    break
-                child_item = bounded_action(child, depth + 1)
-                if child_item is not None:
-                    children.append(child_item)
-            item["children"] = children
-            return item
-
-        out = []
-        for root in roots:
-            if emitted >= max_nodes:
-                break
-            item = bounded_action(root, 0)
-            if item is not None:
-                out.append(item)
-        response: Dict[str, Any] = {
-            "actions": out,
-            "pagination": {"max_nodes": max_nodes, "emitted_nodes": emitted, "truncated": emitted >= max_nodes},
-            "lookup_scope": "root_browse",
-            "recommended_followup_tool": "rd.event.get_action_tree",
-        }
-        projection = _projection_request(args, "rd.event.get_actions")
-        if projection:
-            response["projections"] = _event_actions_projection(
-                out,
-                include_tsv_text=bool(projection.get("include_tsv_text", False)),
-            )
-        return _ok(**response)
 
     if action == "get_action_tree":
-        max_depth = args.get("max_depth")
-        filter_cfg = _as_dict(args.get("filter"), default={})
-        name_contains = str(filter_cfg.get("name_contains", "")).strip().lower()
         offset = max(0, _as_int(args.get("offset"), 0))
         limit = max(1, _as_int(args.get("limit"), 256))
         max_nodes = max(1, _as_int(args.get("max_nodes"), 2000))
-        emitted = 0
-
-        def trim(action_obj: Any, depth: int) -> Optional[Dict[str, Any]]:
-            nonlocal emitted
-            if emitted >= max_nodes:
-                return None
-            if max_depth is not None and depth > int(max_depth):
-                return None
-            item = _action_to_dict(action_obj, include_children=False, depth=depth)
-            if name_contains and name_contains not in str(item.get("name", "")).lower():
-                pass
-            emitted += 1
+        max_depth = args.get("max_depth")
+        requested = args.get("event_id")
+        source = list(roots)
+        if requested is not None:
+            node = by_event.get(int(requested))
+            if node is None:
+                return _err(f"Event not found: {requested}", code="event_not_found")
+            source = [node]
+        include_markers = _as_bool(args.get("include_markers"), True)
+        include_drawcalls = _as_bool(args.get("include_drawcalls"), True)
+        name_filter = str(_as_dict(args.get("filter"), default={}).get("name_contains", "")).lower()
+        visited = 0
+        truncated = offset > 0 or offset + limit < len(source)
+        def trim(node: Any, depth: int) -> list[Dict[str, Any]]:
+            nonlocal visited, truncated
+            if visited >= max_nodes or (max_depth is not None and depth > int(max_depth)):
+                truncated = True
+                return []
+            item = _action_to_dict(node, include_children=False, depth=depth)
+            flags = item.get("flags", {})
+            keep = (include_markers or not flags.get("is_marker")) and (include_drawcalls or not flags.get("is_draw"))
+            matches = not name_filter or name_filter in str(item.get("name", "")).lower()
+            visited += 1
             children = []
-            for child in getattr(action_obj, "children", None) or []:
-                if emitted >= max_nodes:
-                    break
-                child_item = trim(child, depth + 1)
-                if child_item is not None:
-                    children.append(child_item)
+            for child in getattr(node, "children", None) or []:
+                children.extend(trim(child, depth + 1))
             item["children"] = children
-            return item
-
-        root_payload = {"event_id": 0, "name": "root", "flags": {}, "children": []}
-        selected_roots = list(roots)[offset : offset + limit]
-        for r in selected_roots:
-            if emitted >= max_nodes:
-                break
-            node = trim(r, 1)
-            if node is not None:
-                root_payload["children"].append(node)
-        return _ok(
-            root=root_payload,
-            pagination={
-                "offset": offset,
-                "limit": limit,
-                "max_nodes": max_nodes,
-                "returned_root_count": len(root_payload["children"]),
-                "total_root_count": len(list(roots)),
-                "truncated": emitted >= max_nodes,
-            },
-        )
+            if not keep:
+                return children
+            return [item] if matches or children else []
+        children = []
+        for node in source[offset:offset + limit]:
+            children.extend(trim(node, 1))
+        def count_nodes(nodes: list[Dict[str, Any]]) -> int:
+            return sum(1 + count_nodes(node.get("children", [])) for node in nodes)
+        emitted = count_nodes(children)
+        result = {"root": {"event_id": 0, "name": "root", "flags": {}, "children": children},
+                  "pagination": {"offset": offset, "limit": limit, "max_nodes": max_nodes,
+                    "emitted_nodes": emitted, "visited_nodes": visited, "returned_root_count": len(children), "total_root_count": len(source),
+                    "truncated": truncated}}
+        projection = _projection_request(args, "rd.event.get_action_tree")
+        if projection:
+            result["projections"] = _event_actions_projection(children, include_tsv_text=bool(projection.get("include_tsv_text", False)))
+        return _ok(**result)
 
     if action == "get_action_details":
         _require(args, "event_id")
@@ -7426,17 +7301,9 @@ async def _dispatch_event(action: str, args: Dict[str, Any]) -> str:
         if action_obj is None:
             return _err(f"Event not found: {event_id}")
         payload = _action_to_dict(action_obj, include_children=True)
+        payload["children_event_ids"] = [int(c.eventId) for c in getattr(action_obj, "children", None) or []]
         return _ok(action=payload)
 
-    if action == "get_drawcall_children":
-        _require(args, "event_id")
-        event_id = _as_int(args["event_id"])
-        action_obj = by_event.get(event_id)
-        if action_obj is None:
-            return _err(f"Event not found: {event_id}")
-        children = getattr(action_obj, "children", None) or []
-        ids = [int(getattr(c, "eventId", 0)) for c in children]
-        return _ok(children_event_ids=ids)
 
     if action == "get_parent_chain":
         _require(args, "event_id")
@@ -7513,15 +7380,7 @@ async def _dispatch_event(action: str, args: Dict[str, Any]) -> str:
         passes.sort(key=lambda p: p["begin_event_id"])
         return _ok(passes=passes)
 
-    if action == "get_marker_stack":
-        _require(args, "event_id")
-        event_id = _as_int(args["event_id"])
-        chain = _parent_chain(event_id)
-        stack = [_action_name(item) for item in chain if _map_action_flags(getattr(item, "flags", 0)).get("is_marker")]
-        return _ok(stack=stack)
 
-    if action == "get_api_calls":
-        return _ok(api_calls=[])
 
     if action == "get_callstack":
         _require(args, "event_id")
@@ -7589,23 +7448,36 @@ async def _dispatch_pipeline(action: str, args: Dict[str, Any]) -> str:
     stage = _parse_stage(args.get("stage"))
     resolved_event_id = await _ensure_event(session_id, _as_int(args["event_id"]) if args.get("event_id") is not None else None)
     assert _pipeline_service is not None
-    snapshot = await _pipeline_service.snapshot_pipeline(
-        session_id=session_id,
-        event_id=resolved_event_id,
-        session_manager=_session_manager,
-    )
-    snapshot_dict = snapshot.model_dump(mode="json")
-    truth_meta = _pipeline_truth_metadata(session_id, snapshot_dict)
+    snapshot_dict: Dict[str, Any] = {}
+    truth_meta: Dict[str, Any] = {}
     visual_target_payload: Dict[str, Any] = {}
-    try:
-        _, _, visual_target_payload, truth_meta = await _resolve_visual_target_for_event(
-            session_id,
-            resolved_event_id,
-            allow_framebuffer_fallback=True,
-        )
-    except Exception:
-        visual_target_payload = {}
-    snapshot_dict.update(truth_meta)
+    detail = args.get("detail", "full")
+    sections = args.get("sections")
+    from rdx.core.pipeline_service import PIPELINE_SECTIONS
+    fields = PIPELINE_SECTIONS
+    if action == "get_state":
+        if detail not in {"summary", "full"} or (sections is not None and
+                (not isinstance(sections, list) or any(not isinstance(k, str) or k not in fields for k in sections))):
+            return _err("Invalid pipeline detail or sections", code="validation_error", category="validation")
+        selected = sections if sections is not None else (list(fields) if detail == "full" else
+            ["shaders", "output_targets", "topology", "viewports_scissors"])
+        snapshot = await _pipeline_service.snapshot_pipeline(
+            session_id=session_id, event_id=resolved_event_id, session_manager=_session_manager, sections=selected)
+        snapshot_dict = snapshot.model_dump(mode="json")
+        truth_meta = _pipeline_truth_metadata(session_id, snapshot_dict)
+        if "output_targets" in selected:
+            try:
+                _, _, visual_target_payload, truth_meta = await _resolve_visual_target_for_event(
+                    session_id, resolved_event_id, target={"semantic": "event_output"}, allow_framebuffer_fallback=True)
+            except Exception as exc:
+                visual_target_payload = {"unavailable_reason": str(exc)}
+        keys = {k for section in selected for k in fields[section]}
+        snapshot_dict = {k: v for k, v in snapshot_dict.items() if k in keys or k == "api"}
+        snapshot_dict.update(truth_meta)
+        if "output_targets" in selected:
+            snapshot_dict.update(selected_visual_target=visual_target_payload,
+                                 export_target_available=bool(visual_target_payload.get("texture_id")))
+        return _ok(resolved_event_id=int(resolved_event_id), pipeline_state=snapshot_dict)
     controller = await _get_controller(session_id)
     if resolved_event_id > 0:
         await _offload(controller.SetFrameEvent, resolved_event_id, True)
@@ -7613,24 +7485,6 @@ async def _dispatch_pipeline(action: str, args: Dict[str, Any]) -> str:
     def _pipeline_ok(**fields: Any) -> str:
         return _ok(resolved_event_id=int(resolved_event_id), **fields)
 
-    if action == "get_state":
-        return _pipeline_ok(pipeline_state=snapshot_dict)
-    if action == "get_state_summary":
-        summary = {
-            "api": snapshot_dict.get("api"),
-            "shaders": snapshot_dict.get("shaders", []),
-            "render_targets": snapshot_dict.get("render_targets", []),
-            "binding_count": len(snapshot_dict.get("bindings", [])),
-            "topology": snapshot_dict.get("topology", ""),
-            "viewport": snapshot_dict.get("viewport", {}),
-            "summary_status": truth_meta.get("summary_status"),
-            "summary_degraded_reasons": list(truth_meta.get("summary_degraded_reasons") or []),
-            "binding_truth_level": truth_meta.get("binding_truth_level"),
-            "evidence_truth_level": truth_meta.get("evidence_truth_level"),
-            "selected_visual_target": dict(visual_target_payload or {}),
-            "export_target_available": bool(visual_target_payload.get("texture_id")) if isinstance(visual_target_payload, dict) else False,
-        }
-        return _pipeline_ok(summary=summary)
     if action == "get_stage_state":
         rd_stage = _rd_stage(stage)
         shader_id = await _offload(pipe.GetShader, rd_stage)
@@ -7654,6 +7508,11 @@ async def _dispatch_pipeline(action: str, args: Dict[str, Any]) -> str:
             max_bytes=_as_int(args.get("max_bytes"), 1048576),
             flatten=False,
         )
+        truth_meta = _pipeline_truth_metadata(session_id, {"shaders": [] if _is_null_resource_id(shader_id) else [{"resource_id": str(shader_id)}]})
+        if reflection is None or any(item.get("unavailable_reason") for item in constant_blocks):
+            truth_meta["binding_truth_level"] = "binding_degraded"
+            if not truth_meta.get("summary_degraded_reasons"):
+                truth_meta["summary_degraded_reasons"] = ["reflection_partial"]
         degraded_reasons = list(truth_meta.get("summary_degraded_reasons") or [])
         unavailable_reason = "binding_degraded" if truth_meta.get("binding_truth_level") == "binding_degraded" else ""
         state = {
@@ -7672,8 +7531,6 @@ async def _dispatch_pipeline(action: str, args: Dict[str, Any]) -> str:
         if unavailable_reason:
             state["unavailable_reason"] = unavailable_reason
         return _pipeline_ok(stage_state=state)
-    if action == "get_vertex_input":
-        return _pipeline_ok(ia={"topology": snapshot_dict.get("topology"), "vertex_buffers": snapshot_dict.get("bindings", [])})
     if action == "get_vertex_buffers":
         vbs = []
         try:
@@ -7687,8 +7544,8 @@ async def _dispatch_pipeline(action: str, args: Dict[str, Any]) -> str:
                         "stride": int(getattr(vb, "byteStride", 0)),
                     },
                 )
-        except Exception:
-            pass
+        except Exception as exc:
+            return _err(f"Vertex buffer read failed: {exc}", code="pipeline_read_failed")
         return _pipeline_ok(vertex_buffers=vbs)
     if action == "get_index_buffer":
         index_buffer = {}
@@ -7699,50 +7556,17 @@ async def _dispatch_pipeline(action: str, args: Dict[str, Any]) -> str:
                 "offset": int(getattr(ib, "byteOffset", 0)),
                 "format": str(getattr(ib, "byteStride", "")),
             }
-        except Exception:
-            index_buffer = {}
+        except Exception as exc:
+            return _err(f"Index buffer read failed: {exc}", code="pipeline_read_failed")
         return _pipeline_ok(index_buffer=index_buffer)
-    if action == "get_primitive_topology":
-        return _pipeline_ok(topology={"topology": snapshot_dict.get("topology", "")})
-    if action == "get_viewports_scissors":
-        return _pipeline_ok(viewports=[snapshot_dict.get("viewport", {})], scissors=[snapshot_dict.get("scissor", {})])
-    if action == "get_rasterizer_state":
-        return _pipeline_ok(rasterizer={})
-    if action == "get_multisample_state":
-        return _pipeline_ok(multisample={})
-    if action == "get_blend_state":
-        return _pipeline_ok(blend={"states": snapshot_dict.get("blend_states", [])})
-    if action == "get_depth_stencil_state":
-        return _pipeline_ok(depth_stencil=snapshot_dict.get("depth_stencil", {}))
-    if action == "get_output_targets":
-        return _pipeline_ok(
-            framebuffer={
-                "render_targets": snapshot_dict.get("render_targets", []),
-                "depth_target": snapshot_dict.get("depth_target"),
-                "summary_status": truth_meta.get("summary_status"),
-                "summary_degraded_reasons": list(truth_meta.get("summary_degraded_reasons") or []),
-                "binding_truth_level": truth_meta.get("binding_truth_level"),
-                "selected_visual_target": dict(visual_target_payload or {}),
-                "export_target_available": bool(visual_target_payload.get("texture_id")) if isinstance(visual_target_payload, dict) else False,
-            }
-        )
-    if action == "get_render_targets":
-        return _pipeline_ok(
-            render_targets=snapshot_dict.get("render_targets", []),
-            binding_truth_level=truth_meta.get("binding_truth_level"),
-            summary_degraded_reasons=list(truth_meta.get("summary_degraded_reasons") or []),
-        )
-    if action == "get_depth_target":
-        return _pipeline_ok(depth_target=snapshot_dict.get("depth_target"))
     if action == "get_resource_bindings":
-        bindings = await _pipeline_service.get_resource_bindings(session_id, resolved_event_id, _session_manager)
-        return _pipeline_ok(bindings=[b.model_dump(mode="json") for b in bindings])
-    if action == "get_uav_bindings":
-        all_bindings = await _pipeline_service.get_resource_bindings(session_id, resolved_event_id, _session_manager)
-        uavs = [b.model_dump(mode="json") for b in all_bindings if b.type.upper() == "UAV"]
-        return _pipeline_ok(uavs=uavs)
-    if action == "get_sampler_bindings":
-        return _pipeline_ok(samplers=[])
+        bindings = await _pipeline_service.get_resource_bindings(
+            session_id, resolved_event_id, _session_manager,
+            stage=ShaderStage(str(args["stage"]).upper()) if args.get("stage") else None)
+        binding_type = args.get("type")
+        if binding_type is not None and binding_type not in {"SRV", "UAV", "CBV", "Sampler"}:
+            return _err("Invalid binding type", code="validation_error")
+        return _pipeline_ok(bindings=[b.model_dump(mode="json") for b in bindings if binding_type is None or b.type.upper() == str(binding_type).upper()])
     if action == "get_constant_buffers":
         rd_stage = _rd_stage(stage)
         shader_id = await _offload(pipe.GetShader, rd_stage)
@@ -7760,16 +7584,6 @@ async def _dispatch_pipeline(action: str, args: Dict[str, Any]) -> str:
             flatten=_as_bool(args.get("flatten"), True),
         )
         return _pipeline_ok(constant_buffers=constant_buffers)
-    if action == "get_push_constants":
-        return _pipeline_ok(push_constants=[])
-    if action == "get_dynamic_state":
-        return _pipeline_ok(dynamic_state={})
-    if action == "get_root_signature":
-        return _pipeline_ok(root_signature={})
-    if action == "get_descriptor_heaps":
-        return _pipeline_ok(descriptor_heaps=[])
-    if action == "get_resource_states":
-        return _pipeline_ok(resource_states=[])
     if action == "get_shader":
         rd_stage = _rd_stage(stage)
         shader_id = await _offload(pipe.GetShader, rd_stage)
@@ -7873,10 +7687,52 @@ async def _dispatch_resource(action: str, args: Dict[str, Any]) -> str:
             )
         return out
 
+    async def list_descriptor_stores() -> List[Dict[str, Any]]:
+        from rdx.core.native_values import native_value
+        stores = await _offload(controller.GetDescriptorStores)
+        return [{"resource_id": str(store.resourceId), "kind": "descriptor_store",
+                 **native_value(store)} for store in stores]
+
+    if action == "get_descriptors":
+        from rdx.core.native_values import native_value
+        _require(args, "descriptor_store_id")
+        await _ensure_event(session_id, args.get("event_id"))
+        stores = await _offload(controller.GetDescriptorStores)
+        store = next((item for item in stores if str(item.resourceId) == str(args["descriptor_store_id"])), None)
+        if store is None:
+            return _err("Descriptor store not found", code="resource_not_found")
+        first, count = int(args.get("first", 0)), int(args.get("count", 64))
+        kind = str(args.get("type", "resource"))
+        if first < 0 or not 1 <= count <= 1024 or first > store.descriptorCount or kind not in {"resource", "sampler"}:
+            return _err("Invalid descriptor range or type", code="validation_error")
+        count = min(count, store.descriptorCount-first)
+        if count == 0:
+            return _ok(descriptors=[], total=store.descriptorCount, next_first=None)
+        rd = _get_rd()
+        descriptor_range = rd.DescriptorRange()
+        descriptor_range.offset = store.firstDescriptorOffset + first * store.descriptorByteSize
+        descriptor_range.descriptorSize = store.descriptorByteSize
+        descriptor_range.count = count
+        descriptor_range.type = rd.DescriptorType.Sampler if kind == "sampler" else rd.DescriptorType.Unknown
+        reader = controller.GetSamplerDescriptors if kind == "sampler" else controller.GetDescriptors
+        values = await _offload(reader, store.resourceId, [descriptor_range])
+        locations = await _offload(controller.GetDescriptorLocations, store.resourceId, [descriptor_range])
+        if len(values) != count or len(locations) != count:
+            return _err("Incomplete descriptor range read", code="descriptor_read_failed")
+        return _ok(descriptor_store_id=str(store.resourceId), resolved_event_id=_active_event(session_id),
+            descriptors=[{"index": first+i, "descriptor": native_value(value),
+                          "location": native_value(locations[i])} for i, value in enumerate(values)],
+            total=store.descriptorCount,
+            next_first=first+count if first+count < store.descriptorCount else None)
+
     if action == "list_all":
-        textures = await list_textures()
-        buffers = await list_buffers()
-        resources = textures + buffers
+        kind = args.get("kind", "all")
+        if kind not in {"all", "texture", "buffer", "descriptor_store"}:
+            return _err("Invalid resource kind", code="validation_error")
+        textures = await list_textures() if kind in {"all", "texture"} else []
+        buffers = await list_buffers() if kind in {"all", "buffer"} else []
+        stores = await list_descriptor_stores() if kind in {"all", "descriptor_store"} else []
+        resources = textures + buffers + stores
         projection = _projection_request(args, "rd.resource.list_all")
         if projection:
             return _ok(
@@ -7887,18 +7743,26 @@ async def _dispatch_resource(action: str, args: Dict[str, Any]) -> str:
                 ),
             )
         return _ok(resources=resources)
-    if action == "list_textures":
-        return _ok(textures=await list_textures())
-    if action == "list_buffers":
-        return _ok(buffers=await list_buffers())
     if action == "get_details":
         _require(args, "resource_id")
         rid = str(args["resource_id"])
-        resources = (await list_textures()) + (await list_buffers())
-        for item in resources:
-            if item.get("resource_id") == rid:
-                return _ok(details=item)
-        return _err(f"Resource not found: {rid}")
+        from rdx.core.native_values import native_value
+        resources = (await list_textures()) + (await list_buffers()) + (await list_descriptor_stores())
+        descriptions = await _offload(controller.GetResources)
+        description = next((item for item in descriptions if str(item.resourceId) == rid), None)
+        details = next((item for item in resources if item.get("resource_id") == rid), None)
+        if details is None and description is not None:
+            details = {"resource_id": rid, "name": str(description.name)}
+        if details is None:
+            return _err(f"Resource not found: {rid}", code="resource_not_found")
+        if args.get("include_initialization", False):
+            details["initialization"] = ({"status": "available",
+                "chunk_indices": [int(index) for index in description.initialisationChunks],
+                "parent_resources": [str(value) for value in description.parentResources],
+                "derived_resources": [str(value) for value in description.derivedResources],
+                "scope": "captured_initialization"} if description is not None else
+                {"status": "not_recorded"})
+        return _ok(details=details)
     if action == "get_usage":
         _require(args, "resource_id")
         rid = await _resolve_resource_id(session_id, args["resource_id"])
@@ -7910,110 +7774,14 @@ async def _dispatch_resource(action: str, args: Dict[str, Any]) -> str:
                 {
                     **event_info,
                     "usage": str(getattr(entry, "usage", "")),
+                    "is_write": any(token in str(getattr(entry, "usage", "")).lower() for token in ("write", "rwresource", "rendertarget", "depthstencil", "cleared", "copydst", "resolvedst", "genmips")),
                 },
             )
         return _ok(usage=usage[: _as_int(args.get("max_events"), 10000)])
-    if action == "get_history":
-        _require(args, "resource_id")
-        rid = await _resolve_resource_id(session_id, args["resource_id"])
-        usage_raw = await _offload(controller.GetUsage, rid)
-        history = []
-        for entry in usage_raw:
-            event_info = await usage_event_payload(entry)
-            history.append(
-                {
-                    **event_info,
-                    "usage": str(getattr(entry, "usage", "")),
-                    "is_write": "Write" in str(getattr(entry, "usage", "")),
-                },
-            )
-        return _ok(history=history)
-    if action in {"get_initial_contents", "get_current_contents"}:
-        _require(args, "resource_id")
-        rid = str(args["resource_id"])
-        textures = await list_textures()
-        buffers = await list_buffers()
-        if any(t["resource_id"] == rid for t in textures):
-            output_path = args.get("output_path")
-            if output_path:
-                response = await _export_texture_file(
-                    {
-                        "session_id": session_id,
-                        "texture_id": rid,
-                        "subresource": args.get("subresource"),
-                        "output_path": output_path,
-                        "file_format": args.get("file_format", "raw"),
-                        "event_id": args.get("event_id"),
-                    },
-                )
-                payload = json.loads(response)
-                if payload.get("success"):
-                    key = "initial_contents" if action == "get_initial_contents" else "current_contents"
-                    contents: Dict[str, Any] = {
-                        "artifact_path": payload.get("artifact_path"),
-                        "saved_path": payload.get("saved_path"),
-                        "meta": payload.get("meta"),
-                    }
-                    if payload.get("exports"):
-                        contents["exports"] = payload.get("exports")
-                        contents["saved_paths"] = payload.get("saved_paths")
-                    return _ok(
-                        **{
-                            key: contents,
-                        },
-                    )
-                return response
-            response = await _dispatch_texture(
-                "get_data",
-                {
-                    "session_id": session_id,
-                    "texture_id": rid,
-                    "subresource": args.get("subresource"),
-                },
-            )
-            payload = json.loads(response)
-            if payload.get("success"):
-                key = "initial_contents" if action == "get_initial_contents" else "current_contents"
-                return _ok(
-                    **{
-                        key: {
-                            "artifact_path": payload.get("artifact_path"),
-                            "saved_path": payload.get("saved_path"),
-                            "content_kind": payload.get("content_kind"),
-                            "container_format": payload.get("container_format"),
-                            "stats": payload.get("stats"),
-                        }
-                    }
-                )
-            return response
-        if any(b["resource_id"] == rid for b in buffers):
-            response = await _dispatch_buffer(
-                "get_data",
-                {
-                    "session_id": session_id,
-                    "buffer_id": rid,
-                    "offset": 0,
-                    "size": args.get("range", {}).get("size") if isinstance(args.get("range"), dict) else None,
-                    "output_path": args.get("output_path"),
-                },
-            )
-            payload = json.loads(response)
-            if payload.get("success"):
-                key = "initial_contents" if action == "get_initial_contents" else "current_contents"
-                return _ok(**{key: {"artifact_path": payload.get("artifact_path"), "byte_size": payload.get("byte_size")}})
-            return response
-        return _err(f"Resource not found: {rid}")
     if action == "set_alias":
         _require(args, "resource_id", "alias")
         _runtime.aliases[str(args["resource_id"])] = str(args["alias"])
         return _ok()
-    if action == "get_descriptor_info":
-        _require(args, "resource_id")
-        details_response = await _dispatch_resource("get_details", {"session_id": session_id, "resource_id": args["resource_id"]})
-        payload = json.loads(details_response)
-        if payload.get("success"):
-            return _ok(descriptor_info=payload.get("details"))
-        return details_response
     if action == "estimate_memory":
         if args.get("resource_id") is not None:
             details_response = await _dispatch_resource("get_details", {"session_id": session_id, "resource_id": args["resource_id"]})
@@ -8027,15 +7795,6 @@ async def _dispatch_resource(action: str, args: Dict[str, Any]) -> str:
         buffers = await list_buffers()
         total = sum(int(t.get("width", 0) * t.get("height", 0) * 4) for t in textures) + sum(int(b.get("byte_size", 0)) for b in buffers)
         return _ok(memory={"bytes": total, "human": _format_size(total)})
-    if action == "get_creation_context":
-        _require(args, "resource_id")
-        history_resp = await _dispatch_resource("get_history", {"session_id": session_id, "resource_id": args["resource_id"]})
-        payload = json.loads(history_resp)
-        if not payload.get("success"):
-            return history_resp
-        history = payload.get("history", [])
-        first_event = history[0]["event_id"] if history else None
-        return _ok(creation_context={"first_seen_event_id": first_event})
     return _err(f"Unsupported resource action: {action}")
 
 
@@ -8186,11 +7945,7 @@ async def _export_texture_file(args: Dict[str, Any]) -> str:
         alias_name=_runtime.aliases.get(str(texture_id), ""),
     )
     recommended_formats = _recommend_formats_for_texture(texture_desc, name_info=name_info, for_screenshot=False)
-    deprecated_alias_used: List[str] = []
     requested_format_value = args.get("file_format")
-    if requested_format_value is None and args.get("format") is not None:
-        requested_format_value = args.get("format")
-        deprecated_alias_used.append("format")
     if requested_format_value is None:
         requested_format_value = "png"
     requested_formats = _parse_requested_formats(requested_format_value)
@@ -8244,7 +7999,6 @@ async def _export_texture_file(args: Dict[str, Any]) -> str:
                         "supported_formats": sorted({"png", "jpg", "exr", "hdr"}),
                         "recommended_formats": recommended_formats,
                         "downgrade_allowed": False,
-                        "deprecated_alias_used": deprecated_alias_used,
                     }
                 )
                 return _err(
@@ -8272,7 +8026,6 @@ async def _export_texture_file(args: Dict[str, Any]) -> str:
                     "supported_formats": sorted({"png", "jpg", "exr", "hdr", "dds"}),
                     "recommended_formats": recommended_formats,
                     "downgrade_allowed": False,
-                    "deprecated_alias_used": deprecated_alias_used,
                 }
             )
             return _err(
@@ -8291,7 +8044,6 @@ async def _export_texture_file(args: Dict[str, Any]) -> str:
             selected_formats=selected_formats,
             requested_formats=requested_formats,
             recommended_formats=recommended_formats,
-            deprecated_alias_used=deprecated_alias_used,
             name_info=name_info,
             texture_format=_texture_format_name(texture_desc),
         )
@@ -8301,7 +8053,6 @@ async def _export_texture_file(args: Dict[str, Any]) -> str:
         selected_formats=selected_formats,
         requested_formats=requested_formats,
         recommended_formats=recommended_formats,
-        deprecated_alias_used=deprecated_alias_used,
         name_info=name_info,
         texture_format=_texture_format_name(texture_desc),
     )
@@ -8325,33 +8076,89 @@ async def _export_buffer_file(args: Dict[str, Any]) -> str:
 
 async def _export_mesh_file(args: Dict[str, Any]) -> str:
     _require(args, "session_id", "output_path")
+    if args.get("format", "obj") != "obj" or args.get("space", "postvs") != "postvs" or _as_bool(args.get("include_attributes"), False):
+        return _err("Mesh export supports postvs OBJ positions and primitive indices only", code="mesh_export_unsupported")
     session_id = str(args["session_id"])
-    event_id = _as_int(args.get("event_id"), _active_event(session_id))
-    if event_id <= 0:
-        event_id = await _ensure_event(session_id, None)
-    config_resp = await _dispatch_mesh("get_drawcall_mesh_config", {"session_id": session_id, "event_id": event_id})
-    payload = json.loads(config_resp)
-    if not payload.get("success"):
-        return config_resp
-    export_format = str(args.get("format", "obj")).lower()
-    include_attributes = _as_bool(args.get("include_attributes"), True)
-    space = str(args.get("space", "postvs")).lower()
+    event_id = await _ensure_event(session_id, _as_int(args["event_id"]) if args.get("event_id") is not None else None)
+    controller = await _get_controller(session_id)
+    mesh = await _offload(controller.GetPostVSData, 0, 0, _get_rd().MeshDataStage.VSOut)
+    if _is_null_resource_id(mesh.vertexResourceId):
+        return _err("No post-transform vertex data", code="mesh_post_transform_unavailable")
+    fmt = mesh.format
+    if int(fmt.compByteWidth) != 4 or int(fmt.compCount) < 3 or int(fmt.compType) != int(_get_rd().CompType.Float):
+        return _err("OBJ export requires 32-bit float post-transform positions", code="mesh_export_unsupported")
+    stride = int(mesh.vertexByteStride)
+    if stride < int(fmt.compCount) * 4:
+        return _err("Invalid post-transform vertex stride", code="mesh_post_transform_unavailable")
+    raw = await _offload(controller.GetBufferData, mesh.vertexResourceId, int(mesh.vertexByteOffset), int(mesh.vertexByteSize))
+    if not raw or len(raw) % stride:
+        return _err("Incomplete post-transform vertex readback", code="mesh_post_transform_failed")
+    positions = [struct.unpack_from("<fff", raw, offset) for offset in range(0, len(raw), stride)]
+    if any(not math.isfinite(component) for position in positions for component in position):
+        return _err("Post-transform positions contain non-finite values", code="mesh_export_unsupported")
+    if not _is_null_resource_id(mesh.indexResourceId):
+        index_stride = int(mesh.indexByteStride)
+        if index_stride not in {2, 4}:
+            return _err("Unsupported mesh index width", code="mesh_export_unsupported")
+        index_raw = await _offload(controller.GetBufferData, mesh.indexResourceId, int(mesh.indexByteOffset), int(mesh.numIndices) * index_stride)
+        if len(index_raw) != int(mesh.numIndices) * index_stride:
+            return _err("Incomplete post-transform index readback", code="mesh_post_transform_failed")
+        indices = [item[0] + int(getattr(mesh, "baseVertex", 0)) for item in struct.iter_unpack("<H" if index_stride == 2 else "<I", index_raw)]
+    else:
+        indices = list(range(len(positions)))
+    if any(index < 0 or index >= len(positions) for index in indices):
+        return _err("Post-transform index outside vertex data", code="mesh_post_transform_failed")
+    topology = int(mesh.topology)
+    rd_topology = _get_rd().Topology
+    if topology == int(rd_topology.TriangleList):
+        primitives = [("f", indices[i:i+3]) for i in range(0, len(indices)-2, 3)]
+    elif topology == int(rd_topology.TriangleStrip):
+        primitives = [("f", [indices[i+(i%2)], indices[i+1-(i%2)], indices[i+2]]) for i in range(len(indices)-2)]
+    elif topology == int(rd_topology.LineList):
+        primitives = [("l", indices[i:i+2]) for i in range(0, len(indices)-1, 2)]
+    elif topology == int(rd_topology.PointList):
+        primitives = [("p", [index]) for index in indices]
+    else:
+        return _err(f"Unsupported OBJ topology: {mesh.topology}", code="mesh_export_unsupported")
+    lines = [f"# RDX post-VS positions, event {event_id}"]
+    lines.extend("v " + " ".join(format(value, ".9g") for value in position) for position in positions)
+    lines.extend(kind + " " + " ".join(str(index+1) for index in primitive) for kind, primitive in primitives)
     out = Path(str(args["output_path"]))
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(
-        json.dumps(
-            {
-                "format": export_format,
-                "include_attributes": include_attributes,
-                "space": space,
-                "mesh_config": payload.get("mesh_config", {}),
-            },
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
-    return _ok(saved_path=str(out), export_format=export_format, include_attributes=include_attributes, space=space)
+    out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return _ok(saved_path=str(out), export_format="obj", space="postvs", include_attributes=False,
+               resolved_event_id=event_id, vertex_count=len(positions), primitive_count=len(primitives))
+
+
+async def _read_at_capture_state(session_id: str, resource_id: Any, args: Dict[str, Any], reader: Any) -> Tuple[Any, Dict[str, Any]]:
+    from rdx.core.replay_read import InitialContentsUnavailable, ReplayRestoreError, initial_provenance, preserving_event
+    controller = await _get_controller(session_id)
+    original_event = _active_event(session_id)
+    state = args.get("state", "current")
+    if state not in {"current", "capture_initial"} or (state == "capture_initial" and args.get("event_id") is not None):
+        raise CoreError(code="validation_error", message="capture_initial and event_id are mutually exclusive", category="validation")
+    requested = int(args.get("event_id", original_event)) if state == "current" else 0
+    if args.get("event_id") is not None:
+        _, _, events = await _load_action_index(session_id, controller=controller)
+        _require_action_event(session_id, requested, events)
+    provenance = None
+    if state == "capture_initial":
+        try:
+            provenance = await _offload(initial_provenance, controller, resource_id,
+                                        args.get("subresource", {}) if "texture_id" in args else None)
+        except InitialContentsUnavailable as exc:
+            raise CoreError(code="initial_contents_unavailable", message=str(exc), category="runtime") from exc
+    async def read():
+        await _offload(controller.SetFrameEvent, requested, True)
+        return await reader(requested)
+    try:
+        result = await preserving_event(controller, original_event, read)
+    except ReplayRestoreError as exc:
+        _update_context_session_record(session_id, recovery_status="requires_restart", last_error=str(exc))
+        raise CoreError(code="replay_restore_failed", message=str(exc), category="runtime",
+                        details={"session_id": session_id, "restored": False}) from exc
+    return result, {"state": state, "resolved_event_id": requested, "restored_event_id": original_event,
+                    "replay_state_restored": True, "initial_provenance": provenance}
 
 
 async def _dispatch_buffer(action: str, args: Dict[str, Any]) -> str:
@@ -8365,24 +8172,38 @@ async def _dispatch_buffer(action: str, args: Dict[str, Any]) -> str:
     if size is None:
         size = 0
     size = _as_int(size, 0)
-    data = await _offload(controller.GetBufferData, rid, offset, size)
-
     if action == "get_data":
-        result: Dict[str, Any] = {"byte_size": len(data)}
-        if _as_bool(args.get("as_base64"), False):
-            import base64
-
+        descriptions = await _offload(controller.GetBuffers)
+        descriptor = next((item for item in descriptions if item.resourceId == rid), None)
+        if descriptor is None:
+            return _err("Buffer not found", code="resource_not_found")
+        expected = int(descriptor.length)-offset if size == 0 else size
+        if offset < 0 or expected < 0 or offset+expected > int(descriptor.length):
+            return _err("Buffer range exceeds resource", code="validation_error")
+        inline = _as_bool(args.get("as_base64"), False)
+        if inline and expected > 1048576:
+            return _err("Inline buffer limit is 1 MiB; request a smaller range or export", code="output_budget_exceeded")
+        async def read_buffer(event):
+            data = await _offload(controller.GetBufferData, rid, offset, expected) if expected else b""
+            if len(data) != expected:
+                raise RuntimeError(f"Incomplete buffer read: expected {expected}, received {len(data)}")
+            return data
+        data, metadata = await _read_at_capture_state(session_id, rid, args, read_buffer)
+        result: Dict[str, Any] = {"byte_size": len(data), "buffer_id": str(rid), **metadata}
+        if inline:
             result["base64"] = base64.b64encode(data).decode("ascii")
         if args.get("output_path"):
             out = Path(str(args["output_path"]))
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_bytes(data)
             result["artifact_path"] = str(out)
-        else:
+        elif not inline:
             assert _artifact_store is not None
             artifact = await _artifact_store.store(data, mime="application/octet-stream", suffix=".bin")
             result["artifact_path"] = _artifact_path(artifact)
         return _ok(**result)
+
+    data = await _offload(controller.GetBufferData, rid, offset, size)
 
     if action == "search_pattern":
         pattern_value = args.get("pattern")
@@ -8415,8 +8236,8 @@ async def _dispatch_buffer(action: str, args: Dict[str, Any]) -> str:
         fields = _as_list(layout.get("fields"), default=[])
         stride = _as_int(layout.get("stride"), 0)
         if stride <= 0:
-            return _ok(elements=[])
-        offset_items = _as_int(args.get("offset"), 0)
+            return _err("Structured buffer layout requires positive stride", code="validation_error")
+        offset_items = 0
         max_elements = _as_int(args.get("max_elements"), 256)
         count = _as_int(args.get("count"), max_elements)
         total = min(count, max_elements)
@@ -8439,14 +8260,16 @@ async def _dispatch_buffer(action: str, args: Dict[str, Any]) -> str:
                 fd = _as_dict(field_def)
                 name = str(fd.get("name", "field"))
                 ftype = str(fd.get("type", "u32")).lower()
-                fmt, size_bytes = type_map.get(ftype, ("<I", 4))
+                if ftype not in type_map:
+                    return _err(f"Unsupported structured field type: {ftype}", code="validation_error")
+                fmt, size_bytes = type_map[ftype]
                 field_offset = _as_int(fd.get("offset"), 0)
+                field_count = _as_int(fd.get("count"), 1)
+                if field_offset < 0 or field_count < 1 or field_offset + size_bytes * field_count > stride:
+                    return _err("Structured field exceeds stride", code="validation_error")
                 start = base + field_offset
-                end = start + size_bytes
-                if end > len(data):
-                    item[name] = None
-                    continue
-                item[name] = struct.unpack(fmt, data[start:end])[0]
+                values = [struct.unpack_from(fmt, data, start + j * size_bytes)[0] for j in range(field_count)]
+                item[name] = values[0] if field_count == 1 else values
             elements.append(item)
         return _ok(elements=elements)
 
@@ -8515,7 +8338,10 @@ async def _dispatch_mesh(action: str, args: Dict[str, Any]) -> str:
         event_id = _as_int(args["event_id"])
         snap = await _pipeline_service.snapshot_pipeline(session_id, event_id, _session_manager)
         return _ok(mesh_config={"event_id": event_id, "topology": snap.topology, "bindings": [b.model_dump(mode="json") for b in snap.bindings]})
-    if action in {"get_post_vs_data", "get_post_gs_data"}:
+    if action == "get_post_transform_data":
+        stage = str(args.get("stage", "")).lower()
+        if stage not in {"vs", "gs"}:
+            return _err("stage must be vs or gs", code="validation_error", category="validation")
         _require(args, "session_id")
         session_id = str(args["session_id"])
         controller = await _get_controller(session_id)
@@ -8524,12 +8350,12 @@ async def _dispatch_mesh(action: str, args: Dict[str, Any]) -> str:
             _as_int(args.get("event_id"), 0) if args.get("event_id") is not None else None,
         )
         rd = _get_rd()
-        stage = rd.MeshDataStage.VSOut if action == "get_post_vs_data" else rd.MeshDataStage.GSOut
+        rd_stage = rd.MeshDataStage.VSOut if stage == "vs" else rd.MeshDataStage.GSOut
         instance = _as_int(args.get("instance"), 0)
-        view_index = _as_int(args.get("view_index", args.get("view", 0)), 0)
+        view_index = _as_int(args.get("view_index", 0), 0)
         max_vertices = _as_int(args.get("max_vertices"), 0)
         try:
-            mesh = await _offload(controller.GetPostVSData, instance, view_index, stage)
+            mesh = await _offload(controller.GetPostVSData, instance, view_index, rd_stage)
         except Exception as exc:
             return _err(
                 f"Failed to fetch post-transform mesh data: {exc}",
@@ -8540,7 +8366,7 @@ async def _dispatch_mesh(action: str, args: Dict[str, Any]) -> str:
         vertex_resource_id = getattr(mesh, "vertexResourceId", None)
         if _is_null_resource_id(vertex_resource_id):
             mesh_format = _mesh_format_payload(mesh)
-            if action == "get_post_gs_data":
+            if stage == "gs":
                 if not hasattr(controller, "GetPipelineState"):
                     gs_shader_id = None
                 else:
@@ -8567,14 +8393,19 @@ async def _dispatch_mesh(action: str, args: Dict[str, Any]) -> str:
                     "session_id": session_id,
                     "resolved_event_id": int(event_id),
                     "stage": str(stage),
-                    "stage_name": "GS" if action == "get_post_gs_data" else "VS",
+                    "stage_name": "GS" if stage == "gs" else "VS",
                     "mesh_format": mesh_format,
                 },
             )
         vertex_offset = int(getattr(mesh, "vertexByteOffset", 0) or 0)
         vertex_size = int(getattr(mesh, "vertexByteSize", 0) or 0)
         vertex_stride = int(getattr(mesh, "vertexByteStride", 0) or 0)
-        raw = await _offload(controller.GetBufferData, vertex_resource_id, vertex_offset, vertex_size)
+        if vertex_stride <= 0 or vertex_size < 0:
+            return _err("Invalid post-transform vertex layout", code="mesh_post_transform_unavailable")
+        read_size = min(vertex_size, max_vertices * vertex_stride) if max_vertices > 0 and vertex_size > 0 else vertex_size
+        raw = await _offload(controller.GetBufferData, vertex_resource_id, vertex_offset, read_size)
+        if read_size > 0 and len(raw) != read_size:
+            return _err("Incomplete post-transform vertex readback", code="mesh_post_transform_failed")
         mesh_format = _mesh_format_payload(mesh)
         rows = _mesh_vertex_rows(raw, stride=vertex_stride, max_vertices=max_vertices)
         return _ok(
@@ -8582,31 +8413,17 @@ async def _dispatch_mesh(action: str, args: Dict[str, Any]) -> str:
                 "mesh_format": mesh_format,
                 "vertex_rows": rows,
                 "vertex_count": len(rows),
-                "truncated": bool(max_vertices > 0 and len(raw) // max(vertex_stride, 1) > len(rows)),
+                "truncated": bool(max_vertices > 0 and vertex_size // vertex_stride > len(rows)),
+                "stage": stage.upper(), "stage_bound": True, "view_index": view_index,
             },
             resolved_event_id=int(event_id),
         )
-    if action == "decode_vertex_data":
-        _require(args, "session_id", "vertex_buffer_id", "layout")
-        buffer_response = await _dispatch_buffer(
-            "get_structured_data",
-            {
-                "session_id": args["session_id"],
-                "buffer_id": args["vertex_buffer_id"],
-                "layout": args["layout"],
-                "offset": args.get("vertex_offset", 0),
-                "count": args.get("vertex_count", 128),
-                "max_elements": args.get("vertex_count", 128),
-            },
-        )
-        payload = json.loads(buffer_response)
-        if not payload.get("success"):
-            return buffer_response
-        return _ok(vertices=payload.get("elements", []))
     if action == "decode_index_data":
         _require(args, "session_id", "index_buffer_id")
         format_name = str(args.get("format", "u32")).lower()
-        fmt = "<I" if "32" in format_name else "<H"
+        if format_name not in {"u16", "u32"}:
+            return _err("Index format must be u16 or u32", code="validation_error")
+        fmt = "<I" if format_name == "u32" else "<H"
         size = 4 if fmt == "<I" else 2
         count = _as_int(args.get("index_count"), 128)
         data_resp = await _dispatch_buffer(
@@ -8631,18 +8448,6 @@ async def _dispatch_mesh(action: str, args: Dict[str, Any]) -> str:
                 break
             indices.append(struct.unpack(fmt, raw[i : i + size])[0])
         return _ok(indices=indices)
-    if action == "get_mesh_preview":
-        _require(args, "session_id", "event_id")
-        return await _dispatch_texture(
-            "render_overlay",
-            {
-                "session_id": args["session_id"],
-                "event_id": args["event_id"],
-                "overlay": "wireframe",
-                "output_path": args.get("output_path"),
-                "file_format": "png",
-            },
-        )
     return _err(f"Unsupported mesh action: {action}")
 
 
@@ -8651,91 +8456,65 @@ async def _dispatch_texture(action: str, args: Dict[str, Any]) -> str:
     session_id = str(args["session_id"])
     assert _render_service is not None
 
-    async def read_npz(
-        texture_id: Any,
-        subresource: Optional[Dict[str, Any]],
-        region: Optional[Dict[str, Any]],
-        *,
-        event_id_override: Optional[int] = None,
-    ) -> Tuple[Any, Dict[str, Any], Optional[str], int, str]:
-        requested_event = _as_int(event_id_override, 0) if event_id_override is not None else 0
-        if requested_event > 0:
-            event_id = await _ensure_event(session_id, requested_event)
-        else:
-            event_id = _active_event(session_id)
-            if event_id <= 0:
-                event_id = await _ensure_event(session_id, None)
-        rid = await _resolve_texture_id(session_id, texture_id, event_id=event_id)
-        artifact_ref, stats = await _render_service.readback_texture(
-            session_id=session_id,
-            event_id=event_id,
-            texture_id=rid,
-            session_manager=_session_manager,
-            artifact_store=_artifact_store,
-            subresource=subresource,
-            region=region,
-        )
-        return artifact_ref, stats, _artifact_path(artifact_ref), int(event_id), str(rid)
+    async def read_array(texture_id: Any, subresource: Dict[str, Any], *, event_id: Any = None, region: Any = None):
+        resolved_event = await _ensure_event(session_id, int(event_id) if event_id is not None else None)
+        rid = await _resolve_texture_id(session_id, texture_id, event_id=resolved_event)
+        read_kwargs = {"region": region} if region is not None else {}
+        arr, stats = await _render_service.read_texture_array(session_id, resolved_event, rid, _session_manager, subresource, **read_kwargs)
+        return arr, stats, int(resolved_event), str(rid)
 
-    if action in {"get_data", "get_subresource_data"}:
+    if action == "get_data":
+        import numpy as np
         _require(args, "texture_id")
         subresource = _as_dict(args.get("subresource"), default={})
-        if action == "get_subresource_data":
-            subresource = {
-                "mip": _as_int(args.get("mip"), subresource.get("mip", 0)),
-                "slice": _as_int(args.get("slice"), subresource.get("slice", 0)),
-                "sample": _as_int(args.get("sample"), subresource.get("sample", 0)),
-            }
-        artifact_ref, stats, artifact_path, resolved_event_id, resolved_texture_id = await read_npz(
-            args.get("texture_id"),
-            subresource,
-            None,
-            event_id_override=_as_int(args.get("event_id"), 0) if args.get("event_id") is not None else None,
-        )
-        if artifact_path is None:
-            return _err("Failed to store texture data artifact")
-        output_path = str(args.get("output_path") or "").strip()
-        saved_path = artifact_path
+        representation = str(args.get("representation", "numeric"))
+        if representation not in {"numeric", "raw"}:
+            return _err("Invalid texture representation", code="validation_error")
+        suffix = ".npz" if representation == "numeric" else ".bin"
+        output_path = str(args.get("output_path") or "")
+        if output_path and Path(output_path).suffix.lower() != suffix:
+            return _err(f"Texture output_path must use {suffix}", code="texture_output_path_extension_mismatch")
+        rid = await _resolve_resource_id(session_id, args["texture_id"])
+        controller = await _get_controller(session_id)
+        async def read_texture(event):
+            if representation == "numeric":
+                arr, stats = await _render_service.read_texture_array(session_id, event, rid, _session_manager, subresource)
+                output = io.BytesIO()
+                np.savez_compressed(output, pixels=arr)
+                return output.getvalue(), stats
+            textures = await _offload(controller.GetTextures)
+            descriptor = next((item for item in textures if item.resourceId == rid), None)
+            if descriptor is None:
+                raise ValueError("Texture not found")
+            sub = _get_rd().Subresource()
+            sub.mip, sub.slice, sub.sample = (int(subresource.get(key, 0)) for key in ("mip", "slice", "sample"))
+            if (sub.mip < 0 or sub.mip >= descriptor.mips or sub.slice < 0
+                    or sub.slice >= max(descriptor.arraysize, max(1, descriptor.depth >> sub.mip))
+                    or sub.sample < 0 or sub.sample >= max(1, descriptor.msSamp)):
+                raise ValueError("Invalid texture subresource")
+            data = bytes(await _offload(controller.GetTextureData, rid, sub))
+            if not data:
+                raise RuntimeError("Texture readback returned no bytes")
+            return data, {"format": str(descriptor.format.Name()), "width": max(1, descriptor.width >> sub.mip),
+                          "height": max(1, descriptor.height >> sub.mip), "byte_size": len(data)}
+        (data, stats), metadata = await _read_at_capture_state(session_id, rid, args, read_texture)
+        result = {"texture_id": str(rid), "stats": stats, "byte_size": len(data), **metadata,
+                  "content_kind": "texture_readback_container" if representation == "numeric" else "texture_raw_bytes",
+                  "container_format": "npz" if representation == "numeric" else "raw",
+                  "target_metadata": {"texture_id": str(rid), "subresource": subresource, "region": None}}
+        inline = _as_bool(args.get("as_base64"), False)
+        if inline:
+            if len(data) > 1048576:
+                return _err("Inline texture limit is 1 MiB; select a smaller mip or export", code="output_budget_exceeded")
+            result["base64"] = base64.b64encode(data).decode("ascii")
         if output_path:
             out = Path(output_path)
-            if out.suffix.lower() != ".npz":
-                return _err(
-                    "rd.texture.get_data writes numeric readback containers; output_path must use the .npz extension",
-                    code="texture_output_path_extension_mismatch",
-                    category="validation",
-                    details={
-                        "output_path": output_path,
-                        "expected_extension": ".npz",
-                        "container_format": "npz",
-                    },
-                )
             out.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(artifact_path, out)
-            saved_path = str(out)
-        truth_meta = await _event_truth_metadata(session_id, int(resolved_event_id))
-        result: Dict[str, Any] = {
-            "artifact_path": artifact_path,
-            "saved_path": saved_path,
-            "content_kind": "texture_readback_container",
-            "container_format": "npz",
-            "stats": stats,
-            "byte_size": int(getattr(artifact_ref, "bytes", 0)),
-            "resolved_event_id": int(resolved_event_id),
-            "texture_id": str(resolved_texture_id),
-            "target_metadata": {
-                "texture_id": str(resolved_texture_id),
-                "subresource": dict(subresource or {}),
-                "region": None,
-            },
-            "binding_truth_level": truth_meta.get("binding_truth_level"),
-            "evidence_truth_level": truth_meta.get("evidence_truth_level"),
-            "summary_degraded_reasons": list(truth_meta.get("summary_degraded_reasons") or []),
-        }
-        if _as_bool(args.get("as_base64"), False):
-            import base64
-
-            payload = Path(artifact_path).read_bytes()
-            result["base64"] = base64.b64encode(payload).decode("ascii")
+            out.write_bytes(data)
+            result.update(artifact_path=str(out), saved_path=str(out))
+        elif not inline:
+            artifact = await _artifact_store.store(data, mime="application/x-npz" if representation == "numeric" else "application/octet-stream", suffix=suffix)
+            result.update(artifact_path=_artifact_path(artifact), saved_path=_artifact_path(artifact))
         return _ok(**result)
 
     if action == "get_pixel_value":
@@ -8752,6 +8531,8 @@ async def _dispatch_texture(action: str, args: Dict[str, Any]) -> str:
             x=_as_int(args["x"]),
             y=_as_int(args["y"]),
             session_manager=_session_manager,
+            subresource={key: _as_int(args.get(key), 0) for key in ("mip", "slice", "sample")},
+            value_type=str(args.get("as_type", "float")),
         )
         truth_meta = await _event_truth_metadata(session_id, int(event_id))
         return _ok(
@@ -8777,12 +8558,21 @@ async def _dispatch_texture(action: str, args: Dict[str, Any]) -> str:
             "slice": _as_int(args.get("slice"), 0),
             "sample": _as_int(args.get("sample"), 0),
         }
-        artifact_ref, stats, artifact_path, resolved_event_id, resolved_texture_id = await read_npz(
-            args["texture_id"],
-            subresource,
-            region,
-            event_id_override=_as_int(args.get("event_id"), 0) if args.get("event_id") is not None else None,
-        )
+        import numpy as np
+        stride = _as_int(args.get("stride"), 1)
+        as_type = str(args.get("as_type", "float"))
+        if stride < 1 or as_type not in {"float", "uint", "int"}:
+            return _err("Invalid region stride or value type", code="validation_error")
+        arr, stats, resolved_event_id, resolved_texture_id = await read_array(args["texture_id"], subresource, region=region, event_id=args.get("event_id"))
+        arr = arr[::stride, ::stride]
+        if as_type != "float" and not np.isfinite(arr).all():
+            return _err("Cannot convert non-finite region to integers", code="texture_nonfinite_data")
+        arr = arr.astype({"float": np.float64, "uint": np.uint32, "int": np.int32}[as_type])
+        stats.update(shape=list(arr.shape), dtype=str(arr.dtype), stride=stride)
+        container = io.BytesIO()
+        np.savez_compressed(container, pixels=arr)
+        artifact_ref = await _artifact_store.store(container.getvalue(), mime="application/x-npz", suffix=".npz")
+        artifact_path = _artifact_path(artifact_ref)
         truth_meta = await _event_truth_metadata(session_id, int(resolved_event_id))
         return _ok(
             values_path=artifact_path,
@@ -8799,29 +8589,6 @@ async def _dispatch_texture(action: str, args: Dict[str, Any]) -> str:
             summary_degraded_reasons=list(truth_meta.get("summary_degraded_reasons") or []),
         )
 
-    if action == "get_min_max":
-        _require(args, "texture_id")
-        event_id = await _ensure_event(
-            session_id,
-            _as_int(args.get("event_id"), 0) if args.get("event_id") is not None else None,
-        )
-        rid = await _resolve_texture_id(session_id, args["texture_id"], event_id=event_id)
-        stats = await _render_service.get_texture_stats(
-            session_id=session_id,
-            event_id=event_id,
-            texture_id=rid,
-            session_manager=_session_manager,
-        )
-        truth_meta = await _event_truth_metadata(session_id, int(event_id))
-        return _ok(
-            min_max=stats,
-            resolved_event_id=int(event_id),
-            texture_id=str(rid),
-            target_metadata={"texture_id": str(rid)},
-            binding_truth_level=truth_meta.get("binding_truth_level"),
-            evidence_truth_level="structured_readback",
-            summary_degraded_reasons=list(truth_meta.get("summary_degraded_reasons") or []),
-        )
 
     if action == "get_histogram":
         _require(args, "texture_id")
@@ -8829,42 +8596,45 @@ async def _dispatch_texture(action: str, args: Dict[str, Any]) -> str:
             import numpy as np
         except Exception as exc:
             return _err(f"numpy unavailable: {exc}")
-        subresource = {"mip": _as_int(args.get("mip"), 0), "slice": _as_int(args.get("slice"), 0), "sample": 0}
-        artifact_ref, stats, artifact_path, resolved_event_id, _ = await read_npz(
-            args["texture_id"],
-            subresource,
-            None,
-            event_id_override=_as_int(args.get("event_id"), 0) if args.get("event_id") is not None else None,
-        )
-        if artifact_path is None:
-            return _err("Failed to generate histogram input")
-        with np.load(artifact_path) as payload:
-            arr = payload["pixels"]
-        if arr.ndim < 3:
-            return _ok(histogram={})
+        subresource = {"mip": _as_int(args.get("mip"), 0), "slice": _as_int(args.get("slice"), 0), "sample": _as_int(args.get("sample"), 0)}
+        arr, stats, resolved_event_id, _ = await read_array(args["texture_id"], subresource, event_id=args.get("event_id"))
+        if arr.ndim != 3:
+            return _err("Texture format cannot be decoded into channels", code="texture_layout_unsupported")
         channels = str(args.get("channels", "r")).lower()
         bins = _as_int(args.get("bins"), 256)
         rng = _as_dict(args.get("range"), default={})
         out: Dict[str, Any] = {}
         mapping = {"r": 0, "g": 1, "b": 2, "a": 3}
         for c in channels:
-            if c not in mapping:
-                continue
+            if c not in mapping or mapping[c] >= arr.shape[2]:
+                return _err("Invalid histogram channel", code="validation_error")
             channel_data = arr[..., mapping[c]].astype("float64")
+            if not np.isfinite(channel_data).all():
+                return _err("Histogram contains non-finite samples", code="texture_nonfinite_data")
+            if not channel_data.size or bins <= 0:
+                return _err("Histogram requires nonempty samples and positive bins", code="validation_error")
             low = _as_float(rng.get("min"), float(channel_data.min()))
             high = _as_float(rng.get("max"), float(channel_data.max()))
+            if not np.isfinite(low) or not np.isfinite(high) or low > high:
+                return _err("Invalid histogram range", code="validation_error")
             hist, edges = np.histogram(channel_data, bins=bins, range=(low, high))
             out[c] = {"bins": hist.tolist(), "edges": edges.tolist()}
         return _ok(histogram=out, resolved_event_id=int(resolved_event_id))
 
     if action == "get_pixel_history":
-        _require(args, "texture_id", "x", "y")
+        _require(args, "x", "y")
+        if args.get("texture_id") is not None and args.get("target") is not None:
+            return _err("texture_id and target are mutually exclusive", code="validation_error")
+        target = _parse_target_like(args.get("target"))
+        if set(target) - {"texture_id", "rt_index"} or (target.get("texture_id") is not None and target.get("rt_index") is not None):
+            return _err("Target requires only one of texture_id or rt_index", code="validation_error")
         controller = await _get_controller(session_id)
-        event_id = await _ensure_event(
-            session_id,
-            _as_int(args.get("event_id"), 0) if args.get("event_id") is not None else None,
-        )
-        rid = await _resolve_texture_id(session_id, args["texture_id"], event_id=event_id)
+        event_id = await _ensure_event(session_id, _as_int(args["event_id"]) if args.get("event_id") is not None else None)
+        if args.get("texture_id") is not None:
+            rid = await _resolve_texture_id(session_id, args["texture_id"], event_id=event_id)
+        else:
+            rid, _, _, _ = await _resolve_visual_target_for_event(
+                session_id, event_id, target=target, allow_framebuffer_fallback=False)
         rd = _get_rd()
         sub = rd.Subresource()
         sub.mip = _as_int(args.get("mip"), 0)
@@ -8982,31 +8752,6 @@ async def _dispatch_texture(action: str, args: Dict[str, Any]) -> str:
         payload["summary_degraded_reasons"] = list(truth_meta.get("summary_degraded_reasons") or [])
         return _ok(**payload)
 
-    if action == "save_mip_chain":
-        _require(args, "texture_id", "output_dir")
-        output_dir = Path(str(args["output_dir"]))
-        output_dir.mkdir(parents=True, exist_ok=True)
-        controller = await _get_controller(session_id)
-        rid = await _resolve_texture_id(session_id, args["texture_id"], event_id=_active_event(session_id))
-        textures = await _offload(controller.GetTextures)
-        desc = next((t for t in textures if str(getattr(t, "resourceId", "")) in _resource_keys(rid)), None)
-        mips = int(getattr(desc, "mips", 1)) if desc is not None else 1
-        saved = []
-        for mip in range(max(1, mips)):
-            response = await _dispatch_texture(
-                "save_to_file",
-                {
-                    "session_id": session_id,
-                    "texture_id": args["texture_id"],
-                    "subresource": {"mip": mip, "slice": _as_int(args.get("slice"), 0), "sample": 0},
-                    "output_path": str(output_dir / f"mip_{mip:02d}.{str(args.get('file_format', 'png')).lower()}"),
-                    "file_format": args.get("file_format", "png"),
-                },
-            )
-            payload = json.loads(response)
-            if payload.get("success"):
-                saved.append(payload.get("saved_path"))
-        return _ok(saved_paths=saved)
 
     if action in {"diff", "compute_stats"}:
         try:
@@ -9017,30 +8762,47 @@ async def _dispatch_texture(action: str, args: Dict[str, Any]) -> str:
             _require(args, "tex_a", "tex_b")
             tex_a = _as_dict(args["tex_a"])
             tex_b = _as_dict(args["tex_b"])
-            art_a, _, path_a, _, _ = await read_npz(tex_a.get("texture_id"), _as_dict(tex_a.get("subresource"), default={}), None)
-            art_b, _, path_b, _, _ = await read_npz(tex_b.get("texture_id"), _as_dict(tex_b.get("subresource"), default={}), None)
-            if not path_a or not path_b:
-                return _err("Could not read textures for diff")
-            with np.load(path_a) as p1, np.load(path_b) as p2:
-                arr_a = p1["pixels"].astype("float32")
-                arr_b = p2["pixels"].astype("float32")
-            min_h = min(arr_a.shape[0], arr_b.shape[0])
-            min_w = min(arr_a.shape[1], arr_b.shape[1])
-            arr_a = arr_a[:min_h, :min_w]
-            arr_b = arr_b[:min_h, :min_w]
+            arr_a, _, event_a, _ = await read_array(tex_a.get("texture_id"), _as_dict(tex_a.get("subresource"), default={}), event_id=tex_a.get("event_id", args.get("event_id")))
+            arr_b, _, event_b, _ = await read_array(tex_b.get("texture_id"), _as_dict(tex_b.get("subresource"), default={}), event_id=tex_b.get("event_id", args.get("event_id")))
+            if arr_a.ndim != 3 or arr_b.ndim != 3 or not arr_a.size or not arr_b.size:
+                return _err("Texture channel layout unavailable", code="texture_layout_unsupported")
+            if not np.isfinite(arr_a).all() or not np.isfinite(arr_b).all():
+                return _err("Texture diff contains non-finite samples", code="texture_nonfinite_data")
+            if arr_a.shape != arr_b.shape:
+                return _err("Texture shapes differ", code="texture_shape_mismatch")
+            arr_a = arr_a.astype("float64")
+            arr_b = arr_b.astype("float64")
             diff = arr_a - arr_b
             mse = float((diff ** 2).mean()) if diff.size else 0.0
             max_abs = float(np.abs(diff).max()) if diff.size else 0.0
-            psnr = float(20 * np.log10(1.0 / np.sqrt(mse))) if mse > 0 else float("inf")
-            metrics = {"mse": mse, "max_abs": max_abs, "psnr": psnr}
-            return _ok(diff=metrics)
+            psnr = float(20 * np.log10(1.0 / np.sqrt(mse))) if mse > 0 else None
+            metrics = {"mse": mse, "max_abs": max_abs, "psnr": psnr, "identical": mse == 0,
+                       "psnr_peak": 1.0, "psnr_status": "infinite" if mse == 0 else "finite"}
+            requested_metrics = args.get("metric", ["mse", "max_abs", "psnr"])
+            if not isinstance(requested_metrics, list) or any(m not in {"mse", "max_abs", "psnr"} for m in requested_metrics):
+                return _err("Invalid texture diff metric", code="validation_error")
+            return _ok(diff={key: value for key, value in metrics.items() if key in requested_metrics or key in {"identical", "psnr_peak", "psnr_status"}}, event_a=int(event_a), event_b=int(event_b))
         _require(args, "texture_id")
-        _, stats, _, resolved_event_id, resolved_texture_id = await read_npz(
-            args["texture_id"],
-            {"mip": _as_int(args.get("mip"), 0), "slice": _as_int(args.get("slice"), 0), "sample": _as_int(args.get("sample"), 0)},
-            None,
-            event_id_override=_as_int(args.get("event_id"), 0) if args.get("event_id") is not None else None,
-        )
+        arr, stats, resolved_event_id, resolved_texture_id = await read_array(
+            args.get("texture_id"), {"mip": _as_int(args.get("mip"), 0), "slice": _as_int(args.get("slice"), 0), "sample": _as_int(args.get("sample"), 0)}, event_id=args.get("event_id"))
+        if arr.ndim != 3 or not arr.size:
+            return _err("Texture channel layout unavailable", code="texture_layout_unsupported")
+        stride = _as_int(args.get("stride"), 1)
+        if stride < 1:
+            return _err("Statistics stride must be positive", code="validation_error")
+        arr = arr[::stride, ::stride]
+        finite_samples = arr[np.isfinite(arr)]
+        stats.update(shape=list(arr.shape), stride=stride, nan_count=int(np.isnan(arr).sum()), inf_count=int(np.isinf(arr).sum()),
+                     min=float(finite_samples.min()) if finite_samples.size else None,
+                     max=float(finite_samples.max()) if finite_samples.size else None,
+                     mean=float(finite_samples.mean()) if finite_samples.size else None)
+        stats["channels"] = {}
+        for i, name in enumerate("rgba"[:arr.shape[2]]):
+            channel = arr[..., i]
+            finite = channel[np.isfinite(channel)]
+            stats["channels"][name] = {"min": float(finite.min()) if finite.size else None,
+                                       "max": float(finite.max()) if finite.size else None,
+                                       "nan_count": int(np.isnan(channel).sum()), "inf_count": int(np.isinf(channel).sum())}
         truth_meta = await _event_truth_metadata(session_id, int(resolved_event_id))
         return _ok(
             stats={**dict(stats or {}), "event_id": int(resolved_event_id)},
@@ -9127,22 +8889,10 @@ def _shader_binary_suffix(container: str) -> str:
 def _normalize_shader_source_input(args: Dict[str, Any]) -> Dict[str, Any]:
     source_text = str(args.get("source_text") or "")
     source_path = str(args.get("source_path") or "").strip()
-    deprecated_aliases: List[str] = []
+    if args.get("source") is not None:
+        raise ValueError("Unknown shader source parameter; use source_text or source_path")
     if source_text and source_path:
         raise ValueError("Use only one shader source input: source_text or source_path")
-    if not source_text and not source_path and args.get("source") is not None:
-        deprecated_aliases.append("source")
-        legacy_source = str(args.get("source") or "")
-        is_existing_file = False
-        if legacy_source.strip():
-            try:
-                is_existing_file = Path(legacy_source).expanduser().is_file()
-            except (OSError, ValueError):
-                is_existing_file = False
-        if is_existing_file:
-            source_path = legacy_source
-        else:
-            source_text = legacy_source
     include_dirs = [str(item).strip() for item in _as_list(args.get("include_dirs"), default=[]) if str(item).strip()]
     if source_path:
         path = Path(source_path).expanduser()
@@ -9162,13 +8912,12 @@ def _normalize_shader_source_input(args: Dict[str, Any]) -> Dict[str, Any]:
         if item and item not in normalized_include_dirs:
             normalized_include_dirs.append(item)
     if not source:
-        raise ValueError("Missing required shader source input: source_text, source_path, or source")
+        raise ValueError("Missing required shader source input: source_text or source_path")
     return {
         "source": source,
         "source_kind": source_kind,
         "resolved_source_path": resolved_path,
         "include_dirs": normalized_include_dirs,
-        "deprecated_alias_used": deprecated_aliases,
     }
 
 
@@ -9810,7 +9559,6 @@ async def _dispatch_shader(action: str, args: Dict[str, Any]) -> str:
             "source_kind": str(source_payload.get("source_kind") or ""),
             "resolved_source_path": str(source_payload.get("resolved_source_path") or ""),
             "include_dirs": list(source_payload.get("include_dirs") or []),
-            "deprecated_alias_used": list(source_payload.get("deprecated_alias_used") or []),
             "entry": entry,
             "target": str(args.get("target") or ""),
         }
@@ -10558,7 +10306,7 @@ async def _dispatch_shader(action: str, args: Dict[str, Any]) -> str:
         source_text = ""
         has_source_input = any(
             args.get(name) not in (None, "")
-            for name in ("source_text", "source_path", "source")
+            for name in ("source_text", "source_path")
         )
         if has_source_input:
             try:
@@ -11137,28 +10885,7 @@ async def _dispatch_debug(action: str, args: Dict[str, Any]) -> str:
     _require(args, "session_id")
     session_id = str(args["session_id"])
 
-    if action == "pixel_history":
-        target = _parse_target_like(args.get("target"))
-        texture_id = target.get("texture_id") or target.get("textureId")
-        if texture_id is None:
-            texture_id = await _resolve_texture_id(session_id, None, event_id=_active_event(session_id))
-        return await _dispatch_texture(
-            "get_pixel_history",
-            {
-                "session_id": session_id,
-                "texture_id": str(texture_id),
-                "x": _as_int(args.get("x"), 0),
-                "y": _as_int(args.get("y"), 0),
-                "sample": _as_int(args.get("sample"), 0),
-            },
-        )
 
-    if action == "explain_test_failure":
-        _require(args, "history_item")
-        item = _as_dict(args["history_item"])
-        reason = str(item.get("flags", "unknown"))
-        explanation = f"Pixel test outcome is flagged as '{reason}'. Review depth/stencil/blend state around event {item.get('event_id')}."
-        return _ok(explanation=explanation, key_facts={"event_id": item.get("event_id"), "flags": reason})
 
     _require(args, "shader_debug_id")
     debug_id = str(args["shader_debug_id"])
@@ -11297,6 +11024,23 @@ async def _dispatch_debug(action: str, args: Dict[str, Any]) -> str:
 async def _dispatch_perf(action: str, args: Dict[str, Any]) -> str:
     _require(args, "session_id")
     session_id = str(args["session_id"])
+    if action == "get_frame_timing":
+        from rdx.core.perf_service import measure_frame_gpu
+        from rdx.core.replay_read import preserving_event, ReplayRestoreError
+        controller = await _get_controller(session_id)
+        original_event = _active_event(session_id)
+        async def measure():
+            return await measure_frame_gpu(controller, _get_rd(), samples=int(args.get("samples", 3)),
+                                           warmup=int(args.get("warmup", 1)))
+        try:
+            timing = await preserving_event(controller, original_event, measure)
+        except ReplayRestoreError as exc:
+            _update_context_session_record(session_id, recovery_status="requires_restart", last_error=str(exc))
+            raise CoreError(code="replay_restore_failed", message=str(exc), category="runtime") from exc
+        return _ok(session_id=session_id, capture_file_id=_runtime.replays[session_id].capture_file_id,
+                   frame_timing=timing, restored_event_id=original_event,
+                   replay_state_restored=True,
+                   replacement_ids=sorted(str(item["replacement_id"]) for item in _runtime.shader_replacements.get(session_id, [])))
     if action == "enumerate_counters":
         counters = await _perf_service.enumerate_counters(session_id, _session_manager)
         return _ok(counters=counters)
@@ -11331,17 +11075,27 @@ async def _dispatch_perf(action: str, args: Dict[str, Any]) -> str:
             all_counters = await _perf_service.enumerate_counters(session_id, _session_manager)
             counter_ids = [int(c["counter_id"]) for c in all_counters]
         perf = await _perf_service.sample_counters(session_id, (lo, hi), counter_ids, _session_manager)
+        stride = _as_int(args.get("stride"), 1)
+        if stride < 1:
+            return _err("Counter stride must be positive", code="validation_error")
+        if stride != 1:
+            return _err("Counter sampling currently supports stride=1 only", code="counter_stride_unsupported")
         return _ok(perf=perf.model_dump(mode="json"))
     if action == "get_event_durations":
-        top = await _perf_service.detect_hotspots(session_id, _session_manager, top_k=_as_int(args.get("max_events"), 200))
+        max_events = _as_int(args.get("max_events"), 200)
+        if max_events < 1:
+            return _err("max_events must be positive", code="validation_error")
+        event_range = _as_dict(args.get("event_range"), default={})
+        if event_range:
+            lo = _as_int(event_range.get("start_event_id"), 0)
+            hi = _as_int(event_range.get("end_event_id"), 0)
+            if lo < 0 or hi < lo:
+                return _err("Invalid duration event range", code="validation_error")
+            top = await _perf_service.detect_hotspots(session_id, _session_manager, top_k=0)
+            top = [item for item in top if lo <= int(item["event_id"]) <= hi][:max_events]
+        else:
+            top = await _perf_service.detect_hotspots(session_id, _session_manager, top_k=max_events)
         return _ok(event_durations=top)
-    if action == "get_frame_timing":
-        hotspots = await _perf_service.detect_hotspots(session_id, _session_manager, top_k=20)
-        total = sum(float(x.get("duration_us", 0.0)) for x in hotspots)
-        return _ok(frame_timing={"gpu_duration_us_sum_top20": total, "hotspots": hotspots})
-    if action == "get_pipeline_statistics":
-        stats = {"event_id": _as_int(args.get("event_id"), _active_event(session_id)), "draws": 0, "dispatches": 0}
-        return _ok(pipeline_statistics=stats)
     return _err(f"Unsupported perf action: {action}")
 
 
@@ -11401,11 +11155,7 @@ async def _dispatch_export(action: str, args: Dict[str, Any]) -> str:
             name_info=name_info,
             for_screenshot=True,
         )
-        deprecated_alias_used: List[str] = []
         requested_format_value = args.get("file_format")
-        if requested_format_value is None and args.get("format") is not None:
-            requested_format_value = args.get("format")
-            deprecated_alias_used.append("format")
         if requested_format_value is None:
             requested_format_value = "png"
         requested_formats = _parse_requested_formats(requested_format_value)
@@ -11529,7 +11279,6 @@ async def _dispatch_export(action: str, args: Dict[str, Any]) -> str:
             selected_formats=valid_formats,
             requested_formats=requested_formats,
             recommended_formats=recommended_formats,
-            deprecated_alias_used=deprecated_alias_used,
             name_info=name_info,
             texture_format=_texture_format_name(texture_desc),
             chosen_output_slot=chosen_output_slot,
@@ -11550,58 +11299,6 @@ async def _dispatch_export(action: str, args: Dict[str, Any]) -> str:
         return await _export_buffer_file({"session_id": session_id, **dict(args or {})})
     if action == "mesh":
         return await _export_mesh_file({"session_id": session_id, **dict(args or {})})
-    if action == "pipeline_state_json":
-        _require(args, "output_path")
-        state_resp = await _dispatch_pipeline("get_state", {"session_id": session_id, "detail_level": args.get("detail_level", "full")})
-        payload = json.loads(state_resp)
-        if not payload.get("success"):
-            return state_resp
-        out = Path(str(args["output_path"]))
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(payload.get("pipeline_state", {}), ensure_ascii=False, indent=2), encoding="utf-8")
-        return _ok(saved_path=str(out))
-    if action == "event_tree_json":
-        _require(args, "output_path")
-        event_resp = await _dispatch_event("get_action_tree", {"session_id": session_id, "max_depth": args.get("max_depth")})
-        payload = json.loads(event_resp)
-        if not payload.get("success"):
-            return event_resp
-        out = Path(str(args["output_path"]))
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(payload.get("root", {}), ensure_ascii=False, indent=2), encoding="utf-8")
-        return _ok(saved_path=str(out))
-    if action == "resource_list_csv":
-        _require(args, "output_path")
-        resources_resp = await _dispatch_resource("list_all", {"session_id": session_id})
-        payload = json.loads(resources_resp)
-        if not payload.get("success"):
-            return resources_resp
-        rows = payload.get("resources", [])
-        out = Path(str(args["output_path"]))
-        out.parent.mkdir(parents=True, exist_ok=True)
-        with out.open("w", encoding="utf-8", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=sorted({k for row in rows for k in row.keys()}))
-            writer.writeheader()
-            writer.writerows(rows)
-        return _ok(saved_path=str(out))
-    if action == "pixel_history_json":
-        _require(args, "output_path")
-        debug_resp = await _dispatch_debug(
-            "pixel_history",
-            {
-                "session_id": session_id,
-                "x": args.get("x"),
-                "y": args.get("y"),
-                "target": args.get("target"),
-            },
-        )
-        payload = json.loads(debug_resp)
-        if not payload.get("success"):
-            return debug_resp
-        out = Path(str(args["output_path"]))
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(payload.get("history", []), ensure_ascii=False, indent=2), encoding="utf-8")
-        return _ok(saved_path=str(out))
     if action == "shader_bundle":
         _require(args, "event_id", "output_dir")
         resolved_event_id = await _ensure_event(session_id, _as_int(args.get("event_id"), 0))
@@ -11694,47 +11391,20 @@ async def _dispatch_export(action: str, args: Dict[str, Any]) -> str:
             file_path = output_dir / f"cbuffer_{stage}.json"
             file_path.write_text(json.dumps(buffers, ensure_ascii=False, indent=2), encoding="utf-8")
             dumped.append(str(file_path))
+        if failures and not dumped:
+            return _err("All constant buffer exports failed", code="cbuffer_export_failed", details={"failures": failures})
         return _ok(dumped_paths=dumped, saved_files=dumped, failures=failures, partial=bool(failures), stages=stages, slots=slots)
-    if action == "repro_bundle_zip":
-        _require(args, "output_path")
-        output_path = Path(str(args["output_path"]))
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as zf:
-            zf.writestr("bundle/manifest.json", json.dumps({"session_id": session_id, "created_at": _now_ms()}, ensure_ascii=False, indent=2))
-        return _ok(saved_path=str(output_path))
-    if action == "markdown_report":
-        _require(args, "output_path")
-        summary_resp = await _dispatch_macro("summarize_frame", {"session_id": session_id})
-        payload = json.loads(summary_resp)
-        if not payload.get("success"):
-            return summary_resp
-        report = textwrap.dedent(
-            f"""\
-            # RenderDoc CLI Report
-            - Session: `{session_id}`
-            - Created: `{datetime.now(timezone.utc).isoformat()}`
-
-            ## Frame Summary
-            ```json
-            {json.dumps(payload.get("summary", {}), ensure_ascii=False, indent=2)}
-            ```
-            """,
-        )
-        out = Path(str(args["output_path"]))
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(report, encoding="utf-8")
-        return _ok(saved_path=str(out))
     return _err(f"Unsupported export action: {action}")
 
 
 async def _dispatch_diag(action: str, args: Dict[str, Any]) -> str:
     _require(args, "session_id")
     session_id = str(args["session_id"])
-    state_resp = await _dispatch_pipeline("get_state_summary", {"session_id": session_id})
+    state_resp = await _dispatch_pipeline("get_state", {"session_id": session_id})
     state_payload = json.loads(state_resp)
     if not state_payload.get("success"):
         return state_resp
-    summary = state_payload.get("summary", {})
+    summary = state_payload.get("pipeline_state", {})
     issues: List[Dict[str, Any]] = []
 
     if action == "scan_common_issues":
@@ -11745,42 +11415,13 @@ async def _dispatch_diag(action: str, args: Dict[str, Any]) -> str:
             issues.append({"severity": "warn", "check": "shaders", "message": "No shader is bound at active event."})
         if not summary.get("topology"):
             issues.append({"severity": "warn", "check": "topology", "message": "Primitive topology is empty."})
+        severity = str(args.get("severity_min", "info"))
+        levels = {"info": 0, "warn": 1, "warning": 1, "error": 2}
+        if severity not in levels:
+            return _err("Unknown severity_min", code="validation_error")
+        issues = [issue for issue in issues if levels[issue["severity"]] >= levels[severity]]
         return _ok(issues=issues, suggestions=["Check active event", "Verify drawcall context"] if _as_bool(args.get("include_suggestions"), True) else [])
 
-    if action == "check_render_targets":
-        return _ok(report={"render_target_count": len(summary.get("render_targets", [])), "issues": issues})
-    if action == "check_depth_stencil":
-        depth_resp = await _dispatch_pipeline("get_depth_stencil_state", {"session_id": session_id})
-        payload = json.loads(depth_resp)
-        return _ok(report={"depth_stencil": payload.get("depth_stencil", {}), "issues": issues})
-    if action == "check_viewport_scissor":
-        vs_resp = await _dispatch_pipeline("get_viewports_scissors", {"session_id": session_id})
-        payload = json.loads(vs_resp)
-        return _ok(report={"viewports": payload.get("viewports", []), "scissors": payload.get("scissors", []), "issues": issues})
-    if action == "check_culling":
-        raster_resp = await _dispatch_pipeline("get_rasterizer_state", {"session_id": session_id})
-        payload = json.loads(raster_resp)
-        return _ok(report={"rasterizer": payload.get("rasterizer", {}), "issues": issues})
-    if action == "check_blend":
-        blend_resp = await _dispatch_pipeline("get_blend_state", {"session_id": session_id})
-        payload = json.loads(blend_resp)
-        return _ok(report={"blend": payload.get("blend", {}), "issues": issues})
-    if action == "check_srgb":
-        rts = summary.get("render_targets", [])
-        srgb_count = sum(1 for rt in rts if str(rt.get("format", "")).lower().find("srgb") >= 0)
-        return _ok(report={"srgb_target_count": srgb_count, "issues": issues})
-    if action == "check_resource_bindings":
-        bind_resp = await _dispatch_pipeline("get_resource_bindings", {"session_id": session_id})
-        payload = json.loads(bind_resp)
-        return _ok(report={"binding_count": len(payload.get("bindings", [])), "issues": issues})
-    if action == "check_constant_buffers":
-        cb_resp = await _dispatch_pipeline("get_constant_buffers", {"session_id": session_id, "include_contents": _as_bool(args.get("decode_values"), True)})
-        payload = json.loads(cb_resp)
-        return _ok(report={"constant_buffers": payload.get("constant_buffers", []), "issues": issues})
-    if action == "check_d3d12_resource_states":
-        return _ok(report={"supported": False, "issues": [{"severity": "info", "message": "Detailed D3D12 state tracking is unavailable in this backend."}]})
-    if action == "check_vk_dynamic_state":
-        return _ok(report={"supported": False, "issues": [{"severity": "info", "message": "Detailed Vulkan dynamic state tracking is unavailable in this backend."}]})
 
     return _err(f"Unsupported diag action: {action}")
 
@@ -11788,164 +11429,6 @@ async def _dispatch_diag(action: str, args: Dict[str, Any]) -> str:
 async def _dispatch_macro(action: str, args: Dict[str, Any]) -> str:
     _require(args, "session_id")
     session_id = str(args["session_id"])
-    snapshot = _context_snapshot()
-
-    def _resolve_macro_pixel() -> Tuple[int, int, Any]:
-        x_value = args.get("x")
-        y_value = args.get("y")
-        target_value = args.get("target")
-        focus_pixel = snapshot.get("focus", {}).get("pixel")
-        if isinstance(focus_pixel, dict):
-            if x_value is None:
-                x_value = focus_pixel.get("x")
-            if y_value is None:
-                y_value = focus_pixel.get("y")
-            if target_value is None and isinstance(focus_pixel.get("target"), dict):
-                target_value = dict(focus_pixel.get("target") or {})
-        if x_value is None or y_value is None:
-            raise ValueError("Missing required parameter(s): x, y")
-        return int(x_value), int(y_value), target_value
-
-    if action == "summarize_frame":
-        event_resp = await _dispatch_event("get_actions", {"session_id": session_id, "include_markers": True, "include_drawcalls": True})
-        pipeline_resp = await _dispatch_pipeline("get_state_summary", {"session_id": session_id})
-        event_payload = json.loads(event_resp)
-        pipeline_payload = json.loads(pipeline_resp)
-        if not event_payload.get("success"):
-            return event_resp
-        if not pipeline_payload.get("success"):
-            return pipeline_resp
-        actions = event_payload.get("actions", [])
-        flat = []
-
-        def walk(nodes: List[Dict[str, Any]]) -> None:
-            for node in nodes:
-                flat.append(node)
-                walk(node.get("children", []))
-
-        walk(actions)
-        summary = {
-            "event_count": len(flat),
-            "draw_count": sum(1 for n in flat if n.get("flags", {}).get("is_draw")),
-            "marker_count": sum(1 for n in flat if n.get("flags", {}).get("is_marker")),
-            "pipeline": pipeline_payload.get("summary", {}),
-        }
-        return _ok(summary=summary)
-
-    if action == "find_pass_by_marker":
-        _require(args, "name_regex")
-        regex_text = str(args["name_regex"])
-        flags = re.IGNORECASE if _as_bool(args.get("ignore_case"), False) else 0
-        try:
-            pattern = re.compile(regex_text, flags)
-        except re.error as exc:
-            return _err(f"Invalid regex: {exc}")
-        max_results = _as_int(args.get("max_results"), 20)
-        event_resp = await _dispatch_event(
-            "get_actions",
-            {"session_id": session_id, "include_markers": True, "include_drawcalls": True},
-        )
-        payload = json.loads(event_resp)
-        if not payload.get("success"):
-            return event_resp
-        roots = payload.get("actions", [])
-        matches: List[Dict[str, Any]] = []
-
-        def walk(nodes: Sequence[Any], path_stack: List[str]) -> None:
-            if len(matches) >= max_results:
-                return
-            for node in nodes:
-                if len(matches) >= max_results:
-                    return
-                if not isinstance(node, dict):
-                    continue
-                name = str(node.get("name", ""))
-                next_path = path_stack + ([name] if name else [])
-                haystacks = [name, " > ".join(next_path)]
-                if any(pattern.search(h) for h in haystacks):
-                    matches.append(
-                        {
-                            "event_id": int(node.get("event_id", 0)),
-                            "name": name,
-                            "flags": node.get("flags", {}),
-                            "path": next_path,
-                        },
-                    )
-                    if len(matches) >= max_results:
-                        return
-                children = node.get("children", [])
-                if isinstance(children, list):
-                    walk(children, next_path)
-
-        walk(roots if isinstance(roots, list) else [], [])
-        return _ok(matches=matches)
-
-    if action == "explain_pixel":
-        x_value, y_value, target_value = _resolve_macro_pixel()
-        history_resp = await _dispatch_debug("pixel_history", {"session_id": session_id, "x": x_value, "y": y_value, "target": target_value})
-        payload = json.loads(history_resp)
-        if not payload.get("success"):
-            return history_resp
-        history = payload.get("history", [])
-        explanation = f"Pixel({x_value},{y_value}) has {len(history)} recorded modifications in pixel history."
-        return _ok(explanation=explanation, history=history[:20])
-
-    if action == "resource_dependency_graph":
-        event_range = _as_dict(args.get("event_range"), default={})
-        start_evt = _as_int(event_range.get("start_event_id"), 0)
-        end_evt = _as_int(event_range.get("end_event_id"), 0)
-        max_nodes = max(1, _as_int(args.get("max_nodes"), 128))
-        max_edges = max(0, _as_int(args.get("max_edges"), 256))
-
-        if start_evt > 0 and end_evt >= start_evt:
-            graph = {"nodes": [], "edges": []}
-            previous_node_id = None
-            for evt in range(start_evt, end_evt + 1):
-                if len(graph["nodes"]) >= max_nodes:
-                    break
-                detail_resp = await _dispatch_event(
-                    "get_action_details",
-                    {"session_id": session_id, "event_id": evt},
-                )
-                detail_payload = json.loads(detail_resp)
-                if not detail_payload.get("success"):
-                    if evt == start_evt and not graph["nodes"]:
-                        return detail_resp
-                    continue
-                action_payload = _as_dict(detail_payload.get("action"), default={})
-                node_id = f"evt_{evt}"
-                graph["nodes"].append(
-                    {
-                        "id": node_id,
-                        "label": str(action_payload.get("name") or f"Event {evt}"),
-                        "event_id": int(evt),
-                    }
-                )
-                if previous_node_id is not None and len(graph["edges"]) < max_edges:
-                    graph["edges"].append({"from": previous_node_id, "to": node_id})
-                previous_node_id = node_id
-            return _ok(graph=graph)
-
-        event_tree_resp = await _dispatch_event("get_action_tree", {"session_id": session_id, "max_depth": 4})
-        payload = json.loads(event_tree_resp)
-        if not payload.get("success"):
-            return event_tree_resp
-        graph = {"nodes": [], "edges": []}
-        root = payload.get("root", {})
-        queue = [root]
-        while queue:
-            node = queue.pop(0)
-            event_id = node.get("event_id")
-            if event_id is not None:
-                graph["nodes"].append({"id": f"evt_{event_id}", "label": node.get("name", "")})
-            for child in node.get("children", []):
-                cid = child.get("event_id")
-                if event_id is not None and cid is not None and len(graph["edges"]) < max_edges:
-                    graph["edges"].append({"from": f"evt_{event_id}", "to": f"evt_{cid}"})
-                if len(graph["nodes"]) < max_nodes:
-                    queue.append(child)
-        return _ok(graph=graph)
-
     if action == "find_state_change_point":
         _require(args, "event_range", "state_path", "target_value")
         event_range = _as_dict(args["event_range"])
@@ -11954,190 +11437,53 @@ async def _dispatch_macro(action: str, args: Dict[str, Any]) -> str:
         path = str(args["state_path"])
         target_value = args["target_value"]
         found = None
-        for evt in range(start_evt, end_evt + 1):
-            snapshot = await _pipeline_service.snapshot_pipeline(session_id, evt, _session_manager)
+        budget = _as_int(args.get("max_events"), 2000)
+        if start_evt < 0 or end_evt < start_evt or budget < 1 or not path:
+            return _err("Invalid event range, state path or event budget", code="validation_error")
+        section_by_field = {"shaders": "shaders", "render_targets": "output_targets", "depth_target": "output_targets",
+                            "topology": "topology", "viewport": "viewports_scissors", "scissor": "viewports_scissors",
+                            "blend_states": "blend", "depth_stencil": "depth_stencil", "bindings": "bindings", "api": None}
+        root_field = path.split(".")[0]
+        if root_field not in section_by_field:
+            return _err(f"Unknown pipeline state path: {path}", code="validation_error")
+        section = section_by_field[root_field]
+        _, flat, _ = await _load_action_index(session_id)
+        events = sorted({int(a.eventId) for a in flat if start_evt <= int(a.eventId) <= end_evt})
+        examined = 0
+        for evt in events[:budget]:
+            await asyncio.sleep(0)
+            examined += 1
+            snapshot = await _pipeline_service.snapshot_pipeline(session_id, evt, _session_manager, sections=[section] if section else [])
+            _store_active_event(session_id, evt)
             payload = snapshot.model_dump(mode="json")
             cursor: Any = payload
             ok = True
             for token in path.split("."):
                 if isinstance(cursor, dict) and token in cursor:
                     cursor = cursor[token]
+                elif isinstance(cursor, list) and token.isdigit() and int(token) < len(cursor):
+                    cursor = cursor[int(token)]
                 else:
                     ok = False
                     break
-            if ok and cursor == target_value:
+            if not ok:
+                return _err(f"Unknown pipeline state path: {path}", code="validation_error")
+            if cursor == target_value:
                 found = evt
                 break
-        return _ok(found_event_id=found)
+        return _ok(found_event_id=found, examined_events=examined, complete=found is not None or examined == len(events),
+                   range_exhausted=found is None and examined == len(events), budget_exhausted=found is None and examined < len(events))
 
-    if action == "compare_events_report":
-        _require(args, "event_a", "event_b")
-        diff_resp = await _dispatch_event("diff_pipeline_state", {"session_id": session_id, "event_a": args["event_a"], "event_b": args["event_b"]})
-        payload = json.loads(diff_resp)
-        if not payload.get("success"):
-            return diff_resp
-        if args.get("output_path"):
-            out = Path(str(args["output_path"]))
-            out.parent.mkdir(parents=True, exist_ok=True)
-            lines = ["# Event Comparison Report", f"- Event A: {args['event_a']}", f"- Event B: {args['event_b']}", "", "## Differences"]
-            for item in payload.get("diff", [])[:200]:
-                lines.append(f"- `{item.get('path')}`: `{item.get('before')}` -> `{item.get('after')}`")
-            out.write_text("\n".join(lines), encoding="utf-8")
-            return _ok(saved_path=str(out), diff=payload.get("diff", []))
-        return _ok(diff=payload.get("diff", []))
 
-    if action == "find_unexpected_clear":
-        search = await _dispatch_event("search_actions", {"session_id": session_id, "query": {"name_contains": "clear"}, "max_results": args.get("max_results", 200)})
-        return search
 
-    if action == "quick_triage_missing_draw":
-        summary_resp = await _dispatch_macro("summarize_frame", {"session_id": session_id})
-        diag_resp = await _dispatch_diag("scan_common_issues", {"session_id": session_id, "include_suggestions": True})
-        return _ok(
-            summary=json.loads(summary_resp),
-            diagnostics=json.loads(diag_resp),
-            context_snapshot=snapshot,
-            recent_artifacts=list(snapshot.get("last_artifacts") or []),
-        )
 
-    if action == "build_bug_report_pack":
-        _require(args, "output_path")
-        output_path = Path(str(args["output_path"]))
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        summary_resp = await _dispatch_macro("summarize_frame", {"session_id": session_id})
-        summary_payload = json.loads(summary_resp)
-        with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as zf:
-            zf.writestr("report/summary.json", json.dumps(summary_payload, ensure_ascii=False, indent=2))
-            zf.writestr("report/context_snapshot.json", json.dumps(snapshot, ensure_ascii=False, indent=2))
-        return _ok(saved_path=str(output_path), context_snapshot=snapshot, recent_artifacts=list(snapshot.get("last_artifacts") or []))
 
-    if action == "shader_hotfix_validate":
-        _require(args, "replacement")
-        replacement_args = _as_dict(args["replacement"])
-        validation_args = _as_dict(args.get("validation"))
-        output_root = Path(str(args.get("output_dir") or artifacts_dir()))
-        output_root.mkdir(parents=True, exist_ok=True)
-        before_path = output_root / "before_hotfix.png"
-        after_path = output_root / "after_hotfix.png"
-        target_texture_id = str(
-            validation_args.get("target_texture_id")
-            or validation_args.get("texture_id")
-            or ""
-        ).strip()
-        screenshot_args: Dict[str, Any] = {
-            "session_id": session_id,
-            "event_id": replacement_args.get("event_id"),
-            "output_path": str(before_path),
-        }
-        if target_texture_id:
-            screenshot_args["target"] = {"texture_id": target_texture_id}
-        before_pixel_payload: Optional[Dict[str, Any]] = None
-        pixel_args: Optional[Dict[str, Any]] = None
-        pixel_x = validation_args.get("x")
-        pixel_y = validation_args.get("y")
-        if target_texture_id and pixel_x is not None and pixel_y is not None:
-            pixel_args = {
-                "session_id": session_id,
-                "texture_id": target_texture_id,
-                "x": _as_int(pixel_x),
-                "y": _as_int(pixel_y),
-                "event_id": replacement_args.get("event_id"),
-                "mip": 0,
-                "slice": 0,
-                "sample": 0,
-                "as_type": "float",
-            }
-        screenshot_before = await _dispatch_export(
-            "screenshot",
-            screenshot_args,
-        )
-        if pixel_args is not None:
-            before_pixel_payload = json.loads(
-                await _dispatch_texture("get_pixel_value", pixel_args)
-            )
-        repl_resp = await _dispatch_shader("edit_and_replace", {"session_id": session_id, **replacement_args})
-        repl_payload = json.loads(repl_resp)
-        if not repl_payload.get("success"):
-            return repl_resp
-        screenshot_args["output_path"] = str(after_path)
-        screenshot_after = await _dispatch_export(
-            "screenshot",
-            screenshot_args,
-        )
-        before_payload = json.loads(screenshot_before)
-        after_payload = json.loads(screenshot_after)
-
-        validation_result: Dict[str, Any] = {
-            "target_texture_id": target_texture_id,
-        }
-
-        if pixel_args is not None:
-            validation_result["before_pixel"] = before_pixel_payload
-            validation_result["after_pixel"] = json.loads(
-                await _dispatch_texture("get_pixel_value", pixel_args)
-            )
-
-        metric = str(validation_args.get("metric") or "").strip().lower()
-        if metric:
-            validation_result["image_diff"] = json.loads(
-                await _dispatch_util(
-                    "diff_images",
-                    {
-                        "image_a_path": str(before_path),
-                        "image_b_path": str(after_path),
-                        "metrics": [metric],
-                    },
-                )
-            )
-
-        return _ok(
-            replacement=repl_payload,
-            before=before_payload,
-            after=after_payload,
-            validation=validation_result,
-            output_dir=str(output_root),
-            artifacts={"before": str(before_path), "after": str(after_path)},
-        )
 
     return _err(f"Unsupported macro action: {action}")
 
 
 async def _dispatch_util(action: str, args: Dict[str, Any]) -> str:
-    if action == "compute_hash":
-        _require(args, "path")
-        algo = str(args.get("algo", "sha256")).lower()
-        path = Path(str(args["path"]))
-        if not path.is_file():
-            return _err(f"Path not found: {path}")
-        if algo not in {"sha256", "sha1", "md5"}:
-            return _err(f"Unsupported hash algo: {algo}")
-        h = hashlib.new(algo)
-        with path.open("rb") as f:
-            while True:
-                chunk = f.read(1 << 20)
-                if not chunk:
-                    break
-                h.update(chunk)
-        return _ok(hash=h.hexdigest(), algo=algo)
 
-    if action == "diff_text":
-        _require(args, "a", "b")
-        a_is_path = _as_bool(args.get("a_is_path"), True)
-        b_is_path = _as_bool(args.get("b_is_path"), True)
-        a_text = Path(str(args["a"])).read_text(encoding="utf-8", errors="replace") if a_is_path else str(args["a"])
-        b_text = Path(str(args["b"])).read_text(encoding="utf-8", errors="replace") if b_is_path else str(args["b"])
-        context = _as_int(args.get("context_lines"), 3)
-        diff = list(
-            difflib.unified_diff(
-                a_text.splitlines(),
-                b_text.splitlines(),
-                fromfile="a",
-                tofile="b",
-                n=context,
-                lineterm="",
-            ),
-        )
-        return _ok(diff=diff)
 
     if action == "diff_images":
         _require(args, "image_a_path", "image_b_path")
@@ -12148,15 +11494,14 @@ async def _dispatch_util(action: str, args: Dict[str, Any]) -> str:
             return _err(f"Image diff dependencies missing: {exc}")
         a = np.array(Image.open(str(args["image_a_path"])).convert("RGBA")).astype("float32") / 255.0
         b = np.array(Image.open(str(args["image_b_path"])).convert("RGBA")).astype("float32") / 255.0
-        h = min(a.shape[0], b.shape[0])
-        w = min(a.shape[1], b.shape[1])
-        a = a[:h, :w]
-        b = b[:h, :w]
+        if a.shape != b.shape:
+            return _err("Image shapes differ", code="image_shape_mismatch")
         diff = a - b
         mse = float((diff ** 2).mean()) if diff.size else 0.0
         max_abs = float(abs(diff).max()) if diff.size else 0.0
-        psnr = float(20 * np.log10(1.0 / np.sqrt(mse))) if mse > 0 else float("inf")
-        out = {"mse": mse, "max_abs": max_abs, "psnr": psnr}
+        psnr = float(20 * np.log10(1.0 / np.sqrt(mse))) if mse > 0 else None
+        out = {"mse": mse, "max_abs": max_abs, "psnr": psnr, "identical": mse == 0,
+               "psnr_status": "infinite" if mse == 0 else "finite"}
         output_path = args.get("output_path")
         if output_path:
             diff_img = (np.clip(np.abs(diff), 0.0, 1.0) * 255.0).astype("uint8")
@@ -12166,20 +11511,6 @@ async def _dispatch_util(action: str, args: Dict[str, Any]) -> str:
             out["diff_path"] = str(out_path)
         return _ok(metrics=out)
 
-    if action == "pack_zip":
-        _require(args, "paths", "output_path")
-        paths = [Path(str(p)) for p in _as_list(args["paths"])]
-        output = Path(str(args["output_path"]))
-        output.parent.mkdir(parents=True, exist_ok=True)
-        with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as zf:
-            for p in paths:
-                if p.is_file():
-                    zf.write(p, arcname=p.name)
-                elif p.is_dir():
-                    for child in p.rglob("*"):
-                        if child.is_file():
-                            zf.write(child, arcname=str(child.relative_to(p.parent)))
-        return _ok(saved_path=str(output))
 
     if action == "list_artifacts":
         prefix = str(args.get("prefix", ""))
@@ -12360,11 +11691,11 @@ async def _vfs_root_node() -> Dict[str, Any]:
         _vfs_entry("draws", "/draws", title="Action tree and draw hierarchy", requires_session=True, canonical_tools=["rd.event.get_action_tree", "rd.event.get_action_details"]),
         _vfs_entry("passes", "/passes", title="Inferred render passes", requires_session=True, canonical_tools=["rd.event.list_passes", "rd.event.search_actions"]),
         _vfs_entry("resources", "/resources", title="All textures and buffers", requires_session=True, canonical_tools=["rd.resource.list_all", "rd.resource.get_details"]),
-        _vfs_entry("textures", "/textures", title="Texture inventory", requires_session=True, canonical_tools=["rd.resource.list_textures", "rd.texture.get_data"]),
-        _vfs_entry("buffers", "/buffers", title="Buffer inventory", requires_session=True, canonical_tools=["rd.resource.list_buffers", "rd.buffer.get_data"]),
-        _vfs_entry("pipeline", "/pipeline", title="Current pipeline snapshot", requires_session=True, canonical_tools=["rd.pipeline.get_state", "rd.pipeline.get_state_summary"]),
+        _vfs_entry("textures", "/textures", title="Texture inventory", requires_session=True, canonical_tools=["rd.resource.list_all", "rd.texture.get_data"]),
+        _vfs_entry("buffers", "/buffers", title="Buffer inventory", requires_session=True, canonical_tools=["rd.resource.list_all", "rd.buffer.get_data"]),
+        _vfs_entry("pipeline", "/pipeline", title="Current pipeline snapshot", requires_session=True, canonical_tools=["rd.pipeline.get_state", "rd.pipeline.get_state"]),
         _vfs_entry("shaders", "/shaders", title="Current bound shaders", requires_session=True, canonical_tools=["rd.pipeline.get_state", "rd.pipeline.get_shader"]),
-        _vfs_entry("debug", "/debug", title="Debug focus and entry hints", canonical_tools=["rd.session.get_context", "rd.debug.pixel_history", "rd.macro.explain_pixel"]),
+        _vfs_entry("debug", "/debug", title="Debug focus and entry hints", canonical_tools=["rd.session.get_context", "rd.texture.get_pixel_history", "rd.texture.get_pixel_history"]),
     ]
     return _vfs_node("/", kind="directory", title="RDX VFS root", entries=entries)
 
@@ -12409,7 +11740,7 @@ async def _vfs_draws_node(parts: List[str], path: str, args: Dict[str, Any]) -> 
         payload = await _vfs_call("rd.event.get_action_details", {"session_id": session_id, "event_id": event_id})
         action = payload.get("action", {})
         entries = [
-            _vfs_entry("children", f"/draws/{event_id}/children", title="Immediate child actions", requires_session=True, canonical_tools=["rd.event.get_drawcall_children", "rd.event.get_action_details"]),
+            _vfs_entry("children", f"/draws/{event_id}/children", title="Immediate child actions", requires_session=True, canonical_tools=["rd.event.get_action_details", "rd.event.get_action_details"]),
             _vfs_entry("pipeline", f"/draws/{event_id}/pipeline", kind="object", title="Pipeline snapshot at this event", requires_session=True, canonical_tools=["rd.pipeline.get_state"]),
             _vfs_entry("shaders", f"/draws/{event_id}/shaders", title="Bound shaders at this event", requires_session=True, canonical_tools=["rd.pipeline.get_state", "rd.pipeline.get_shader"]),
         ]
@@ -12438,13 +11769,13 @@ async def _vfs_draws_node(parts: List[str], path: str, args: Dict[str, Any]) -> 
             payload = await _vfs_call("rd.pipeline.get_state", {"session_id": session_id, "event_id": event_id})
             state = payload.get("pipeline_state", {})
             entries = [
-                _vfs_entry("summary", f"/draws/{event_id}/pipeline/summary", kind="object", title="Pipeline summary", requires_session=True, canonical_tools=["rd.pipeline.get_state_summary"]),
+                _vfs_entry("summary", f"/draws/{event_id}/pipeline/summary", kind="object", title="Pipeline summary", requires_session=True, canonical_tools=["rd.pipeline.get_state"]),
                 _vfs_entry("shaders", f"/draws/{event_id}/pipeline/shaders", title="Bound shaders", requires_session=True, canonical_tools=["rd.pipeline.get_state", "rd.pipeline.get_shader"]),
             ]
             return _vfs_node(path, kind="object", title=f"Pipeline at draw {event_id}", requires_session=True, canonical_tools=["rd.pipeline.get_state"], data=state, entries=entries)
         if len(parts) >= 4 and parts[3] == "summary":
-            payload = await _vfs_call("rd.pipeline.get_state_summary", {"session_id": session_id, "event_id": event_id})
-            return _vfs_node(path, kind="object", title=f"Pipeline summary at draw {event_id}", requires_session=True, canonical_tools=["rd.pipeline.get_state_summary"], data=payload.get("summary", {}))
+            payload = await _vfs_call("rd.pipeline.get_state", {"session_id": session_id, "event_id": event_id})
+            return _vfs_node(path, kind="object", title=f"Pipeline summary at draw {event_id}", requires_session=True, canonical_tools=["rd.pipeline.get_state"], data=payload.get("pipeline_state", {}))
         if len(parts) >= 4 and parts[3] == "shaders":
             payload = await _vfs_call("rd.pipeline.get_state", {"session_id": session_id, "event_id": event_id})
             shaders = list(payload.get("pipeline_state", {}).get("shaders", []) or [])
@@ -12542,17 +11873,10 @@ async def _vfs_passes_node(parts: List[str], path: str, args: Dict[str, Any]) ->
 
 async def _vfs_resource_like_node(parts: List[str], path: str, args: Dict[str, Any], *, root_name: str) -> Dict[str, Any]:
     session_id = _vfs_require_session_id(path, args)
-    list_tool = {
-        "resources": "rd.resource.list_all",
-        "textures": "rd.resource.list_textures",
-        "buffers": "rd.resource.list_buffers",
-    }[root_name]
-    key_name = {
-        "resources": "resources",
-        "textures": "textures",
-        "buffers": "buffers",
-    }[root_name]
-    payload = await _vfs_call(list_tool, {"session_id": session_id})
+    list_tool = "rd.resource.list_all"
+    key_name = "resources"
+    kind = {"resources": "all", "textures": "texture", "buffers": "buffer"}[root_name]
+    payload = await _vfs_call(list_tool, {"session_id": session_id, "kind": kind})
     items = list(payload.get(key_name, []) or [])
     if len(parts) == 1:
         entries = []
@@ -12571,12 +11895,11 @@ async def _vfs_resource_like_node(parts: List[str], path: str, args: Dict[str, A
 
     if len(parts) == 2:
         entries = []
-        if root_name in {"resources", "textures"}:
+        if selected.get("texture_id") is not None:
             entries.append(_vfs_entry("data", f"/{root_name}/{item_id}/data", kind="object", title="Texture readback container metadata", requires_session=True, canonical_tools=["rd.texture.get_data"]))
-        if root_name in {"resources", "buffers"}:
+        if root_name in {"resources", "textures", "buffers"}:
             entries.append(_vfs_entry("usage", f"/{root_name}/{item_id}/usage", kind="object", title="Resource usage", requires_session=True, canonical_tools=["rd.resource.get_usage"]))
-            entries.append(_vfs_entry("history", f"/{root_name}/{item_id}/history", kind="object", title="Resource history", requires_session=True, canonical_tools=["rd.resource.get_history"]))
-        if root_name in {"buffers"}:
+        if selected.get("buffer_id") is not None:
             entries.insert(0, _vfs_entry("data", f"/{root_name}/{item_id}/data", kind="object", title="Buffer data readback metadata", requires_session=True, canonical_tools=["rd.buffer.get_data"]))
         return _vfs_node(path, kind="object", title=str(selected.get("name", item_id)), requires_session=True, canonical_tools=["rd.resource.get_details"], data=selected, entries=entries)
 
@@ -12584,13 +11907,10 @@ async def _vfs_resource_like_node(parts: List[str], path: str, args: Dict[str, A
     if tail == "usage":
         payload = await _vfs_call("rd.resource.get_usage", {"session_id": session_id, "resource_id": item_id})
         return _vfs_node(path, kind="object", title=f"Usage for {item_id}", requires_session=True, canonical_tools=["rd.resource.get_usage"], data={"resource_id": item_id, "usage": payload.get("usage", [])})
-    if tail == "history":
-        payload = await _vfs_call("rd.resource.get_history", {"session_id": session_id, "resource_id": item_id})
-        return _vfs_node(path, kind="object", title=f"History for {item_id}", requires_session=True, canonical_tools=["rd.resource.get_history"], data={"resource_id": item_id, "history": payload.get("history", [])})
-    if tail == "data" and root_name in {"resources", "textures"}:
+    if tail == "data" and selected.get("texture_id") is not None:
         payload = await _vfs_call("rd.texture.get_data", {"session_id": session_id, "texture_id": item_id, "subresource": {"mip": 0, "slice": 0, "sample": 0}})
         return _vfs_node(path, kind="object", title=f"Texture readback container for {item_id}", requires_session=True, canonical_tools=["rd.texture.get_data"], data=payload)
-    if tail == "data" and root_name == "buffers":
+    if tail == "data" and selected.get("buffer_id") is not None:
         payload = await _vfs_call("rd.buffer.get_data", {"session_id": session_id, "buffer_id": item_id, "offset": 0, "size": 0})
         return _vfs_node(path, kind="object", title=f"Buffer data for {item_id}", requires_session=True, canonical_tools=["rd.buffer.get_data"], data=payload)
 
@@ -12609,7 +11929,7 @@ async def _vfs_pipeline_like_node(parts: List[str], path: str, args: Dict[str, A
 
     if len(parts) == 1 or (event_id is not None and len(parts) == 3):
         entries = [
-            _vfs_entry("summary", f"{base_path}/summary", kind="object", title="Pipeline summary", requires_session=True, canonical_tools=["rd.pipeline.get_state_summary"]),
+            _vfs_entry("summary", f"{base_path}/summary", kind="object", title="Pipeline summary", requires_session=True, canonical_tools=["rd.pipeline.get_state"]),
             _vfs_entry("shaders", f"{base_path}/shaders", title="Bound shaders", requires_session=True, canonical_tools=["rd.pipeline.get_state", "rd.pipeline.get_shader"]),
         ]
         return _vfs_node(base_path, kind="object", title=f"Pipeline{title_suffix}", requires_session=True, canonical_tools=["rd.pipeline.get_state"], data=state, entries=entries)
@@ -12617,8 +11937,8 @@ async def _vfs_pipeline_like_node(parts: List[str], path: str, args: Dict[str, A
     tail_index = 1 if event_id is None else 3
     tail = parts[tail_index]
     if tail == "summary":
-        summary_payload = await _vfs_call("rd.pipeline.get_state_summary", call_args)
-        return _vfs_node(path, kind="object", title=f"Pipeline summary{title_suffix}", requires_session=True, canonical_tools=["rd.pipeline.get_state_summary"], data=summary_payload.get("summary", {}))
+        summary_payload = await _vfs_call("rd.pipeline.get_state", call_args)
+        return _vfs_node(path, kind="object", title=f"Pipeline summary{title_suffix}", requires_session=True, canonical_tools=["rd.pipeline.get_state"], data=summary_payload.get("pipeline_state", {}))
     if tail == "shaders":
         shaders = list(state.get("shaders", []) or []) if isinstance(state, dict) else []
         if len(parts) == tail_index + 1:
@@ -12681,7 +12001,7 @@ async def _vfs_debug_node(parts: List[str], path: str) -> Dict[str, Any]:
         _vfs_entry("focus", "/debug/focus", kind="object", title="Current focus hints", canonical_tools=["rd.session.get_context"]),
     ]
     if len(parts) == 1:
-        return _vfs_node(path, kind="directory", title="Debug focus and hints", canonical_tools=["rd.session.get_context", "rd.debug.pixel_history", "rd.macro.explain_pixel"], data={"focus": focus, "recommended_tools": ["rd.debug.pixel_history", "rd.macro.explain_pixel"]}, entries=entries)
+        return _vfs_node(path, kind="directory", title="Debug focus and hints", canonical_tools=["rd.session.get_context", "rd.texture.get_pixel_history", "rd.texture.get_pixel_history"], data={"focus": focus, "recommended_tools": ["rd.texture.get_pixel_history", "rd.texture.get_pixel_history"]}, entries=entries)
     if len(parts) == 2 and parts[1] == "focus":
         return _vfs_node(path, kind="object", title="Current focus", canonical_tools=["rd.session.get_context"], data=focus)
     raise ValueError(f"Unsupported VFS path: {_vfs_normalize_path(path)}")
@@ -12818,48 +12138,12 @@ async def _dispatch_remote(action: str, args: Dict[str, Any]) -> str:
         bootstrap_result = None
 
         try:
-            if transport == "adb_android":
-                _progress("bootstrap_start", "Bootstrapping Android remote endpoint", progress_pct=0.05, details={"transport": transport, "host": host, "port": port})
-                if host not in {"", "127.0.0.1", "localhost"}:
-                    return _err(
-                        "Android adb transport requires host=127.0.0.1 or localhost",
-                        code="android_remote_host_invalid",
-                        category="runtime",
-                        details={"host": host},
-                    )
-                bootstrap_result = await _offload(
-                    bootstrap_android_remote,
-                    remote_port=port,
-                    options=AndroidBootstrapOptions(
-                        device_serial=str(options.get("device_serial") or ""),
-                        local_port=_as_int(options.get("local_port"), 0),
-                        install_apk=_as_bool(options.get("install_apk"), True),
-                        push_config=_as_bool(options.get("push_config"), True),
-                    ),
-                )
+            if transport == "adb_android" and host not in {"", "127.0.0.1", "localhost"}:
+                return _err("Android adb transport requires host=127.0.0.1 or localhost", code="android_remote_host_invalid", category="runtime")
+            bootstrap_result, remote_server, server_info = await _connect_remote_endpoint(host, port, transport, options, timeout_ms)
+            if bootstrap_result is not None:
                 bootstrap_detail = describe_android_remote(bootstrap_result)
-                endpoint_host = str(bootstrap_result.host)
-                endpoint_port = int(bootstrap_result.port)
-                _progress("bootstrap_done", "Android bootstrap complete", progress_pct=0.2, details={"endpoint_host": endpoint_host, "endpoint_port": endpoint_port})
-
-            url = _remote_url(endpoint_host, endpoint_port)
-            _progress("waiting_endpoint", "Waiting for remote endpoint", progress_pct=0.35, details={"endpoint": url, "timeout_ms": timeout_ms})
-            await _offload(_wait_for_remote_endpoint, url, timeout_ms)
-            _progress("endpoint_ready", "Remote endpoint is reachable", progress_pct=0.55, details={"endpoint": url})
-            remote_server = await _offload(_create_remote_server_connection, url)
-            _progress("remote_connection_created", "Remote connection created", progress_pct=0.75, details={"endpoint": url})
-            ping_status = await _offload(remote_server.Ping)
-            if not _status_ok(ping_status):
-                raise RuntimeError(f"RemoteServer.Ping({url}) failed: {_status_text(ping_status)}")
-            _progress("remote_ping_ok", "Remote ping succeeded", progress_pct=0.9, details={"endpoint": url})
-            server_info = await _offload(
-                _collect_remote_server_info,
-                remote_server,
-                host=endpoint_host,
-                port=endpoint_port,
-                transport=transport,
-                bootstrap=bootstrap_detail,
-            )
+                endpoint_host, endpoint_port = bootstrap_result.host, bootstrap_result.port
         except AndroidRemoteBootstrapError as exc:
             return _err(exc.message, code=exc.code, category="runtime", details=exc.details)
         except CoreError as exc:
@@ -12932,7 +12216,7 @@ async def _dispatch_remote(action: str, args: Dict[str, Any]) -> str:
         )
         _set_context_remote_live(remote_id, detail["endpoint"])
         _progress("context_synced", "Remote handle synchronized to context", progress_pct=1.0, details={"remote_id": remote_id, "endpoint": detail["endpoint"]})
-        return _ok(remote_id=remote_id, server_info=server_info, detail=detail)
+        return _ok(context_id=_runtime_context_id(), remote_id=remote_id, server_info=server_info, detail=detail)
 
     if action == "disconnect":
         _require(args, "remote_id")
@@ -13111,16 +12395,6 @@ async def _dispatch_remote(action: str, args: Dict[str, Any]) -> str:
             _, applied_options = await _offload(_capture_options_from_dict, options)
             handle.default_capture_options = {**dict(handle.default_capture_options or {}), **applied_options}
             return _ok(applied=applied_options, default_capture_options=dict(handle.default_capture_options))
-        if action == "set_overlay_options":
-            return _capability_error(
-                "remote_overlay_options_unavailable",
-                "Remote overlay RPC is not exposed by the current RenderDoc Python binding",
-                capability="remote",
-                reason="TargetControl / RemoteServer does not expose overlay option RPCs in this build.",
-                source="renderdoc_api",
-                optional=True,
-                requires_remote_device=True,
-            )
         if action in {"trigger_capture", "queue_capture"}:
             try:
                 result = await _offload(

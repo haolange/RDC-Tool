@@ -10,6 +10,12 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
+SCRIPT_ROOT = Path(__file__).resolve().parents[1]
+if str(SCRIPT_ROOT) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_ROOT))
+
+from rdx.runtime_paths import artifacts_dir, logs_dir
+
 
 DEFAULT_LOCAL_MARKERS = ["RenderGBuffer", "RenderForward"]
 
@@ -37,11 +43,11 @@ def _timestamp() -> str:
 
 
 def _artifact_dir_default() -> Path:
-    return _repo_root() / "intermediate" / "artifacts" / "preview_geometry_smoke"
+    return artifacts_dir() / "preview_geometry_smoke"
 
 
 def _log_path_default(name: str, suffix: str) -> Path:
-    return _repo_root() / "intermediate" / "logs" / f"{name}_{_timestamp()}{suffix}"
+    return logs_dir() / f"{name}_{_timestamp()}{suffix}"
 
 
 def _normalize_name(name: str) -> str:

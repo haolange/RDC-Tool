@@ -48,33 +48,31 @@ def test_postprocess_context_snapshot_tracks_recent_artifacts(tmp_path: Path) ->
     }
     ctx = ExecutionContext(transport="test", remote=False, metadata={"context_id": "default"})
     try:
-        server._postprocess_context_snapshot("rd.util.pack_zip", {}, payload, ctx)
+        server._postprocess_context_snapshot("rd.export.buffer", {}, payload, ctx)
         get_payload = asyncio.run(server.dispatch_operation("rd.session.get_context", {}, transport="test"))
         artifacts = get_payload["data"]["last_artifacts"]
         assert artifacts
         assert artifacts[0]["path"] == str(artifact_path)
-        assert artifacts[0]["source_tool"] == "rd.util.pack_zip"
+        assert artifacts[0]["source_tool"] == "rd.export.buffer"
     finally:
         clear_context_snapshot()
         server._runtime.context_snapshots.clear()
 
 
-def test_macro_uses_focus_pixel_from_context(monkeypatch) -> None:
+def test_removed_pixel_explanation_macro_is_not_dispatchable() -> None:
     clear_context_snapshot()
     server._runtime.context_snapshots.clear()
 
-    async def _fake_debug(action: str, args: dict[str, object]) -> str:
-        assert action == "pixel_history"
-        assert args["x"] == 5
-        assert args["y"] == 9
-        return json.dumps({"success": True, "history": [{"event_id": 1}]})
-
-    monkeypatch.setattr(server.server_runtime, "_dispatch_debug", _fake_debug)
     try:
-        asyncio.run(server.dispatch_operation("rd.session.update_context", {"key": "focus_pixel", "value": "5,9"}, transport="test"))
-        payload = json.loads(asyncio.run(server._dispatch_macro("explain_pixel", {"session_id": "sess_demo"})))
-        assert payload["success"] is True
-        assert payload["history"][0]["event_id"] == 1
+        payload = asyncio.run(
+            server.dispatch_operation(
+                "rd.macro.explain_pixel",
+                {"session_id": "sess_demo", "x": 5, "y": 9},
+                transport="test",
+            )
+        )
+        assert payload["ok"] is False
+        assert payload["error"]["code"] == "not_found"
     finally:
         clear_context_snapshot()
         server._runtime.context_snapshots.clear()

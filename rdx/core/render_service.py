@@ -24,7 +24,7 @@ from typing import Any, Dict, List, Optional, Protocol, Tuple, runtime_checkable
 import numpy as np
 
 from rdx.core.errors import RuntimeToolError
-from rdx.core.renderdoc_status import status_code_name, status_code_raw
+from rdx.core.renderdoc_status import status_code_name, status_code_raw, status_text
 from rdx.models import ArtifactRef
 
 logger = logging.getLogger(__name__)
@@ -167,7 +167,8 @@ def _save_texture_result(result: Any) -> Tuple[bool, Dict[str, str]]:
             "status_text": "",
         }
 
-    detail = str(getattr(result, "message", "") or getattr(result, "details", ""))
+    detail = (status_text(result) if callable(getattr(result, "Message", None))
+              else str(getattr(result, "message", "") or getattr(result, "details", "")))
 
     for attr in ("code", "result", "status"):
         code = getattr(result, attr, None)
@@ -654,38 +655,19 @@ class RenderService:
     # readback_texture
     # ------------------------------------------------------------------
 
-    async def readback_texture(
+    async def read_texture_array(
         self,
         session_id: str,
         event_id: int,
         texture_id: Any,
         session_manager: SessionManager,
-        artifact_store: ArtifactStore,
         subresource: Optional[Dict[str, int]] = None,
         region: Optional[Dict[str, int]] = None,
-    ) -> Tuple[ArtifactRef, Dict[str, Any]]:
-        """读取原始 texture 数据并保存为 NumPy ``.npz``。
+    ) -> Tuple[Any, Dict[str, Any]]:
+        """Return decoded numeric samples and finite statistics without creating files.
 
-        Parameters
-        ----------
-        session_id, event_id:
-            Replay 坐标。
-        texture_id:
-            要读取的 texture 的 ``ResourceId``（或其整数形式）。
-        session_manager, artifact_store:
-            注入的依赖。
-        subresource:
-            ``{"mip": int, "slice": int, "sample": int}`` —— 默认
-            mip 0 / slice 0 / sample 0。
-        region:
-            ``{"x": int, "y": int, "width": int, "height": int}`` 的
-            texel 裁剪矩形。省略时返回完整 mip level。
-
-        Returns
-        -------
-        tuple[ArtifactRef, dict]
-            artifact 引用与统计信息字典（shape、dtype、每通道 min/max、
-            nan_count、inf_count）。
+        Subresource selects mip/slice/sample; region is a bounded texel rectangle.
+        Unsupported component formats and failed or incomplete readbacks raise errors.
         """
         rd = _get_rd()
         controller = session_manager.get_controller(session_id)
@@ -707,6 +689,12 @@ class RenderService:
                 f"Texture {texture_id} not found in capture resources"
             )
 
+        if sub.mip < 0 or sub.mip >= int(getattr(tex_desc, "mips", 1)) or sub.slice < 0 or sub.sample < 0:
+            raise ValueError("Invalid texture subresource")
+        if sub.slice >= max(int(getattr(tex_desc, "arraysize", 1)), int(getattr(tex_desc, "depth", 1))):
+            raise ValueError("Texture slice out of range")
+        if sub.sample >= max(1, int(getattr(tex_desc, "msSamp", 1))):
+            raise ValueError("Texture sample out of range")
         tex_width = max(1, tex_desc.width >> sub.mip)
         tex_height = max(1, tex_desc.height >> sub.mip)
 
@@ -717,45 +705,39 @@ class RenderService:
 
         # ---- 解析字节布局 ---------------------------------------------
         # RenderDoc 返回紧密打包的像素数据，其分量布局与资源格式一致。
-        # 这里使用简单启发式基于 buffer 大小选择 float32-RGBA 或 uint8-RGBA。
-        expected_pixels = tex_width * tex_height
-        bytes_per_pixel_f32 = 16  # 4 channels x 4 bytes
-        bytes_per_pixel_u8 = 4   # 4 channels x 1 byte
-
-        if len(raw_data) >= expected_pixels * bytes_per_pixel_f32:
-            arr = np.frombuffer(
-                raw_data[: expected_pixels * bytes_per_pixel_f32],
-                dtype=np.float32,
-            ).reshape(tex_height, tex_width, 4)
-        elif len(raw_data) >= expected_pixels * bytes_per_pixel_u8:
-            arr = np.frombuffer(
-                raw_data[: expected_pixels * bytes_per_pixel_u8],
-                dtype=np.uint8,
-            ).reshape(tex_height, tex_width, 4)
+        if not raw_data:
+            raise ValueError("Texture readback returned no bytes")
+        # Decode declared regular components; byte count alone cannot identify a format.
+        import re
+        format_name = str(tex_desc.format.Name()).upper()
+        components = re.findall(r"([RGBA])(8|16|32|64)", format_name)
+        if not components or len({bits for _, bits in components}) != 1:
+            raise ValueError(f"Unsupported texture readback format: {format_name}")
+        width, count = int(components[0][1]) // 8, len(components)
+        if "FLOAT" in format_name:
+            kind = "f"
+        elif "SINT" in format_name or "SNORM" in format_name:
+            kind = "i"
+        elif any(token in format_name for token in ("UINT", "UNORM", "SRGB")):
+            kind = "u"
         else:
-            # Unknown / compressed layout -- store the flat byte array.
-            logger.warning(
-                "readback_texture: unexpected buffer size %d for %dx%d "
-                "texture; storing flat uint8 array",
-                len(raw_data), tex_width, tex_height,
-            )
-            arr = np.frombuffer(raw_data, dtype=np.uint8)
-
-        # ---- Optional crop -------------------------------------------
-        if region and arr.ndim == 3:
-            rx = max(0, min(int(region.get("x", 0)), arr.shape[1] - 1))
-            ry = max(0, min(int(region.get("y", 0)), arr.shape[0] - 1))
-            rw = max(
-                1,
-                min(int(region.get("width", arr.shape[1] - rx)),
-                    arr.shape[1] - rx),
-            )
-            rh = max(
-                1,
-                min(int(region.get("height", arr.shape[0] - ry)),
-                    arr.shape[0] - ry),
-            )
-            arr = arr[ry: ry + rh, rx: rx + rw]
+            raise ValueError(f"Unsupported texture component type: {format_name}")
+        expected_bytes = tex_width * tex_height * count * width
+        if len(raw_data) != expected_bytes:
+            raise ValueError(f"Texture readback size mismatch: expected {expected_bytes}, received {len(raw_data)}")
+        arr = np.frombuffer(raw_data, dtype=np.dtype(f"<{kind}{width}")).reshape(tex_height, tex_width, count)
+        if "UNORM" in format_name or "SRGB" in format_name:
+            arr = arr.astype(np.float64) / np.iinfo(arr.dtype).max
+        elif "SNORM" in format_name:
+            arr = np.maximum(arr.astype(np.float64) / np.iinfo(arr.dtype).max, -1.0)
+        if components[0][0] == "B" and count >= 3:
+            arr = arr[..., [2, 1, 0, *range(3, count)]]
+        if region:
+            rx, ry = int(region.get("x", 0)), int(region.get("y", 0))
+            rw, rh = int(region.get("width", tex_width-rx)), int(region.get("height", tex_height-ry))
+            if rx < 0 or ry < 0 or rw < 1 or rh < 1 or rx + rw > tex_width or ry + rh > tex_height:
+                raise ValueError("Texture region lies outside the selected subresource")
+            arr = arr[ry:ry+rh, rx:rx+rw]
 
         # ---- Statistics ----------------------------------------------
         stats: Dict[str, Any] = {
@@ -784,6 +766,15 @@ class RenderService:
             stats["max"] = int(arr.max()) if arr.size > 0 else None
             stats["mean"] = float(arr.mean()) if arr.size > 0 else None
 
+        return arr, stats
+
+    async def readback_texture(
+        self, session_id: str, event_id: int, texture_id: Any,
+        session_manager: SessionManager, artifact_store: ArtifactStore,
+        subresource: Optional[Dict[str, int]] = None, region: Optional[Dict[str, int]] = None,
+    ) -> Tuple[ArtifactRef, Dict[str, Any]]:
+        """Explicit numeric-container export using the shared in-memory readback."""
+        arr, stats = await self.read_texture_array(session_id, event_id, texture_id, session_manager, subresource, region)
         # ---- Serialize to .npz --------------------------------------
         npz_buf = io.BytesIO()
         np.savez_compressed(npz_buf, pixels=arr)
@@ -814,6 +805,8 @@ class RenderService:
         x: int,
         y: int,
         session_manager: SessionManager,
+        subresource: Optional[Dict[str, int]] = None,
+        value_type: str = "float",
     ) -> Dict[str, Any]:
         """在指定 event 的 texture 中读取单个像素。
 
@@ -830,6 +823,15 @@ class RenderService:
 
         resolved_id = await self._resolve_texture_id(controller, texture_id)
         sub = rd.Subresource()
+        for key in ("mip", "slice", "sample"):
+            setattr(sub, key, int((subresource or {}).get(key, 0)))
+        desc = await self._find_texture_desc(controller, resolved_id)
+        if desc is None or sub.mip < 0 or sub.mip >= int(getattr(desc, "mips", 1)):
+            raise ValueError("Invalid pixel texture/subresource")
+        if x < 0 or y < 0 or x >= max(1, int(desc.width) >> sub.mip) or y >= max(1, int(desc.height) >> sub.mip):
+            raise ValueError("Pixel coordinate outside the selected subresource")
+        if value_type not in {"float", "uint", "int"}:
+            raise ValueError("Pixel value type must be float, uint or int")
 
         pixel_value = await asyncio.to_thread(
             controller.PickPixel,
@@ -842,18 +844,18 @@ class RenderService:
 
         # PixelValue 暴露 .floatValue、.uintValue、.intValue 数组；
         # Float 覆盖绝大多数用例。
-        fv: List[float] = list(pixel_value.floatValue[:4])
+        fv = list(getattr(pixel_value, {"float": "floatValue", "uint": "uintValue", "int": "intValue"}[value_type])[:4])
 
         result: Dict[str, Any] = {
             "x": x,
             "y": y,
             "event_id": event_id,
             "texture_id": str(texture_id),
-            "r": fv[0],
-            "g": fv[1],
-            "b": fv[2],
-            "a": fv[3],
-            "value_type": "float",
+            "r": fv[0] if math.isfinite(fv[0]) else None,
+            "g": fv[1] if math.isfinite(fv[1]) else None,
+            "b": fv[2] if math.isfinite(fv[2]) else None,
+            "a": fv[3] if math.isfinite(fv[3]) else None,
+            "value_type": value_type,
             "has_nan": any(math.isnan(v) for v in fv),
             "has_inf": any(math.isinf(v) for v in fv),
         }

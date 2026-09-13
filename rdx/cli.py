@@ -30,7 +30,7 @@ from rdx.daemon.client import (
 )
 from rdx.io_utils import safe_json_text, safe_stream_write
 from rdx.python_runtime import current_python_runtime_details, validate_bundled_python_layout
-from rdx.runtime_catalog import load_tool_catalog, tool_catalog_path
+from rdx.runtime_catalog import load_tool_catalog, tool_catalog_path, catalog_payload, describe_operation
 from rdx.runtime_paths import (
     artifacts_dir,
     binaries_root,
@@ -65,7 +65,7 @@ def _print_launcher_help() -> None:
         "commands:",
         "  version",
         "  doctor",
-        "  tools list|search",
+        "  tools list|search|describe",
         "  daemon start|stop|status",
         "  context status|update|list|clear",
         "  session preview on|off|status",
@@ -545,7 +545,7 @@ def _version_payload() -> Dict[str, Any]:
                 "python_cli": str(root / "cli" / "run_cli.py"),
             },
             "compatibility": {
-                "stability": "1.x",
+                "stability": "current-contract",
                 "json_envelope": "stable",
             },
         },
@@ -689,7 +689,7 @@ def _cmd_completion(args: argparse.Namespace) -> int:
 
 
 def _cmd_tools_list(args: argparse.Namespace) -> int:
-    tools = [_tool_summary(tool) for tool in load_tool_catalog()]
+    tools = load_tool_catalog() if getattr(args, "full", False) else [_tool_summary(tool) for tool in load_tool_catalog()]
     namespace = str(getattr(args, "namespace", "") or "").strip()
     if namespace:
         tools = [tool for tool in tools if tool.get("namespace") == namespace]
@@ -700,6 +700,8 @@ def _cmd_tools_list(args: argparse.Namespace) -> int:
         result_kind="rdx.tools.list",
         data={
             "tool_count": len(tools),
+            "fingerprint": catalog_payload()["fingerprint"],
+            "schema_version": catalog_payload()["schema_version"],
             "tools": tools,
         },
         transport="cli",
@@ -860,6 +862,15 @@ def _capture_open_error_payload(
 
 
 async def _cmd_call(args: argparse.Namespace) -> int:
+    try:
+        definition = describe_operation(args.operation)
+    except ValueError as exc:
+        _print_json(canonical_error(result_kind=args.operation, code="operation_not_found",
+                                    category="not_found", message=str(exc), transport="cli"))
+        return EXIT_RUNTIME_ERR
+    if str(args.format) == "tsv" and definition and "projection" not in definition["input_schema"]["properties"]:
+        _print_json(_tabular_projection_error_payload({"result_kind": args.operation}, "tool does not support a tabular projection"))
+        return EXIT_RUNTIME_ERR
     call_args = _tabular_request(
         str(args.format),
         _load_call_args(
@@ -872,6 +883,9 @@ async def _cmd_call(args: argparse.Namespace) -> int:
 
 
 async def _cmd_vfs(args: argparse.Namespace) -> int:
+    if str(args.format) == "tsv" and args.vfs_cmd != "ls":
+        _print_json(_facade_projection_not_supported_payload(args, str(args.daemon_context)))
+        return EXIT_RUNTIME_ERR
     op = f"rd.vfs.{args.vfs_cmd}"
     call_args: Dict[str, Any] = {"path": str(args.path or "/")}
     if getattr(args, "session_id", None):
@@ -939,7 +953,7 @@ def _facade_request(args: argparse.Namespace, session_id: str) -> tuple[str, Dic
 
     if command == "event":
         if subcommand == "list":
-            return "rd.event.get_actions", {"session_id": session_id}
+            return "rd.event.get_action_tree", {"session_id": session_id}
         if subcommand == "show":
             return "rd.event.get_action_details", {"session_id": session_id, "event_id": int(args.event_id)}
 
@@ -948,7 +962,8 @@ def _facade_request(args: argparse.Namespace, session_id: str) -> tuple[str, Dic
         _add_optional_event_id(call_args, getattr(args, "event_id", None))
         if subcommand == "show":
             call_args["context_id"] = str(args.daemon_context)
-            return "rd.pipeline.get_state_summary", call_args
+            call_args["detail"] = "summary"
+            return "rd.pipeline.get_state", call_args
         if subcommand == "section":
             call_args["stage"] = str(args.stage)
             return "rd.pipeline.get_stage_state", call_args
@@ -1385,9 +1400,13 @@ def _build_parser() -> argparse.ArgumentParser:
     p_tools = sub.add_parser("tools", help="Catalog discovery")
     s_tools = p_tools.add_subparsers(dest="tools_cmd", required=True)
     p_tools_list = s_tools.add_parser("list", help="List catalog-defined rd.* tools")
+    p_tools_list.add_argument("--full", action="store_true", help="Include schemas and execution contracts")
     p_tools_list.add_argument("--namespace", default="", help="Filter by rd.* namespace, such as capture or pipeline")
     p_tools_list.add_argument("--limit", type=int, default=0, help="Maximum tools to return; 0 means no limit")
     p_tools_list.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+    p_tools_describe = s_tools.add_parser("describe", help="Describe a canonical operation")
+    p_tools_describe.add_argument("operation")
+    p_tools_describe.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
     p_tools_search = s_tools.add_parser("search", help="Search catalog-defined rd.* tools")
     p_tools_search.add_argument("query")
     p_tools_search.add_argument("--limit", type=int, default=20)
@@ -1598,6 +1617,14 @@ async def _main_async(args: argparse.Namespace) -> int:
             return _cmd_tools_list(args)
         if args.tools_cmd == "search":
             return _cmd_tools_search(args)
+        if args.tools_cmd == "describe":
+            try:
+                data = describe_operation(args.operation)
+            except ValueError as exc:
+                _print_json(canonical_error(result_kind="rdx.tools.describe", code="operation_not_found", category="not_found", message=str(exc), transport="cli"))
+                return EXIT_RUNTIME_ERR
+            _print_json(canonical_success(result_kind="rdx.tools.describe", data=data, transport="cli"))
+            return EXIT_OK
 
     if args.command == "daemon":
         if args.daemon_cmd == "start":
@@ -1612,7 +1639,7 @@ async def _main_async(args: argparse.Namespace) -> int:
             return EXIT_OK if ok else EXIT_RUNTIME_ERR
         if args.daemon_cmd == "stop":
             ok, message = stop_daemon(context=ctx)
-            payload = canonical_success(result_kind="rdx.daemon.stop", data={"message": message}, transport="cli") if ok else canonical_error(result_kind="rdx.daemon.stop", code="runtime_error", category="runtime", message=message, transport="cli")
+            payload = canonical_success(result_kind="rdx.daemon.stop", data={"message": message, "context_id": ctx, "stopped": True}, transport="cli") if ok else canonical_error(result_kind="rdx.daemon.stop", code="runtime_error", category="runtime", message=message, transport="cli")
             _print_json(payload)
             return EXIT_OK if ok else EXIT_RUNTIME_ERR
         if args.daemon_cmd == "status":

@@ -244,6 +244,32 @@ def test_release_gate_requires_release_package_when_flagged(monkeypatch, tmp_pat
     assert "missing release package" in report
 
 
+def test_source_only_gate_does_not_auto_select_existing_dist_package(tmp_path: Path) -> None:
+    stale_package = tmp_path / "dist" / "rdx-tools-0.1.0-windows-x64.zip"
+    stale_package.parent.mkdir(parents=True)
+    stale_package.write_bytes(b"stale")
+
+    ok, detail = release_gate._check_release_package(tmp_path, raw_package="", required=False)
+
+    assert ok
+    assert "source-only gate" in detail
+
+
+def test_explicit_release_package_is_still_verified(tmp_path: Path) -> None:
+    package = tmp_path / "dist" / "rdx-tools-1.0.0-windows-x64.zip"
+    package.parent.mkdir(parents=True)
+    package.write_bytes(b"zip")
+
+    ok, detail = release_gate._check_release_package(
+        tmp_path,
+        raw_package=str(package),
+        required=False,
+    )
+
+    assert not ok
+    assert "missing SHA256SUMS" in detail
+
+
 def test_release_gate_verifies_release_package_when_present(monkeypatch, tmp_path: Path) -> None:
     _prepare_root(tmp_path)
     _write_smoke_log(tmp_path)

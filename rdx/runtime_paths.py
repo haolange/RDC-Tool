@@ -81,7 +81,8 @@ def pymodules_dir() -> Path:
 
 
 def intermediate_root() -> Path:
-    return tools_root() / "intermediate"
+    override = os.environ.get("RDX_INTERMEDIATE_ROOT", "").strip()
+    return Path(override).expanduser().resolve() if override else tools_root() / "intermediate"
 
 
 def runtime_root() -> Path:

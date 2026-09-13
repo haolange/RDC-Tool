@@ -52,6 +52,7 @@ def test_build_parser_accepts_cli_first_doctor_and_tools() -> None:
     context_clear = parser.parse_args(["context", "clear", "--json"])
     tools_list = parser.parse_args(["tools", "list", "--json", "--limit", "3"])
     tools_search = parser.parse_args(["tools", "search", "pipeline", "--json"])
+    tools_describe = parser.parse_args(["tools", "describe", "rd.pipeline.get_state", "--json"])
 
     assert doctor.command == "doctor"
     assert doctor.json is True
@@ -71,6 +72,8 @@ def test_build_parser_accepts_cli_first_doctor_and_tools() -> None:
     assert tools_search.command == "tools"
     assert tools_search.tools_cmd == "search"
     assert tools_search.query == "pipeline"
+    assert tools_describe.tools_cmd == "describe"
+    assert tools_describe.operation == "rd.pipeline.get_state"
 
 
 def test_doctor_reports_cli_only_contract(monkeypatch) -> None:
@@ -119,6 +122,7 @@ def test_tools_list_and_search_emit_catalog_summaries(monkeypatch) -> None:
 
     monkeypatch.setattr(rdx_cli, "_print_json", lambda payload: captured.append(payload))
     monkeypatch.setattr(rdx_cli, "load_tool_catalog", lambda: fake_catalog)
+    monkeypatch.setattr(rdx_cli, "catalog_payload", lambda: {"schema_version": "1", "fingerprint": "abc123"})
 
     list_code = asyncio.run(
         rdx_cli._main_async(argparse.Namespace(command="tools", tools_cmd="list", namespace="", limit=0, daemon_context="default")),
@@ -131,9 +135,31 @@ def test_tools_list_and_search_emit_catalog_summaries(monkeypatch) -> None:
     assert search_code == rdx_cli.EXIT_OK
     assert captured[0]["result_kind"] == "rdx.tools.list"
     assert captured[0]["data"]["tool_count"] == 2
+    assert captured[0]["data"]["fingerprint"] == "abc123"
     assert captured[1]["result_kind"] == "rdx.tools.search"
     assert captured[1]["data"]["tool_count"] == 1
     assert captured[1]["data"]["tools"][0]["name"] == "rd.pipeline.get_state"
+
+
+def test_tools_describe_returns_full_contract_and_rejects_unknown(monkeypatch) -> None:
+    captured: list[dict] = []
+    definition = {
+        "name": "rd.pipeline.get_state",
+        "input_schema": {"type": "object", "properties": {"session_id": {"type": "string"}}},
+        "scope": "replay",
+        "effects": ["replay_position"],
+    }
+    monkeypatch.setattr(rdx_cli, "_print_json", lambda payload: captured.append(payload))
+    monkeypatch.setattr(rdx_cli, "describe_operation", lambda name: definition if name == definition["name"] else (_ for _ in ()).throw(ValueError("unknown")))
+
+    known = asyncio.run(rdx_cli._main_async(argparse.Namespace(command="tools", tools_cmd="describe", operation=definition["name"], daemon_context="default")))
+    unknown = asyncio.run(rdx_cli._main_async(argparse.Namespace(command="tools", tools_cmd="describe", operation="rd.unknown.nope", daemon_context="default")))
+
+    assert known == rdx_cli.EXIT_OK
+    assert captured[0]["result_kind"] == "rdx.tools.describe"
+    assert captured[0]["data"] == definition
+    assert unknown == rdx_cli.EXIT_RUNTIME_ERR
+    assert captured[1]["error"]["code"] == "operation_not_found"
 
 
 def test_version_command_emits_stable_json(monkeypatch) -> None:
@@ -151,6 +177,7 @@ def test_version_command_emits_stable_json(monkeypatch) -> None:
     assert captured[0]["data"]["public_commands"] == ["rdx"]
     assert {"windows_bat", "posix_shell", "python_cli"} <= set(captured[0]["data"]["entrypoints"])
     assert captured[0]["data"]["compatibility"]["json_envelope"] == "stable"
+    assert captured[0]["data"]["compatibility"]["stability"] == "current-contract"
 
 
 def test_completion_command_outputs_shell_script(monkeypatch, capsys) -> None:
@@ -411,9 +438,9 @@ def test_facade_commands_dispatch_to_canonical_tools(monkeypatch) -> None:
     monkeypatch.setattr(rdx_cli, "_print_json", lambda payload: captured.append(payload))
 
     cases = [
-        (["event", "list"], "rd.event.get_actions", {"session_id": "sess_demo"}),
+        (["event", "list"], "rd.event.get_action_tree", {"session_id": "sess_demo"}),
         (["event", "show", "--event-id", "7"], "rd.event.get_action_details", {"session_id": "sess_demo", "event_id": 7}),
-        (["pipeline", "show", "--event-id", "7"], "rd.pipeline.get_state_summary", {"session_id": "sess_demo", "event_id": 7, "context_id": "ctx-agent"}),
+        (["pipeline", "show", "--event-id", "7"], "rd.pipeline.get_state", {"session_id": "sess_demo", "event_id": 7, "context_id": "ctx-agent", "detail": "summary"}),
         (["pipeline", "section", "--event-id", "7", "--stage", "ps"], "rd.pipeline.get_stage_state", {"session_id": "sess_demo", "event_id": 7, "stage": "ps"}),
         (["shader", "source", "--event-id", "7", "--stage", "ps"], "rd.shader.get_source", {"session_id": "sess_demo", "event_id": 7, "stage": "ps"}),
         (["shader", "disasm", "--event-id", "7", "--stage", "ps"], "rd.shader.get_disassembly", {"session_id": "sess_demo", "event_id": 7, "stage": "ps"}),
@@ -448,12 +475,12 @@ def test_facade_list_tsv_requests_and_renders_projection(monkeypatch, capsys) ->
     parser = rdx_cli._build_parser()
 
     def _fake_daemon_exec(operation: str, args: dict[str, object], *, remote: bool = False, context: str = "default"):  # type: ignore[no-untyped-def]
-        assert operation == "rd.event.get_actions"
+        assert operation == "rd.event.get_action_tree"
         assert args["projection"] == {"kind": "tabular", "include_tsv_text": True}
         return {
             "ok": True,
             "result_kind": operation,
-            "data": {"actions": []},
+            "data": {"root": {"children": []}, "pagination": {"offset": 0, "limit": 256}},
             "artifacts": [],
             "error": None,
             "meta": {},

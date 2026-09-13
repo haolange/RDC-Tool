@@ -683,6 +683,11 @@ def test_export_screenshot_defaults_to_swapchain_present_target(
     monkeypatch.setattr(server.server_runtime, "_event_truth_metadata", _fake_event_truth_metadata)
     monkeypatch.setattr(server.server_runtime, "_binding_name_index_for_event", lambda session_id, event_id: asyncio.sleep(0, result={}))
     monkeypatch.setattr(server.server_runtime, "_dispatch_texture", _fake_dispatch_texture)
+    monkeypatch.setattr(
+        server.server_runtime,
+        "_get_rd",
+        lambda: SimpleNamespace(ActionFlags=SimpleNamespace(Present=1024)),
+    )
 
     payload = json.loads(
         asyncio.run(

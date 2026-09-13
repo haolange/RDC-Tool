@@ -5,6 +5,19 @@ import pytest
 from rdx import cli as rdx_cli
 
 
+def test_unknown_call_rejected_before_daemon_execution(monkeypatch) -> None:
+    import argparse
+    import asyncio
+
+    captured = []
+    monkeypatch.setattr(rdx_cli, "_print_json", captured.append)
+    monkeypatch.setattr(rdx_cli, "_daemon_exec", lambda *a, **kw: pytest.fail("Unknown operation reached daemon"))
+    result = asyncio.run(rdx_cli._cmd_call(argparse.Namespace(operation="rd.resource.rename")))
+    assert result != 0
+    assert captured[0]["error"]["code"] == "operation_not_found"
+    assert captured[0]["ok"] is False
+
+
 def test_load_call_args_accepts_args_json_object() -> None:
     payload = rdx_cli._load_call_args(args_json='{"session_id":"sess-001","event_id":7}')
     assert payload == {"session_id": "sess-001", "event_id": 7}

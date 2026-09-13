@@ -102,13 +102,14 @@ def test_context_lifecycle_tools_do_not_expose_pre_ga_coordination_fields() -> N
 
     selected = asyncio.run(
         server.dispatch_operation(
-            "rd.session.select_context",
-            {"target_context_id": "ctx-alpha"},
+            "rd.session.get_context",
+            {},
             transport="test",
+            context_id="ctx-alpha",
         )
     )
     assert selected["ok"] is True
-    assert selected["data"]["selected_context_id"] == "ctx-alpha"
+    assert selected["data"]["context_id"] == "ctx-alpha"
     assert selected["data"]["notes"] == "alpha-notes"
     assert PRE_GA_CONTEXT_FIELDS.isdisjoint(selected["data"])
 

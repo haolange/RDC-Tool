@@ -1,6 +1,6 @@
 ﻿# rdx-tools
 
-`rdx-tools` is a CLI-only RenderDoc `.rdc` runtime package for Windows x64 local replay plus remote Android replay. It exposes 196 JSON-first `rd.*` tools through the `rdx` command.
+`rdx-tools` is a CLI-only RenderDoc `.rdc` runtime package for Windows x64 local replay plus remote Android replay. The current interface exposes JSON-first `rd.*` operations through the `rdx` command; `rdx tools list` derives the available set from the operation definitions.
 
 ## Entry Points
 
@@ -9,6 +9,7 @@ rdx --version
 rdx version --json
 rdx --json doctor
 rdx tools list --json
+rdx tools describe rd.pipeline.get_state --json
 rdx context status --json
 rdx capture open --file "C:\path\capture.rdc" --frame-index 0
 rdx context update --key notes --value "triaged" --json
@@ -34,7 +35,7 @@ bash scripts/smoke_cli.sh
 bash scripts/smoke_cli.sh --rdc "C:/path/sample.rdc" --context cli-smoke
 ```
 
-The smoke script calls `bin/rdx` directly for `doctor`, `tools list`, `tools search`, and, when `--rdc` is passed, the daemon-backed capture chain. The repository includes small public `.rdc` fixtures for tests only; release packages exclude them. Full smoke can pass an explicit local or remote capture path. The script writes the same live output to `intermediate/logs/smoke_cli.log`.
+The smoke script calls `bin/rdx` directly for `doctor`, lightweight discovery, and, when `--rdc` is passed, the daemon-backed capture chain. The repository includes small public `.rdc` fixtures for tests only; release packages exclude them. Full smoke can pass an explicit local or remote capture path. By default the script writes below `intermediate/logs`; set `RDX_INTERMEDIATE_ROOT` to isolate a run under one owned temporary root.
 
 ## Install
 
@@ -58,6 +59,7 @@ Use `rdx context status` to read context state and `rdx context update` to updat
 - [Documentation governance](docs/doc-governance.md)
 - [Tools](docs/tools.md)
 - [Tool reference](docs/tool-reference.md)
+- [Tool interface convergence](docs/tool-interface-upgrade.md)
 - [rdx-native agent playbook](docs/rdx-native-agent-playbook.md)
 - [Fixture strategy](docs/fixture-strategy.md)
 - [Scripts](scripts/README.md)

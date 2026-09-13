@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Awaitable, Callable, Dict, List
 
 from rdx import server_runtime
+from rdx.runtime_catalog import validate_operation_arguments
 from rdx.core.operation_registry import OperationRegistry
 from rdx.handlers import (
     buffer,
@@ -140,6 +141,10 @@ def build_operation_registry() -> OperationRegistry:
             continue
 
         async def _handler(args: Dict[str, Any], env: Dict[str, Any], *, _tool_name: str = tool_name, _action: str = action, _domain_handler=domain_handler) -> Any:
+            try:
+                validate_operation_arguments(_tool_name, args)
+            except ValueError as exc:
+                return {"success": False, "error_message": str(exc), "code": "validation_error", "category": "validation"}
             preflight = _enforce_prerequisites(_tool_name, args)
             if preflight is not None:
                 return preflight

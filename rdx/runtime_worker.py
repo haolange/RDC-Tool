@@ -7,6 +7,7 @@ import asyncio
 import json
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict
 
 from rdx.io_utils import safe_json_text, safe_stream_write
@@ -51,66 +52,77 @@ def main(argv: list[str] | None = None) -> int:
         }
     )
 
-    for line in sys.stdin:
-        text = str(line).strip()
-        if not text:
-            continue
+    # Controller and proxy graphics state require one persistent replay thread.
+    # Closing a per-request asyncio.run executor invalidates that native context.
+    with asyncio.Runner() as runner:
+        runner.get_loop().set_default_executor(ThreadPoolExecutor(max_workers=1, thread_name_prefix="rdx-replay"))
+        shutdown_complete = False
         try:
-            request = json.loads(text)
-        except Exception as exc:  # noqa: BLE001
-            _emit({"id": "", "ok": False, "error": {"message": f"invalid request: {exc}"}})
-            continue
+            for line in sys.stdin:
+                text = str(line).strip()
+                if not text:
+                    continue
+                try:
+                    request = json.loads(text)
+                except Exception as exc:  # noqa: BLE001
+                    _emit({"id": "", "ok": False, "error": {"message": f"invalid request: {exc}"}})
+                    continue
 
-        req_id = str(request.get("id") or "")
-        method = str(request.get("method") or "").strip()
-        params = request.get("params") if isinstance(request.get("params"), dict) else {}
-        try:
-            if method == "exec":
-                result = asyncio.run(
-                    server.dispatch_operation(
-                        str(params.get("operation") or ""),
-                        dict(params.get("args") or {}),
-                        transport=str(params.get("transport") or "daemon"),
-                        remote=bool(params.get("remote", False)),
-                        context_id=context_id,
-                    )
-                )
-                _emit({"id": req_id, "ok": True, "result": result})
-                continue
-            if method == "clear_context":
-                result = asyncio.run(
-                    server.dispatch_operation(
-                        "rd.core.shutdown",
-                        {},
-                        transport="daemon",
-                        remote=False,
-                        context_id=context_id,
-                    )
-                )
-                _emit({"id": req_id, "ok": True, "result": result})
-                continue
-            if method == "status":
-                _emit(
-                    {
-                        "id": req_id,
-                        "ok": True,
-                        "result": {
-                            "running": True,
-                            "pid": os.getpid(),
-                            "binaries_dir": str(os.environ.get("RDX_RUNTIME_DLL_DIR") or ""),
-                            "pymodules_dir": str(os.environ.get("RDX_RENDERDOC_PATH") or ""),
-                            "source_manifest": str(os.environ.get("RDX_WORKER_SOURCE_MANIFEST") or ""),
-                        },
-                    }
-                )
-                continue
-            if method == "shutdown":
-                asyncio.run(server.runtime_shutdown(clear_context_state=False))
-                _emit({"id": req_id, "ok": True, "result": {"stopped": True}})
-                return 0
-            _emit({"id": req_id, "ok": False, "error": {"message": f"unknown worker method: {method}"}})
-        except Exception as exc:  # noqa: BLE001
-            _emit({"id": req_id, "ok": False, "error": {"message": f"{exc.__class__.__name__}: {exc}"}})
+                req_id = str(request.get("id") or "")
+                method = str(request.get("method") or "").strip()
+                params = request.get("params") if isinstance(request.get("params"), dict) else {}
+                try:
+                    if method == "exec":
+                        result = runner.run(
+                            server.dispatch_operation(
+                                str(params.get("operation") or ""),
+                                dict(params.get("args") or {}),
+                                transport=str(params.get("transport") or "daemon"),
+                                remote=bool(params.get("remote", False)),
+                                context_id=context_id,
+                            )
+                        )
+                        _emit({"id": req_id, "ok": True, "result": result})
+                        continue
+                    if method == "clear_context":
+                        result = runner.run(
+                            server.dispatch_operation(
+                                "rd.core.shutdown",
+                                {},
+                                transport="daemon",
+                                remote=False,
+                                context_id=context_id,
+                            )
+                        )
+                        _emit({"id": req_id, "ok": True, "result": result})
+                        continue
+                    if method == "status":
+                        _emit(
+                            {
+                                "id": req_id,
+                                "ok": True,
+                                "result": {
+                                    "running": True,
+                                    "pid": os.getpid(),
+                                    "binaries_dir": str(os.environ.get("RDX_RUNTIME_DLL_DIR") or ""),
+                                    "pymodules_dir": str(os.environ.get("RDX_RENDERDOC_PATH") or ""),
+                                    "source_manifest": str(os.environ.get("RDX_WORKER_SOURCE_MANIFEST") or ""),
+                                },
+                            }
+                        )
+                        continue
+                    if method == "shutdown":
+                        runner.run(server.runtime_shutdown(clear_context_state=False))
+                        shutdown_complete = True
+                        _emit({"id": req_id, "ok": True, "result": {"stopped": True}})
+                        return 0
+                    _emit({"id": req_id, "ok": False, "error": {"message": f"unknown worker method: {method}"}})
+                except Exception as exc:  # noqa: BLE001
+                    _emit({"id": req_id, "ok": False, "error": {"message": f"{exc.__class__.__name__}: {exc}"}})
+        finally:
+            if not shutdown_complete:
+                runner.run(server.runtime_shutdown(clear_context_state=False))
+
     return 0
 
 

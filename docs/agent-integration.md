@@ -9,6 +9,7 @@ rdx --version
 rdx --json doctor
 rdx context status --json
 rdx tools search pipeline --json
+rdx tools describe rd.pipeline.get_state --json
 rdx vfs ls --path / --format tsv
 ```
 
@@ -41,5 +42,7 @@ bash scripts/smoke_cli.sh
 
 `rdx-tools` is CLI-only. Agents should integrate through shell commands and the canonical JSON envelope.
 
+CLI callers should fetch the catalog from the same configured `rdx` executable they invoke and freeze its fingerprint with the turn/session binding. Do not load a second catalog path or translate removed names. Use `tools list --namespace` for an exact domain; free-text search intentionally returns related cross-domain matches.
 
-The generated reader-facing tool list is [Tool reference](tool-reference.md). The task-level SOP is [rdx-native agent playbook](rdx-native-agent-playbook.md).
+
+The generated reader-facing tool list is [Tool reference](tool-reference.md). Migration destinations are in [Tool interface convergence](tool-interface-upgrade.md). The task-level SOP is [rdx-native agent playbook](rdx-native-agent-playbook.md).

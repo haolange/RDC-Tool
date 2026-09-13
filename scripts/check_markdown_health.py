@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import re
 import sys
 from pathlib import Path
@@ -11,6 +10,7 @@ if str(SCRIPT_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPT_ROOT))
 
 from scripts._shared import tools_root
+from rdx.runtime_catalog import catalog_payload
 
 
 RISKY_PATTERNS = (
@@ -76,7 +76,7 @@ REQUIRED_NAV_LINKS = {
 LOCAL_LINK_RE = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
 PLACEHOLDER_RE = re.compile(r"\?{4,}")
 TOOL_COUNT_RE = re.compile(r"(\d+)\s*(?:[\u4e2a]\s*)?`rd\.\*`\s*tools")
-CONTRACT_COUNT_RE = re.compile(r"196\s+tools contract")
+CONTRACT_COUNT_RE = re.compile(r"\d+\s+tools contract")
 
 
 def tools_root_path() -> Path:
@@ -139,8 +139,8 @@ def scan_file(root: Path, path: Path) -> tuple[list[str], set[str]]:
 
 
 def _load_catalog(root: Path) -> dict:
-    path = root / "spec" / "tool_catalog.json"
-    return json.loads(path.read_text(encoding="utf-8"))
+    del root
+    return catalog_payload()
 
 
 def _read_text(root: Path, rel: str) -> str:
@@ -154,9 +154,7 @@ def _check_count_consistency(root: Path, issues: list[str], tool_count: int) -> 
             if int(match.group(1)) != tool_count:
                 issues.append(f"{rel}: documented tool count `{match.group(1)}` does not match catalog tool_count `{tool_count}`")
         if CONTRACT_COUNT_RE.search(text):
-            issues.append(f"{rel}: outdated fixed-count wording `196 tools contract`")
-        if "??????? 196" in text or "?? 196 ?" in text:
-            issues.append(f"{rel}: outdated fixed-count wording still present")
+            issues.append(f"{rel}: fixed-count contract wording must come from generated catalog evidence")
 
 
 def _check_session_tool_mentions(root: Path, issues: list[str], tool_names: set[str]) -> None:

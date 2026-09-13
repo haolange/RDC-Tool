@@ -29,7 +29,20 @@ Embedded replay acceptance additionally calls `rd.session.get_replay_events`,
 then `rd.session.observe` with a fresh absolute PNG path and `final_output: true`,
 and again with a visibly different event. Check requested/applied/image EIDs,
 PNG dimensions and failure diagnostics independently from device presentation.
+Navigate with real IDs from the complete replay index, query one bounded action
+subtree, close the owning replay, and reopen it once. Reuse the established
+remote connection and the already confirmed transfer result instead of uploading
+the same capture repeatedly. Put smoke logs and small observation images under
+`RDX_INTERMEDIATE_ROOT`; remove them after the recorded acceptance result is saved.
 The current bundled client binding cannot confirm Android screen presentation;
-record `remote_display.status=unsupported` as an external helper/API acceptance
-blocker even if remote open and PNG export succeed. Do not stop or replace an
+record `remote_display.status=unsupported` as an explicit device-presentation capability
+boundary even if remote open and PNG export succeed. Do not stop or replace an
 already running user-owned RenderDoc Android helper merely to obtain this proof.
+
+Existing-service smoke must record the helper PID and forwards before connect, verify connect/Ping/disconnect/reconnect, then assert that the helper and pre-existing forwards survive. If no helper exists, let normal connect start it; a controlled fixture may create an idle service to exercise borrowing. Never ask the user to clear processes or manually launch RenderDoc Command. Clean only the fixture-owned resources after the application test.
+
+Matching native client and Android service are a prerequisite after a native rebuild. Record a real protocol mismatch separately from service busy; do not retry a known incompatible handshake. Build the matching Android component with an available NDK before repeating replay acceptance. Do not replace a borrowed service without its owner releasing it.
+
+Repeat-observation acceptance must include a valid color event, an event with no color output, and a return to the original valid event. The middle result must clear the image; the final result must perform a fresh readback with matching requested/applied/image event IDs. An old PNG or swallowed readback error is not acceptance.
+
+Include an idle interval longer than five seconds before replay navigation and repeat observation. An idle connection must remain usable; a truncated packet must still fail within the transport deadline. Verify a close/reopen uses the already verified device copy instead of uploading the capture again.

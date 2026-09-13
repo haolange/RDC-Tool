@@ -28,7 +28,11 @@ DXIL/DXBC disassembly is read-only by default. If `edit_plan.captured_source_edi
 
 ## Texture Export
 
-`rd.export.texture` uses `file_format` as the canonical parameter. The boundary alias `format` is accepted only for legacy callers and is reported in `deprecated_alias_used`. Explicit HDR/EXR/DDS requests fail closed when the runtime cannot produce that format; PNG is display-mapped output and should not be treated as HDR data evidence.
+`rd.export.texture` accepts `file_format`. The removed `format` parameter is rejected. Explicit HDR/EXR/DDS requests fail closed when the runtime cannot produce that format; PNG is display-mapped output and should not be treated as HDR data evidence.
+
+Texture statistics, histograms, and numeric differences read data in memory. An unsupported packed/compressed layout, byte-count mismatch, invalid subresource, non-finite input, invalid histogram range, or backend read failure returns a structured failure. Empty or zero output is not used as a substitute for failed acquisition. Use `rd.texture.get_data` or an export operation only when a persistent artifact is required.
+
+If an operation returns `not_found` after upgrading, run `rdx tools search <term>` and `rdx tools describe <name>`. The current runtime does not execute old names. See [tool-interface-upgrade.md](tool-interface-upgrade.md) for the documented destination, then update the caller.
 
 ## Preview
 
@@ -39,3 +43,15 @@ preview 看着不全、留黑边或像是畸形：检查 `preview.display` and c
 ## Facade TSV
 
 `--format tsv` is supported only by list/projection commands such as `vfs ls`, `event list`, and `resource list`. Use JSON for nested state such as `pipeline show`, `shader disasm`, `export screenshot`, `pixel history`, and resource details.
+
+## Android connection recovery
+
+RenderDoc Command is normally started by connect; users need not launch it manually or clear all processes. Existing helper processes are reused. ADB query failure, missing socket, ambiguous sockets and actual native busy/incompatible results are separate failures. The requested socket wins when present; otherwise a unique candidate is required. Retry after readiness/network correction; do not force-stop user services or replace their port mappings. A successful PNG does not establish Android screen presentation.
+
+A real remote busy status during open_replay can also result from attempting a second connection while the owning runtime already holds one; replay must reuse that handle. SaveTexture DataNotAvailable after event navigation is a failed readback, not successful observation: preserve requested/applied EIDs, leave image identity absent and report the native failure.
+
+## Restored query failures
+
+Missing embedded thumbnail, missing initialization provenance, unsupported GPU timestamp coverage and readback failure are different outcomes. Never substitute a replay image for a thumbnail, current bytes for initial bytes, or event-duration sums for full replay time. A failed replay restoration requires closing and reopening the isolated session. Native client/server handshake incompatibility requires matching runtime components; helper process presence alone does not prove occupation.
+
+If SaveTexture reports DataNotAvailable after an idle period, inspect the first native transport failure. A server-side five-second idle receive timeout can close the connection before readback; the later empty-data error is secondary. Use the matching rebuilt helper with idle packet polling. Do not mask this with stale images, forced user-service restarts, or unlimited retries. Native SaveTexture diagnostics retain Message() details including the failed mip/slice/sample.

@@ -294,8 +294,10 @@ pre { background: var(--bg-tertiary); border: 1px solid var(--border-color); bor
       {% endfor %}
       <h3 style="margin-top: 12px;">Viewport / Topology</h3>
       <div class="kv-row"><span class="kv-key">Topology</span><span class="kv-val">{{ pipeline.topology }}</span></div>
-      {% for k, v in pipeline.viewport.items() %}
+      {% for viewport in pipeline.viewports %}
+      {% for k, v in viewport.items() %}
       <div class="kv-row"><span class="kv-key">{{ k }}</span><span class="kv-val">{{ v }}</span></div>
+      {% endfor %}
       {% endfor %}
       {% else %}
       <div class="empty-state">No pipeline snapshot available</div>

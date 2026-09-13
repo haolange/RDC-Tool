@@ -1,30 +1,53 @@
 ﻿# AGENTS.md
 
-Scope: this file governs the `rdx-tools` CLI project (`rdx/`, `cli/`, `docs/`, `scripts/`, `tests/`, `spec/`).
+## 范围与权威
 
-`rdx-tools` is CLI-only. Use `rdx` as the public user command; keep `rdx.bat`, `bin/rdx`, and `python cli/run_cli.py` as package launcher files.
+本文件约束 `rdx-tools` CLI 工程（`rdx/`、`cli/`、`docs/`、`scripts/`、`tests/`、`spec/`）。本库是 CLI-only；公开命令为 `rdx`，`rdx.bat`、`bin/rdx`、`python cli/run_cli.py` 是包启动文件。
 
-## Contract consistency
+- 先核对当前工作区改动、实际调用链、公开契约和已有证据，再实现；不覆盖其他工作，不重复已完成工作。若代码、文档、catalog 或测试不一致，结合用户要求与真实行为判断错误方并同步修正，不能只因文档写错就修改运行语义。
+- 用户当前明确要求优先；本文件维护长期工程规则，任务状态与验收事实放现有 Task 和主题文档。不要把临时禁令、机器路径、PID、某轮延期或进度流水账写成永久规则。
+- 按主题读取并同步文档：公共契约 `docs/public-contract.md`；会话生命周期 `docs/session-model.md`；Agent 工作流 `docs/agent-model.md`；故障恢复 `docs/troubleshooting.md`；文档生成 `docs/doc-governance.md`；Android 验证 `docs/android-remote-cli-smoke-prompt.md`。
 
-If CLI docs, catalog, tests, or implementation disagree, use the public contract, requested behavior, and observed evidence to identify the incorrect side. Correct it and synchronize affected references; a documentation error alone does not require a runtime change.
+## 实现与收敛
 
-Consult and update documentation according to the affected topic:
+- 按本库架构、命名和代码习惯完成实际调用链；完整交付不等于最少 diff，也不能降级为样例、包装空壳或仅有方案。每项修改必须服务于任务或直接耦合点，停止无关重构。
+- 只维护一套当前实现；替代路径时同步处理旧入口、配置、类型、内部调用、测试和文档，不保留 legacy/deprecated alias、转发兼容层、双写双读或无依据 fallback。确实无法直接迁移时，先说明具体约束并按用户明确决定执行，不能自行留下债务。
+- 按稳定职责命名，不以 V1/V2、new/old、final/final2 建立长期并行体系。包发布号仅作安装信息，不能代替接口能力校验；仍有实际解析用途的协议/存储格式标识须核对调用契约后处理，禁止凭名字删除。
+- 不为将来可能使用而增加抽象、配置和扩展点。抽象须能减少重复、降低错误或符合既有设计；工具价值由真实独立能力决定，不以数量多为目标。
+- `rdx/operation_definitions.py` 是操作名称、参数、结果、前置条件及影响声明的唯一真源；通过生成器同步注册、catalog、CLI discovery 和 `docs/tool-reference.md`，不恢复提取输入、metadata overlay 或手工副本。数量从实际集合计算，调用方校验真实定义与指纹。
+- 生命周期、身份和安全约束由代码保证；专业流程、报告组织和判断方法交给 Skill。Skill 提供知识，不能替代运行时参数、权限和前置条件校验。
+- CLI facade、VFS、独立 preview 与内嵌消费者复用同一套有效实现。管线 facade/VFS 使用 `rd.pipeline.get_state`，事件浏览使用 `rd.event.get_action_tree`；应用完整轻量事件索引使用 `rd.session.get_replay_events`。
+- 合法空结果、读取失败和不支持必须区分；不以空值、固定零值或假成功掩盖失败，观察事实与推断分别表达。
+- 时间点读取与回放测量必须在串行边界内验证并恢复事件及 replacement 身份；取消也须等待恢复完成，恢复失败隔离会话。初始内容以捕获保存的来源证明，整帧时间以完整 GPU 测量范围证明，不使用当前字节、事件耗时之和或 CPU 调用耗时替代。
 
-- Session state and lifecycle: docs/session-model.md.
-- Agent-facing workflows: docs/agent-model.md.
-- Failure diagnostics and recovery: docs/troubleshooting.md.
-- Documentation generation and publishing rules: docs/doc-governance.md.
-- Android remote smoke: docs/android-remote-cli-smoke-prompt.md.
+## 执行与收口
 
-Remote self-tests should cover `rd.remote.connect`, `rd.remote.ping`, and `rd.capture.open_replay`.
+- 默认在当前分支工作；没有明确要求且不处于已确认的 Worktree 模式，不创建或切换分支。提交、推送和发布按用户授权执行，不能把修改授权自动扩大为发布授权。
+- 复杂任务沿用已批准 Plan 和持久 Task 清单，记录依赖、状态、修改范围、验证结果及阻塞原因；使用 `待执行 / 执行中 / 待验证 / 通过 / 阻塞`，代码完成不能直接标记通过。开始和交接时压缩已完成、剩余、阻塞及运行中任务，不另建重复报告。
+- 已授权工作主动推进到实现、文档、验证与清理完成。影响数据、接口或权限的未决歧义应及早集中问清；不要重问已有决定。可逆选择说明默认依据、风险与回滚方式后继续。
+- 用户要求收口时冻结范围，沿最短依赖链完成原计划剩余项；只有明确验收失败、可复现错误或实际权限漏洞才扩大修复，每次失败先修直接原因，不以假设性风险开启新审查。
+- 如使用多 Agent，分配明确、互不重复的交付与验证边界；停止交叉探索、重复检查、空等和频繁切换。是否新增 Agent 遵循当前授权，不把某轮安排固定成永久禁令。
+- 用具体行为解释问题和进度：谁在做什么、还差什么、完成条件、实际阻塞和下一步。不要只报 Task 编号、术语或重复历史过程；更新任务状态，而非只追加日志。
 
-## preview / 几何观察面改动
+## 验证与证据
 
-涉及 preview / 几何观察面改动时，必须同步检查 `rd.session.open_preview`、`preview.display`、`preview_geometry_smoke.py` 与 CLI 文档。
+- 执行受影响测试、契约/生成文档检查；跨模块改动完成所需完整门禁和真实链路。不得删除测试、弱化断言或跳过必需验收来制造通过。
+- 未受新改动影响的绿色证据直接沿用；后续修改只复验受影响范围。旧绿色不能证明新行为，已完成的真实链路不无故重复演示。
+- 构建、测试、真实回放、窗口可见、设备呈现、模型效果分别记录；本地 PNG 成功不能证明 Android 呈现成功。确定性测试不能冒充真实模型成功。
+- 阻塞记录具体错误、触发条件、受影响验收和解除条件；核对错误是否由本库逻辑引起，不能凭错误名宣称外部占用。缺少外部条件时完成其余工作，不反复空转；用户明确延期的验收记为后续范围，不虚标通过或继续当成本轮阻塞。
+- 最终交付说明实际变更、验证结果、未验证边界与清理情况；正式证据保留最小充分集，不重复堆积报告。
 
-Complete the requested changes and relevant validation before delivery; continue past the first implementation until those checks pass, or report a concrete blocker with evidence.
+## 低落盘与资源生命周期
 
-Window-free embedded observation (`rd.session.observe`) must preserve atomic
-context apply/export and truthful device-presentation status. Keep its catalog,
-regressions and session-model contract synchronized; do not route it through the
-standalone preview-window lifecycle.
+- 默认内存或 stdout；纹理统计、直方图和差异复用读回数据，只有显式 `get_data`、导出或证据持久化请求才写盘。测试需要真实文件语义时使用小文件。
+- 测试临时输出集中到可追踪的根目录，控制图像数量、尺寸和生命周期。不无故复制大 RDC、重复上传/安装依赖、生成整套发行包、录像或截图。
+- 谁创建谁收口：成功、失败和取消都释放自有文件、连接、转发、窗口和进程。从生命周期修正反复残留，清理后不重建无用途空壳；隐藏目录和系统临时位置也纳入检查，不能只看 git status。
+- 清理前核对绝对路径、归属、Git 状态、活动进程和链接边界；不沿 junction/symlink 删除其他目录，不按进程名批量停止，不回收活进程锁。保留真实输入、会话、历史实验、正式证据、当前依赖及尚需恢复的备份。
+- 软件应处理用户正常环境，不要求用户每次清空进程。Android 应区分连接已有 helper 与启动自有 helper；进程存在不等于服务被占用。复用服务时不得重装、改配置或停止用户 helper；退出仅清理自身资源，真实占用或未就绪应给出准确、可恢复的错误。
+- 验证完成后复查残留、自有进程和正常启动状态；清理脚本与日志也需收口。磁盘清理、进程退出和可用性是不同完成条件，不混用证据。
+
+## preview 与 Android
+
+- preview / 几何观察面改动须同步检查 `rd.session.open_preview`、`preview.display`、`preview_geometry_smoke.py` 与 CLI 文档。保留独立 CLI preview 的有效窗口能力。
+- 无窗口内嵌观察 `rd.session.observe` 保持 context 应用与图像导出的原子性及真实设备呈现状态；同步 catalog、回归与 session-model，不绕入独立 preview 窗口生命周期。
+- Android 远端验证覆盖 `rd.remote.connect`、`rd.remote.ping`、`rd.capture.open_replay` 及受影响观察链；复用已确认的传输和回放，设备呈现无真实确认时保持 `unsupported`。

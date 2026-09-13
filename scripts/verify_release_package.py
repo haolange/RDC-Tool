@@ -215,9 +215,18 @@ def _verify_tools_catalog(root: Path) -> None:
     tools = data.get("tools")
     if not isinstance(tools, list):
         raise RuntimeError("tools list returned no tools array")
-    if int(data.get("tool_count") or len(tools)) != 194:
-        raise RuntimeError(f"expected 194 active tools, got {data.get('tool_count')!r}")
+    catalog_path = root / "spec" / "tool_catalog.json"
+    catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+    expected_tools = catalog.get("tools")
+    expected_count = int(catalog.get("tool_count") or len(expected_tools or []))
+    if int(data.get("tool_count") or len(tools)) != expected_count:
+        raise RuntimeError(f"tools list count differs from packaged catalog: {data.get('tool_count')!r} != {expected_count}")
     names = {str(item.get("name") or "") for item in tools if isinstance(item, dict)}
+    expected_names = {str(item.get("name") or "") for item in expected_tools or [] if isinstance(item, dict)}
+    if names != expected_names:
+        raise RuntimeError(
+            f"tools list differs from packaged catalog: missing={sorted(expected_names - names)[:5]} extra={sorted(names - expected_names)[:5]}"
+        )
     leaked = sorted(REMOVED_CATALOG_TOOLS & names)
     if leaked:
         raise RuntimeError(f"removed aliases still listed: {leaked}")

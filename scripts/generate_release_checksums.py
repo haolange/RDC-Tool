@@ -5,7 +5,14 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import sys
 from pathlib import Path
+
+SCRIPT_ROOT = Path(__file__).resolve().parents[1]
+if str(SCRIPT_ROOT) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_ROOT))
+
+from rdx.runtime_paths import logs_dir
 
 
 def _sha256(path: Path) -> str:
@@ -22,7 +29,7 @@ def _sha256(path: Path) -> str:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Generate SHA256 checksums for release assets")
     parser.add_argument("paths", nargs="+", help="Files or directories to include")
-    parser.add_argument("--out", default="intermediate/logs/release_checksums.sha256")
+    parser.add_argument("--out", default=str(logs_dir() / "release_checksums.sha256"))
     args = parser.parse_args(argv)
 
     rows: list[tuple[str, str]] = []

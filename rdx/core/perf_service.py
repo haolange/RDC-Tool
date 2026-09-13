@@ -24,6 +24,44 @@ from rdx.models import PerfResult, CounterSample, CounterSummary
 
 logger = logging.getLogger("rdx.core.perf_service")
 
+
+async def measure_frame_gpu(controller: Any, rd: Any, *, samples: int, warmup: int) -> Dict[str, Any]:
+    """Read the native whole-replay counter; never aggregate event durations."""
+    if not 1 <= samples <= 16 or not 0 <= warmup <= 4:
+        raise ValueError("Frame measurement requires 1..16 samples and 0..4 warmup runs")
+    counter = getattr(rd.GPUCounter, "FrameGPUDuration", None)
+    if counter is None:
+        raise RuntimeError("Native runtime lacks the whole-replay GPU counter; update the matching runtime")
+    available = await asyncio.to_thread(controller.EnumerateCounters)
+    if counter not in available:
+        raise RuntimeError("Whole-replay GPU timestamps unavailable for this backend or queue configuration")
+    desc = await asyncio.to_thread(controller.DescribeCounter, counter)
+    if int(desc.unit) != _COUNTER_UNIT_SECONDS or int(desc.resultType) != _COMP_TYPE_FLOAT or int(desc.resultByteWidth) != 8:
+        raise ValueError("Whole-replay counter has an invalid unit or result format")
+    pending = list(await asyncio.to_thread(controller.GetRootActions))
+    events = []
+    while pending:
+        action = pending.pop()
+        events.append(int(action.eventId))
+        pending.extend(action.children)
+    if not events:
+        raise ValueError("Capture has no replay event range")
+    values = []
+    for index in range(samples + warmup):
+        rows = list(await asyncio.to_thread(controller.FetchCounters, [counter]))
+        if len(rows) != 1 or rows[0].counter != counter or int(rows[0].eventId) != 0:
+            raise RuntimeError("Whole-replay GPU timestamp query failed or returned an incomplete sample")
+        value = _extract_counter_value(rows[0], desc)
+        if value <= 0:
+            raise ValueError("Whole-replay GPU duration must be positive")
+        if index >= warmup:
+            values.append(value)
+    return {"method": "gpu_timestamp_full_replay", "unit": "seconds", "valid": True,
+            "scope": "single_queue_complete_replay", "range": {"first_event_id": 1, "last_event_id": max(events)},
+            "samples": values, "sampling": {"samples": samples, "warmup": warmup},
+            "includes_replay_scheduling_gaps": True, "includes_initial_contents": False,
+            "original_application_frame_time": False, "counter_id": int(counter)}
+
 # ---------------------------------------------------------------------------
 # Lazy renderdoc import（延迟导入）
 # ---------------------------------------------------------------------------
@@ -62,14 +100,12 @@ def _lazy_import_renderdoc() -> Any:
 # Helpers（辅助）
 # ---------------------------------------------------------------------------
 
-# 将 ``CounterDescription.resultType`` enum 名称映射到
-# ``CounterValue`` 中应读取的属性。
-_RESULT_TYPE_ATTR: Dict[str, str] = {
-    "Float":  "f",
-    "UInt32": "u32",
-    "UInt64": "u64",
-    "Double": "d",
-}
+# RenderDoc's public enum values. The Python binding stringifies these enums as
+# their numeric value on current builds, so result decoding must use ``int``
+# rather than matching display names.
+_COMP_TYPE_FLOAT = 1
+_COMP_TYPE_UINT = 4
+_COUNTER_UNIT_SECONDS = 1
 
 # 常见 GPU-duration counter 名称（按优先级检查）。
 _GPU_DURATION_NAMES: Tuple[str, ...] = (
@@ -99,31 +135,39 @@ def _extract_counter_value(result: Any, desc: Any) -> float:
         提取并转换为 Python float 的数值。
     """
     value_obj = result.value
-    result_type_name = str(desc.resultType)
+    try:
+        result_type = int(desc.resultType)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Unsupported GPU counter result type: {desc.resultType!r}") from exc
+    byte_width = int(getattr(desc, "resultByteWidth", 0) or 0)
+    if result_type == _COMP_TYPE_FLOAT and byte_width in {4, 8}:
+        accessor = "f" if byte_width == 4 else "d"
+    elif result_type == _COMP_TYPE_UINT and byte_width in {4, 8}:
+        accessor = "u32" if byte_width == 4 else "u64"
+    else:
+        raise ValueError(
+            f"Unsupported GPU counter result type/width: {result_type}/{byte_width}"
+        )
+    if hasattr(value_obj, accessor):
+        value = float(getattr(value_obj, accessor))
+        if not math.isfinite(value):
+            raise ValueError("GPU counter returned a non-finite value")
+        return value
+    raise ValueError(f"GPU counter value is missing the {accessor} union member")
 
-    # 先尝试直接 enum 名称（如 "Float", "UInt32"）。
-    for type_key, attr_name in _RESULT_TYPE_ATTR.items():
-        if type_key in result_type_name:
-            raw = getattr(value_obj, attr_name, None)
-            if raw is not None:
-                return float(raw)
 
-    # 回退：遍历所有已知 accessor。
-    for attr_name in ("d", "f", "u64", "u32"):
-        raw = getattr(value_obj, attr_name, None)
-        if raw is not None:
-            try:
-                return float(raw)
-            except (TypeError, ValueError):
-                continue
-
-    logger.warning(
-        "Could not extract value for counter %s (resultType=%s); "
-        "returning 0.0",
-        getattr(desc, "name", "?"),
-        result_type_name,
-    )
-    return 0.0
+def _duration_to_microseconds(value: float, desc: Any) -> float:
+    """Convert a RenderDoc duration counter value to microseconds."""
+    try:
+        unit = int(desc.unit)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Unsupported GPU duration counter unit: {desc.unit!r}") from exc
+    if unit != _COUNTER_UNIT_SECONDS:
+        raise ValueError(f"Unsupported GPU duration counter unit: {unit}")
+    duration_us = value * 1_000_000.0
+    if not math.isfinite(duration_us):
+        raise ValueError("GPU duration conversion produced a non-finite value")
+    return duration_us
 
 
 def _compute_p95(values: List[float]) -> float:
@@ -215,12 +259,12 @@ class PerfService:
         Returns
         -------
         list[dict]
-            counter 描述 dict 列表；若 renderdoc 不可用或枚举失败则返回空列表。
+            Counter descriptions. Runtime and driver read failures raise errors.
         """
         rd = _lazy_import_renderdoc()
         if rd is None:
             logger.warning("renderdoc unavailable; returning empty counter list")
-            return []
+            raise RuntimeError("GPU counter query unavailable")
 
         try:
             controller = session_manager.get_controller(session_id)
@@ -229,13 +273,13 @@ class PerfService:
                 "Failed to get controller for session %s: %s",
                 session_id, exc,
             )
-            return []
+            raise RuntimeError("GPU counter read failed") from exc
 
         try:
             counter_enums = await self._offload(controller.EnumerateCounters)
         except Exception as exc:
             logger.error("EnumerateCounters failed: %s", exc)
-            return []
+            raise RuntimeError("GPU counter read failed") from exc
 
         results: List[Dict[str, Any]] = []
         for counter in counter_enums:
@@ -255,7 +299,7 @@ class PerfService:
                     "DescribeCounter failed for counter %s: %s",
                     counter, exc,
                 )
-                continue
+                raise RuntimeError("GPU counter read failed") from exc
 
         logger.debug(
             "Enumerated %d counters for session %s",
@@ -298,7 +342,7 @@ class PerfService:
         rd = _lazy_import_renderdoc()
         if rd is None:
             logger.warning("renderdoc unavailable; returning empty PerfResult")
-            return PerfResult()
+            raise RuntimeError("GPU counter sampling unavailable")
 
         try:
             controller = session_manager.get_controller(session_id)
@@ -307,9 +351,11 @@ class PerfService:
                 "Failed to get controller for session %s: %s",
                 session_id, exc,
             )
-            return PerfResult()
+            raise RuntimeError("GPU counter read failed") from exc
 
         lo, hi = event_range
+        if lo < 0 or hi < lo:
+            raise ValueError("Invalid counter event range")
 
         # -- 从整数 ID 解析 GPUCounter enums ------------------------------
         counter_list: List[Any] = []
@@ -320,21 +366,17 @@ class PerfService:
             }
         except Exception as exc:
             logger.error("EnumerateCounters failed: %s", exc)
-            return PerfResult()
+            raise RuntimeError("GPU counter read failed") from exc
 
         for cid in counter_ids:
             if cid in available_map:
                 counter_list.append(available_map[cid])
             else:
-                logger.warning(
-                    "Requested counter_id %d not available on this GPU; "
-                    "skipping",
-                    cid,
-                )
+                raise ValueError(f"Requested counter_id {cid} is unavailable on this GPU")
 
         if not counter_list:
             logger.warning("No valid counters to sample")
-            return PerfResult()
+            raise RuntimeError("GPU counter sampling unavailable")
 
         # -- 构建 counter description 查找表 ------------------------------
         desc_map: Dict[int, Any] = {}
@@ -358,7 +400,7 @@ class PerfService:
             )
         except Exception as exc:
             logger.error("FetchCounters failed: %s", exc)
-            return PerfResult()
+            raise RuntimeError("GPU counter read failed") from exc
 
         # -- 过滤到 event 范围并构建 samples -------------------------------
         samples: List[CounterSample] = []
@@ -479,13 +521,14 @@ class PerfService:
             * ``duration_us`` (``float``) -- GPU duration in microseconds.
             * ``rank`` (``int``) -- 1-based rank (1 = slowest).
 
-            若 GPU duration counter 不可用或 renderdoc module 无法加载，
-            则返回空列表。
+            Unavailable counters or a missing runtime raise errors. A successful empty read returns an empty list.
         """
         rd = _lazy_import_renderdoc()
         if rd is None:
             logger.warning("renderdoc unavailable; cannot detect hotspots")
-            return []
+            raise RuntimeError("GPU counter query unavailable")
+        if top_k < 0:
+            raise ValueError("top_k must be non-negative")
 
         try:
             controller = session_manager.get_controller(session_id)
@@ -494,14 +537,14 @@ class PerfService:
                 "Failed to get controller for session %s: %s",
                 session_id, exc,
             )
-            return []
+            raise RuntimeError("GPU counter read failed") from exc
 
         # -- 查找 GPU-duration counter ------------------------------------
         try:
             all_counters = await self._offload(controller.EnumerateCounters)
         except Exception as exc:
             logger.error("EnumerateCounters failed: %s", exc)
-            return []
+            raise RuntimeError("GPU counter read failed") from exc
 
         duration_counter: Any = None
         duration_desc: Any = None
@@ -523,14 +566,14 @@ class PerfService:
                     duration_desc = desc
                     break
             except Exception:
-                continue
+                raise RuntimeError("GPU counter read failed") from None
 
         if duration_counter is None:
             logger.warning(
                 "No GPU duration counter found among %d available counters",
                 len(all_counters),
             )
-            return []
+            raise RuntimeError("GPU counter query unavailable")
 
         # -- 抓取所有 events 的 duration counter ---------------------------
         try:
@@ -539,14 +582,14 @@ class PerfService:
             )
         except Exception as exc:
             logger.error("FetchCounters for GPU duration failed: %s", exc)
-            return []
+            raise RuntimeError("GPU counter read failed") from exc
 
         # -- 提取 (event_id, duration) 对 ---------------------------------
         event_durations: List[Tuple[int, float]] = []
         for r in raw_results:
             eid = int(r.eventId)
             value = _extract_counter_value(r, duration_desc)
-            event_durations.append((eid, value))
+            event_durations.append((eid, _duration_to_microseconds(value, duration_desc)))
 
         if not event_durations:
             logger.info("No duration samples returned; capture may be empty")
@@ -554,7 +597,7 @@ class PerfService:
 
         # -- 递减排序并取 top-K -------------------------------------------
         event_durations.sort(key=lambda p: p[1], reverse=True)
-        top = event_durations[:max(1, top_k)]
+        top = event_durations if top_k == 0 else event_durations[:top_k]
 
         hotspots: List[Dict[str, Any]] = []
         for rank, (eid, dur) in enumerate(top, start=1):

@@ -230,12 +230,18 @@ class ShaderInfo(BaseModel):
 
 
 class ResourceBindingEntry(BaseModel):
+    stage: str = ""
+    array_index: int = 0
+    binding_source: str = "shader_reflection"
     set_or_space: int = 0
     binding: int = 0
     resource_id: str = ""
     resource_name: str = ""
     type: str = ""  # SRV, UAV, CBV, sampler, etc.
     format: str = ""
+    descriptor: Dict[str, Any] = Field(default_factory=dict)
+    sampler: Dict[str, Any] = Field(default_factory=dict)
+    access: Dict[str, Any] = Field(default_factory=dict)
 
 
 class BlendState(BaseModel):
@@ -246,6 +252,9 @@ class BlendState(BaseModel):
     src_alpha: str = ""
     dst_alpha: str = ""
     alpha_op: str = ""
+    write_mask: Optional[int] = None
+    logic_op: Optional[str] = None
+    logic_op_enabled: Optional[bool] = None
 
 
 class DepthStencilState(BaseModel):
@@ -253,6 +262,9 @@ class DepthStencilState(BaseModel):
     depth_write_enabled: bool = False
     depth_func: str = ""
     stencil_enabled: bool = False
+    front: Dict[str, Any] = Field(default_factory=dict)
+    back: Dict[str, Any] = Field(default_factory=dict)
+    details: Dict[str, Any] = Field(default_factory=dict)
 
 
 class RenderTargetInfo(BaseModel):
@@ -261,6 +273,8 @@ class RenderTargetInfo(BaseModel):
     width: int = 0
     height: int = 0
     is_srgb: bool = False
+    slot: int = 0
+    descriptor: Dict[str, Any] = Field(default_factory=dict)
 
 
 class PipelineSnapshot(BaseModel):
@@ -272,8 +286,16 @@ class PipelineSnapshot(BaseModel):
     blend_states: List[BlendState] = Field(default_factory=list)
     depth_stencil: DepthStencilState = Field(default_factory=DepthStencilState)
     bindings: List[ResourceBindingEntry] = Field(default_factory=list)
-    viewport: Dict[str, float] = Field(default_factory=dict)
-    scissor: Dict[str, int] = Field(default_factory=dict)
+    viewports: List[Dict[str, Any]] = Field(default_factory=list)
+    scissors: List[Dict[str, Any]] = Field(default_factory=list)
+    blend_options: Dict[str, Any] = Field(default_factory=dict)
+    rasterizer: Dict[str, Any] = Field(default_factory=dict)
+    multisample: Dict[str, Any] = Field(default_factory=dict)
+    push_constants: Dict[str, Any] = Field(default_factory=dict)
+    dynamic_state: Dict[str, Any] = Field(default_factory=dict)
+    root_signature: Dict[str, Any] = Field(default_factory=dict)
+    descriptor_heaps: Dict[str, Any] = Field(default_factory=dict)
+    resource_states: Dict[str, Any] = Field(default_factory=dict)
     topology: str = ""
     vertex_inputs: List[Dict[str, Any]] = Field(default_factory=list)
 

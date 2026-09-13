@@ -70,9 +70,10 @@ done
 
 TOOLS_ROOT="$(cd "$TOOLS_ROOT" && pwd)"
 RDX="$TOOLS_ROOT/bin/rdx"
-LOG_FILE="$TOOLS_ROOT/intermediate/logs/smoke_cli.log"
-FINDINGS_FILE="$TOOLS_ROOT/intermediate/logs/tool_smoke_findings.md"
-STATE_FILE="$TOOLS_ROOT/intermediate/runtime/rdx_cli/daemon_state_${CTX}.json"
+INTERMEDIATE_ROOT="${RDX_INTERMEDIATE_ROOT:-$TOOLS_ROOT/intermediate}"
+LOG_FILE="$INTERMEDIATE_ROOT/logs/smoke_cli.log"
+FINDINGS_FILE="$INTERMEDIATE_ROOT/logs/tool_smoke_findings.md"
+STATE_FILE="$INTERMEDIATE_ROOT/runtime/rdx_cli/daemon_state_${CTX}.json"
 mkdir -p "$(dirname "$LOG_FILE")"
 : > "$LOG_FILE"
 : > "$FINDINGS_FILE"
@@ -133,7 +134,7 @@ write_findings() {
     else
       echo '- rdc_path: not provided'
     fi
-    echo "- log: \`intermediate/logs/smoke_cli.log\`"
+    echo "- log: \`$LOG_FILE\`"
     echo ''
     echo '## Commands'
     local i

@@ -156,7 +156,7 @@ def test_operation_history_and_runtime_metrics_are_exposed() -> None:
     assert metrics["data"]["recent_operations"]
 
 
-def test_tool_discovery_and_graph_surface_macro_guidance() -> None:
+def test_tool_discovery_query_and_graph_use_retained_operations() -> None:
     listed = asyncio.run(
         server.dispatch_operation(
             "rd.core.list_tools",
@@ -167,22 +167,22 @@ def test_tool_discovery_and_graph_surface_macro_guidance() -> None:
     assert listed["ok"] is True
     core_names = {tool["name"] for tool in listed["data"]["tools"]}
     assert "rd.core.get_runtime_metrics" in core_names
-    assert "rd.core.search_tools" in core_names
+    assert "rd.core.list_tools" in core_names
+    assert "rd.core.search_tools" not in core_names
     assert not any(name.startswith("rd.app.") for name in core_names)
 
     searched = asyncio.run(
         server.dispatch_operation(
-            "rd.core.search_tools",
+            "rd.core.list_tools",
             {"query": "pixel", "detail_level": "summary"},
             transport="test",
         )
     )
     assert searched["ok"] is True
-    ordered_search_names = [tool["name"] for tool in searched["data"]["tools"]]
-    search_names = set(ordered_search_names)
-    assert "rd.macro.explain_pixel" in search_names
-    assert "rd.debug.pixel_history" in search_names
-    assert ordered_search_names.index("rd.debug.pixel_history") < ordered_search_names.index("rd.macro.explain_pixel")
+    search_names = {tool["name"] for tool in searched["data"]["tools"]}
+    assert "rd.texture.get_pixel_history" in search_names
+    assert "rd.macro.explain_pixel" not in search_names
+    assert "rd.debug.pixel_history" not in search_names
     assert not any(name.startswith("rd.app.") for name in search_names)
 
     graph = asyncio.run(
@@ -193,10 +193,10 @@ def test_tool_discovery_and_graph_surface_macro_guidance() -> None:
         )
     )
     assert graph["ok"] is True
-    assert any(edge["type"] == "macro_expands_to" and edge["from"] == "rd.macro.explain_pixel" and edge["to"] == "rd.debug.pixel_history" for edge in graph["data"]["edges"])
+    assert not any(edge["type"] == "macro_expands_to" for edge in graph["data"]["edges"])
     assert not any(tool["name"].startswith("rd.app.") for tool in graph["data"]["tools"])
-    graph_names = [tool["name"] for tool in graph["data"]["tools"]]
-    assert graph_names.index("rd.debug.pixel_history") < graph_names.index("rd.macro.explain_pixel")
+    graph_names = {tool["name"] for tool in graph["data"]["tools"]}
+    assert "rd.texture.get_pixel_history" in graph_names
 
 
 def test_tool_discovery_intents_follow_export_and_analysis_boundaries() -> None:
@@ -223,7 +223,9 @@ def test_tool_discovery_intents_follow_export_and_analysis_boundaries() -> None:
     )
     assert analysis_list["ok"] is True
     analysis_names = {tool["name"] for tool in analysis_list["data"]["tools"]}
-    assert {"rd.macro.explain_pixel", "rd.debug.pixel_history", "rd.diag.scan_common_issues", "rd.texture.compute_stats"} <= analysis_names
+    assert {"rd.diag.scan_common_issues", "rd.texture.compute_stats", "rd.texture.get_pixel_history"} <= analysis_names
+    assert "rd.macro.explain_pixel" not in analysis_names
+    assert "rd.debug.pixel_history" not in analysis_names
     assert not any(name.startswith("rd.analysis.") for name in analysis_names)
 
 
@@ -238,9 +240,11 @@ def test_tool_discovery_default_priority_and_navigation_projection_hints() -> No
     assert listed["ok"] is True
     tools = listed["data"]["tools"]
     ordered_names = [tool["name"] for tool in tools]
-    assert ordered_names.index("rd.capture.open_file") < ordered_names.index("rd.macro.explain_pixel")
-    assert ordered_names.index("rd.macro.explain_pixel") < ordered_names.index("rd.session.get_context")
-    assert ordered_names.index("rd.session.get_context") < ordered_names.index("rd.vfs.ls")
+    from rdx.operation_definitions import OPERATIONS
+    assert len(ordered_names) == len(set(ordered_names)) == len(OPERATIONS)
+    assert set(ordered_names) == {item["name"] for item in OPERATIONS}
+    assert "rd.macro.find_state_change_point" in ordered_names
+    assert "rd.macro.explain_pixel" not in ordered_names
 
     vfs_list = asyncio.run(
         server.dispatch_operation(
@@ -259,7 +263,7 @@ def test_tool_discovery_default_priority_and_navigation_projection_hints() -> No
 
     browse_search = asyncio.run(
         server.dispatch_operation(
-            "rd.core.search_tools",
+            "rd.core.list_tools",
             {"query": "browse", "detail_level": "summary"},
             transport="test",
         )
@@ -269,7 +273,7 @@ def test_tool_discovery_default_priority_and_navigation_projection_hints() -> No
 
     tsv_search = asyncio.run(
         server.dispatch_operation(
-            "rd.core.search_tools",
+            "rd.core.list_tools",
             {"query": "tsv", "detail_level": "summary"},
             transport="test",
         )

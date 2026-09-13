@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from rdx import server
 
 
@@ -348,88 +350,17 @@ def test_texture_get_pixel_history_times_out(monkeypatch) -> None:
     assert payload["details"]["resolved_event_id"] == 11
 
 
-def test_macro_shader_hotfix_validate_uses_validation_target_and_metrics(monkeypatch, tmp_path) -> None:
-    export_calls: list[dict[str, object]] = []
-    texture_calls: list[dict[str, object]] = []
-    util_calls: list[dict[str, object]] = []
-
-    async def _fake_export(action: str, args: dict[str, object]) -> str:
-        export_calls.append({"action": action, **dict(args)})
-        output_path = Path(str(args["output_path"]))
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_bytes(b"png")
-        target = args.get("target") if isinstance(args.get("target"), dict) else {}
-        texture_id = str((target or {}).get("texture_id") or "ResourceId::fallback")
-        return json.dumps(
-            {
-                "success": True,
-                "saved_path": str(output_path),
-                "image_path": str(output_path),
-                "meta": {"event_id": int(args.get("event_id") or 0), "texture_id": texture_id},
-            }
-        )
-
-    async def _fake_shader(action: str, args: dict[str, object]) -> str:
-        assert action == "edit_and_replace"
-        return json.dumps({"success": True, "replacement_id": "repl_demo"})
-
-    async def _fake_texture(action: str, args: dict[str, object]) -> str:
-        texture_calls.append({"action": action, **dict(args)})
-        return json.dumps(
-            {
-                "success": True,
-                "pixel": {
-                    "texture_id": str(args["texture_id"]),
-                    "x": int(args["x"]),
-                    "y": int(args["y"]),
-                },
-            }
-        )
-
-    async def _fake_util(action: str, args: dict[str, object]) -> str:
-        util_calls.append({"action": action, **dict(args)})
-        return json.dumps({"success": True, "metrics": {"mse": 0.0}})
-
-    monkeypatch.setattr(server.server_runtime, "_dispatch_export", _fake_export)
-    monkeypatch.setattr(server.server_runtime, "_dispatch_shader", _fake_shader)
-    monkeypatch.setattr(server.server_runtime, "_dispatch_texture", _fake_texture)
-    monkeypatch.setattr(server.server_runtime, "_dispatch_util", _fake_util)
-
-    payload = json.loads(
-        asyncio.run(
-            server._dispatch_macro(
-                "shader_hotfix_validate",
-                {
-                    "session_id": "sess_test",
-                    "replacement": {
-                        "event_id": 1248,
-                        "stage": "ps",
-                        "shader_id": "ResourceId::192587",
-                        "ops": [{"op": "force_full_precision"}],
-                    },
-                    "validation": {
-                        "target_texture_id": "ResourceId::208592",
-                        "x": 754,
-                        "y": 350,
-                        "metric": "mse",
-                    },
-                    "output_dir": str(tmp_path),
-                },
-            )
+def test_removed_shader_hotfix_macro_is_not_dispatchable() -> None:
+    payload = asyncio.run(
+        server.dispatch_operation(
+            "rd.macro.shader_hotfix_validate",
+            {"session_id": "sess_test"},
+            transport="test",
         )
     )
 
-    assert payload["success"] is True
-    assert len(export_calls) == 2
-    assert export_calls[0]["target"] == {"texture_id": "ResourceId::208592"}
-    assert export_calls[1]["target"] == {"texture_id": "ResourceId::208592"}
-    assert payload["before"]["meta"]["texture_id"] == "ResourceId::208592"
-    assert payload["after"]["meta"]["texture_id"] == "ResourceId::208592"
-    assert payload["validation"]["before_pixel"]["pixel"]["texture_id"] == "ResourceId::208592"
-    assert payload["validation"]["after_pixel"]["pixel"]["texture_id"] == "ResourceId::208592"
-    assert len(texture_calls) == 2
-    assert len(util_calls) == 1
-    assert util_calls[0]["metrics"] == ["mse"]
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "not_found"
 
 
 def test_capabilities_and_compile_error_are_structured() -> None:
@@ -443,7 +374,7 @@ def test_capabilities_and_compile_error_are_structured() -> None:
         server.dispatch_operation(
             "rd.shader.compile",
             {
-                "source": "float4 main() : SV_Target { return 0; }",
+                "source_text": "float4 main() : SV_Target { return 0; }",
                 "stage": "ps",
                 "entry": "main",
                 "target": "ps_5_0",
@@ -485,22 +416,8 @@ def test_shader_compile_source_path_normalization_adds_file_directory(tmp_path: 
     assert "float4 main" in payload["source"]
 
 
-def test_shader_compile_source_alias_normalizes_existing_file_once(tmp_path: Path) -> None:
-    shader_path = tmp_path / "legacy_alias.hlsl"
-    shader_path.write_text("float4 main() : SV_Target { return 0; }", encoding="utf-8")
-
-    payload = server.server_runtime._normalize_shader_source_input({"source": str(shader_path)})
-
-    assert payload["source_kind"] == "source_path"
-    assert payload["deprecated_alias_used"] == ["source"]
-    assert payload["resolved_source_path"] == str(shader_path.resolve())
-
-
-def test_shader_compile_source_alias_keeps_inline_hlsl_as_source_text() -> None:
-    payload = server.server_runtime._normalize_shader_source_input(
-        {"source": "float4 main() : SV_Target { return 0; }"}
-    )
-
-    assert payload["source_kind"] == "source_text"
-    assert payload["deprecated_alias_used"] == ["source"]
-    assert payload["resolved_source_path"] == ""
+def test_shader_compile_rejects_removed_ambiguous_source_parameter() -> None:
+    with pytest.raises(ValueError, match="source_text or source_path"):
+        server.server_runtime._normalize_shader_source_input(
+            {"source": "float4 main() : SV_Target { return 0; }"}
+        )

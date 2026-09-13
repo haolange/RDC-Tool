@@ -86,3 +86,48 @@ def test_worker_uses_source_runtime_directly(tmp_path: Path, monkeypatch) -> Non
     finally:
         worker._proc = None
         worker._runtime = None
+
+
+def test_worker_keeps_loop_and_native_thread_across_requests_and_shutdown(monkeypatch):
+    import asyncio
+    import threading
+    import time
+    from types import SimpleNamespace
+    import rdx
+    from rdx import runtime_worker
+    monkeypatch.setenv("RDX_CONTEXT_ID", "default")
+    loops=[]
+    native_threads=[]
+    def native():
+        native_threads.append(threading.get_ident())
+        time.sleep(0.002)
+    async def dispatch(*args, **kwargs):
+        loops.append(id(asyncio.get_running_loop()))
+        await asyncio.gather(asyncio.to_thread(native), asyncio.to_thread(native))
+        return {"success": True}
+    async def shutdown(**kwargs):
+        loops.append(id(asyncio.get_running_loop()))
+        await asyncio.to_thread(native)
+    monkeypatch.setattr(rdx, "server", SimpleNamespace(dispatch_operation=dispatch, runtime_shutdown=shutdown))
+    requests=[{"id":str(i),"method":method,"params":{"operation":"rd.test"}} for i,method in enumerate(["exec","exec","shutdown"])]
+    monkeypatch.setattr(runtime_worker.sys,"stdin",io.StringIO("\n".join(json.dumps(x) for x in requests)))
+    outputs=[]
+    monkeypatch.setattr(runtime_worker,"_emit",outputs.append)
+    assert runtime_worker.main(["--context-id","thread-test"]) == 0
+    assert len(loops) == 3 and len(set(loops)) == 1
+    assert len(native_threads) == 5 and len(set(native_threads)) == 1
+    assert outputs[-1]["result"] == {"stopped": True}
+
+
+def test_worker_eof_shuts_down_before_thread_executor_closes(monkeypatch):
+    from types import SimpleNamespace
+    import rdx
+    from rdx import runtime_worker
+    monkeypatch.setenv("RDX_CONTEXT_ID", "default")
+    closed=[]
+    async def shutdown(**kwargs): closed.append(kwargs)
+    monkeypatch.setattr(rdx,"server",SimpleNamespace(runtime_shutdown=shutdown))
+    monkeypatch.setattr(runtime_worker.sys,"stdin",io.StringIO(""))
+    monkeypatch.setattr(runtime_worker,"_emit",lambda result: None)
+    assert runtime_worker.main(["--context-id","eof-test"]) == 0
+    assert closed == [{"clear_context_state":False}]

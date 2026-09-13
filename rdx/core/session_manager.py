@@ -1,14 +1,14 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import asyncio
 import functools
+import hashlib
 import logging
 import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from uuid import uuid4
 
 from rdx.core.renderdoc_status import build_renderdoc_error_details, status_ok as _rd_status_ok, status_text as _rd_status_text
 from rdx.models import (
@@ -378,40 +378,31 @@ class SessionManager:
         finally:
             state.transfer_progress = None
         state.remote_server = remote_server
-        state.remote_server_owned = True
         state.controller = controller
         await self._create_headless_output(state, controller)
 
     def _open_remote_capture_sync(self, state: SessionState, rdc_path: str) -> tuple[Any, str, Any]:
         rd = _get_rd()
         remote_server = state.remote_server
-        if state.remote_host:
-            url = f"{state.remote_host}:{state.remote_port}" if state.remote_port else state.remote_host
-            status, remote_server = rd.CreateRemoteServerConnection(url)
-            _check_status(
-                status,
-                f"CreateRemoteServerConnection({url})",
-                backend_type="remote",
-                capture_context={"session_id": state.session_id, "endpoint": url},
-                classification="remote_replay_runtime",
-                fix_hint="Reconnect the Android remote endpoint before opening the capture.",
-            )
+        # The owning runtime hands this session its already connected remote.
+        # A second connection races the live handle and is rejected as busy.
         copy_error = ""
         try:
             if state.transfer_progress:
                 state.transfer_progress("capture_transfer_started", 0.0)
-            remote_rdc_path = remote_server.CopyCaptureToRemote(rdc_path, lambda fraction: state.transfer_progress("capture_transfer_progress", float(fraction)) if state.transfer_progress else None)
+            if state.remote_transport == "adb_android":
+                remote_rdc_path = self._copy_android_capture_with_adb(state, rdc_path)
+            else:
+                remote_rdc_path = remote_server.CopyCaptureToRemote(rdc_path, lambda fraction: state.transfer_progress("capture_transfer_progress", float(fraction)) if state.transfer_progress else None)
             if state.transfer_progress and str(remote_rdc_path or "").strip():
                 state.transfer_progress("capture_transfer_done", 1.0)
         except Exception as exc:
             remote_rdc_path = ""
             copy_error = str(exc)
-        if not str(remote_rdc_path or "").strip() and state.remote_transport == "adb_android":
-            remote_rdc_path = self._copy_android_capture_with_adb(state, rdc_path)
         if not str(remote_rdc_path or "").strip():
             details = {
                 "source_layer": "renderdoc_remote_copy",
-                "operation": "remote.CopyCaptureToRemote()",
+                "operation": "adb capture transfer" if state.remote_transport == "adb_android" else "remote.CopyCaptureToRemote()",
                 "backend_type": "remote",
                 "capture_context": {
                     "session_id": state.session_id,
@@ -425,7 +416,7 @@ class SessionManager:
                 details["copy_error"] = copy_error
             raise SessionError(
                 code="remote_capture_copy_failed",
-                message="remote.CopyCaptureToRemote() did not return a remote capture path",
+                message="Capture transfer did not return a verified remote capture path",
                 details=details,
             )
         status, controller = remote_server.OpenCapture(
@@ -471,25 +462,48 @@ class SessionManager:
         else:
             return ""
         remote_dir = f"{remote_root.rstrip('/')}/rdx_captures"
-        remote_name = f"{uuid4().hex}-{Path(rdc_path).name}"
+        with Path(rdc_path).open("rb") as source:
+            digest = hashlib.file_digest(source, "sha256").hexdigest()
+        remote_name = f"{digest}.rdc"
         remote_path = f"{remote_dir}/{remote_name}".replace("\\", "/")
         base_cmd = [adb_path]
         if device_serial:
             base_cmd.extend(["-s", device_serial])
-        subprocess.run(
-            base_cmd + ["shell", "mkdir", "-p", remote_dir],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        subprocess.run(
-            base_cmd + ["push", str(rdc_path), remote_path],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=240,
-        )
+        def remote_digest() -> str:
+            result = subprocess.run(base_cmd + ["shell", "sha256sum", remote_path],
+                                    check=False, capture_output=True, text=True, timeout=30)
+            if result.returncode == 0 and result.stdout.split():
+                return result.stdout.split()[0]
+            # Only an explicit missing-file response permits creating a path.
+            # An ADB failure or unreadable existing file must never mean absent.
+            if "No such file or directory" in result.stderr:
+                return ""
+            raise RuntimeError(f"Cannot verify Android capture path: {result.stderr.strip() or 'empty SHA256 response'}")
+
+        existing = remote_digest()
+        if existing:
+            if existing != digest:
+                raise RuntimeError("Remote capture cache content does not match its digest; refusing overwrite")
+            return remote_path
+        subprocess.run(base_cmd + ["shell", "mkdir", "-p", remote_dir],
+                       check=True, capture_output=True, text=True, timeout=30)
+        # Register only a path created by this connection. RenderDoc deletes it
+        # when the owning connection closes, including failed/cancelled opens.
+        state.remote_server.TakeOwnershipCapture(remote_path)
+        try:
+            subprocess.run(base_cmd + ["push", str(rdc_path), remote_path],
+                           check=True, capture_output=True, text=True, timeout=240)
+            if remote_digest() != digest:
+                raise RuntimeError("Android capture transfer SHA256 verification failed")
+        except BaseException as original:
+            try:
+                cleanup = subprocess.run(base_cmd + ["shell", "rm", "-f", remote_path],
+                                         check=False, capture_output=True, text=True, timeout=30)
+                if cleanup.returncode:
+                    raise RuntimeError(cleanup.stderr.strip() or "ADB removal failed")
+            except Exception as cleanup_error:
+                raise RuntimeError(f"{original}; owned capture cleanup failed: {cleanup_error}") from original
+            raise
         return remote_path
 
     async def _create_headless_output(self, state: SessionState, controller: Any) -> None:

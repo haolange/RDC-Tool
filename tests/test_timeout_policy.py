@@ -36,7 +36,7 @@ class DummyRemoteServer:
 
 
 def test_daemon_exec_timeout_uses_heavy_window_for_event_queries() -> None:
-    assert daemon_exec_timeout_s("rd.event.get_actions", {"session_id": "sess_demo"}) == (
+    assert daemon_exec_timeout_s("rd.event.get_action_tree", {"session_id": "sess_demo"}) == (
         HEAVY_DAEMON_REQUEST_TIMEOUT_S + DAEMON_RESPONSE_BUFFER_S
     )
 
@@ -76,7 +76,7 @@ def test_daemon_exec_timeout_uses_session_context_window() -> None:
 
 
 def test_worker_exec_timeout_uses_operation_window_without_transport_buffer() -> None:
-    assert worker_exec_timeout_s("rd.event.get_actions", {"session_id": "sess_demo"}) == HEAVY_DAEMON_REQUEST_TIMEOUT_S
+    assert worker_exec_timeout_s("rd.event.get_action_tree", {"session_id": "sess_demo"}) == HEAVY_DAEMON_REQUEST_TIMEOUT_S
     assert worker_exec_timeout_s("rd.core.get_version", {}) == DEFAULT_DAEMON_REQUEST_TIMEOUT_S
 
 
@@ -106,6 +106,8 @@ def test_cli_daemon_exec_passes_policy_timeout(monkeypatch) -> None:
 
 
 def test_dispatch_remote_connect_uses_default_timeout_when_missing(monkeypatch) -> None:
+    # Freeze the clock so this assertion checks the default, not scheduler time.
+    monkeypatch.setattr("rdx.remote_bootstrap.time.monotonic", lambda: 100.0)
     original_remotes = dict(server._runtime.remotes)
     original_enable_remote = server._runtime.enable_remote
     captured: dict[str, object] = {}

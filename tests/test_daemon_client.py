@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
+import pytest
+
+from rdx import cli
 from rdx.daemon import client as daemon_client
 
 
@@ -172,6 +176,24 @@ def test_stop_daemon_uses_loaded_state_before_cleanup(monkeypatch, tmp_path: Pat
     assert message == "daemon stopped"
     assert calls == [(321, "ctx-live")]
     assert cleared == ["daemon:ctx-live", "session:ctx-live"]
+
+
+def test_daemon_stop_cli_confirms_exact_context_and_completion(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(cli, "stop_daemon", lambda context="default": (True, "daemon stopped"))
+    monkeypatch.setattr(sys, "argv", ["rdx", "--json", "--daemon-context", "ctx-live", "daemon", "stop"])
+
+    with pytest.raises(SystemExit) as exit_info:
+        cli.main()
+
+    assert exit_info.value.code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is True
+    assert payload["result_kind"] == "rdx.daemon.stop"
+    assert payload["data"] == {
+        "message": "daemon stopped",
+        "context_id": "ctx-live",
+        "stopped": True,
+    }
 
 
 def test_daemon_request_timeout_returns_structured_details(monkeypatch, tmp_path: Path) -> None:

@@ -1,26 +1,28 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from pathlib import Path
 
 from scripts.generate_tool_reference import generate_tool_reference
+from rdx.runtime_catalog import catalog_payload
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_tool_reference_is_generated_from_catalog() -> None:
-    catalog_path = ROOT / "spec" / "tool_catalog.json"
+def test_tool_reference_is_generated_from_code_owned_definitions() -> None:
     doc_path = ROOT / "docs" / "tool-reference.md"
-    payload = json.loads(catalog_path.read_text(encoding="utf-8-sig"))
+    payload = catalog_payload()
     tools = payload["tools"]
     groups = {str(tool.get("group") or "") for tool in tools}
+    document = doc_path.read_text(encoding="utf-8-sig")
 
-    assert doc_path.read_text(encoding="utf-8-sig") == generate_tool_reference(catalog_path)
-    assert f"- Tool count: {len(tools)}" in doc_path.read_text(encoding="utf-8-sig")
-    assert f"- Group count: {len(groups)}" in doc_path.read_text(encoding="utf-8-sig")
+    assert document == generate_tool_reference()
+    assert f"- Tool count: {len(tools)}" in document
+    assert f"- Group count: {len(groups)}" in document
+    assert f"- Catalog fingerprint: `{payload['fingerprint']}`" in document
     for tool in tools:
-        assert str(tool["name"]) in doc_path.read_text(encoding="utf-8-sig")
+        assert str(tool["name"]) in document
+        assert str(tool["scope"]) in document
 
 
 def test_rdx_native_playbook_covers_cli_and_runtime_contracts() -> None:

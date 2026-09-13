@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import contextvars
+import threading
 import re
 import shutil
 import socket
@@ -30,6 +32,52 @@ class AndroidRemoteBootstrapError(RuntimeError):
         self.code = str(code)
         self.message = str(message)
         self.details = dict(details or {})
+
+
+class ConnectionBudget:
+    """One deadline and cancellation signal for one remote connection attempt."""
+    def __init__(self, timeout_ms: int, cancelled: Optional[threading.Event] = None):
+        self.deadline = time.monotonic() + max(timeout_ms, 1) / 1000
+        self.cancelled = cancelled or threading.Event()
+
+    def remaining(self, maximum: float = float("inf")) -> float:
+        if self.cancelled.is_set():
+            raise AndroidRemoteBootstrapError("remote_connect_cancelled", "Remote connection cancelled")
+        remaining = self.deadline - time.monotonic()
+        if remaining <= 0:
+            raise AndroidRemoteBootstrapError("remote_connect_timeout", "Remote connection deadline exceeded")
+        return min(maximum, remaining)
+
+
+_connection_budget: contextvars.ContextVar[Optional[ConnectionBudget]] = contextvars.ContextVar("android_connection_budget", default=None)
+
+
+def _remaining(maximum: float) -> float:
+    budget = _connection_budget.get()
+    return budget.remaining(maximum) if budget else maximum
+
+
+def _run_process(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+    budget = _connection_budget.get()
+    if budget is None:
+        return subprocess.run(cmd, **kwargs)
+    deadline = time.monotonic() + budget.remaining(float(kwargs.pop("timeout", 10)))
+    kwargs.pop("check", None)
+    kwargs.pop("capture_output", None)
+    with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **kwargs) as proc:
+        try:
+            while True:
+                timeout = min(0.25, budget.remaining(), max(0.001, deadline - time.monotonic()))
+                try:
+                    out, err = proc.communicate(timeout=timeout)
+                    return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
+                except subprocess.TimeoutExpired:
+                    if time.monotonic() >= deadline:
+                        raise
+        except BaseException:
+            proc.kill()
+            proc.communicate()
+            raise
 
 
 @dataclass
@@ -126,7 +174,7 @@ def _run_subprocess(
     error_message: str,
 ) -> subprocess.CompletedProcess[str]:
     try:
-        proc = subprocess.run(
+        proc = _run_process(
             cmd,
             capture_output=True,
             text=True,
@@ -171,7 +219,7 @@ def _run_install_command(adb_path: str, device_serial: str, apk_path: str, *, re
     if replace_existing:
         install_args.append("-r")
     install_args.extend(["-g", "--force-queryable", str(apk_path)])
-    return subprocess.run(
+    return _run_process(
         _adb_base_cmd(adb_path, device_serial) + install_args,
         capture_output=True,
         text=True,
@@ -203,7 +251,7 @@ def _ensure_android_helper_installed(adb_path: str, device_serial: str, package_
             },
         )
 
-    uninstall_proc = subprocess.run(
+    uninstall_proc = _run_process(
         _adb_base_cmd(adb_path, device_serial) + ["uninstall", package_name],
         capture_output=True,
         text=True,
@@ -376,7 +424,7 @@ def detect_device_arch(adb_path: str, device_serial: str) -> tuple[str, str]:
 
 def _package_pids(adb_path: str, device_serial: str, package_name: str) -> list[int]:
     try:
-        proc = subprocess.run(
+        proc = _run_process(
             _adb_base_cmd(adb_path, device_serial) + ["shell", "pidof", package_name],
             capture_output=True,
             text=True,
@@ -385,6 +433,8 @@ def _package_pids(adb_path: str, device_serial: str, package_name: str) -> list[
             timeout=10.0,
             check=False,
         )
+    except AndroidRemoteBootstrapError:
+        raise
     except Exception as exc:
         raise AndroidRemoteBootstrapError("android_helper_state_unknown", "Unable to verify Android helper ownership") from exc
     stdout, stderr = str(proc.stdout or "").strip(), str(proc.stderr or "").strip()
@@ -410,7 +460,7 @@ def _list_renderdoc_socket_ports(adb_path: str, device_serial: str) -> list[int]
             error_message="Failed to inspect Android unix sockets",
         )
     except AndroidRemoteBootstrapError:
-        return []
+        raise
     ports: list[int] = []
     for line in str(proc.stdout or "").splitlines():
         match = _REMOTE_SOCKET_RE.search(line)
@@ -427,13 +477,9 @@ def _select_remote_socket_port(requested_port: int, before_ports: list[int], aft
     requested = int(requested_port or 0)
     if requested > 0 and requested in after_ports:
         return requested
-    before = set(int(port) for port in before_ports)
-    added = [int(port) for port in after_ports if int(port) not in before]
-    if len(added) == 1:
-        return added[0]
     if len(after_ports) == 1:
         return int(after_ports[0])
-    if requested > 0:
+    if not after_ports:
         raise AndroidRemoteBootstrapError(
             "android_remote_socket_missing",
             f"RenderDoc remote socket renderdoc_{requested} was not found on Android device.",
@@ -442,11 +488,22 @@ def _select_remote_socket_port(requested_port: int, before_ports: list[int], aft
     raise AndroidRemoteBootstrapError(
         "android_remote_socket_ambiguous",
         "Unable to determine Android RenderDoc remote socket port.",
-        details={"discovered_ports": list(after_ports), "added_ports": added},
+        details={"requested_port": requested, "discovered_ports": list(after_ports)},
     )
 
 
-def bootstrap_android_remote(
+def bootstrap_android_remote(*, remote_port: int = DEFAULT_ANDROID_REMOTE_PORT, options: Optional[AndroidBootstrapOptions] = None) -> AndroidBootstrapResult:
+    token = None
+    if _connection_budget.get() is None:
+        token = _connection_budget.set(ConnectionBudget(DEFAULT_ANDROID_TIMEOUT_MS))
+    try:
+        return _bootstrap_android_remote(remote_port=remote_port, options=options)
+    finally:
+        if token is not None:
+            _connection_budget.reset(token)
+
+
+def _bootstrap_android_remote(
     *,
     remote_port: int = DEFAULT_ANDROID_REMOTE_PORT,
     options: Optional[AndroidBootstrapOptions] = None,
@@ -461,7 +518,12 @@ def bootstrap_android_remote(
     )
     device = choose_adb_device(parse_adb_devices(device_proc.stdout), opts.device_serial)
     arch, abi = detect_device_arch(adb_path, device.serial)
-    package_name, apk_path = select_android_package(arch)
+    running = {helper: _package_pids(adb_path, device.serial, helper) for helper in _PACKAGE_MAP.values()}
+    borrowed = any(running.values())
+    package_name = next((helper for helper, pids in running.items() if pids), _PACKAGE_MAP[arch])
+    apk_path = ""
+    if not borrowed:
+        package_name, apk_path = select_android_package(arch)
     activity_name = f"{package_name}.Loader"
     activity_component = f"{package_name}/.Loader"
     local_port = allocate_local_port(opts.local_port)
@@ -478,108 +540,160 @@ def bootstrap_android_remote(
         apk_path=str(apk_path),
         forward_spec=forward_spec,
     )
-    if any(_package_pids(adb_path, device.serial, helper) for helper in _PACKAGE_MAP.values()):
-        raise AndroidRemoteBootstrapError("android_helper_occupied", "RenderDoc helper is already running; refusing to restart an externally owned helper.", details={"package_name": package_name, "device_serial": device.serial})
+    return _prepare_android_service(result, opts, borrowed, activity_component)
+
+
+def _prepare_android_service(result: AndroidBootstrapResult, opts: AndroidBootstrapOptions, borrowed: bool, activity_component: str) -> AndroidBootstrapResult:
+    try:
+        return _prepare_android_service_steps(result, opts, borrowed, activity_component)
+    except BaseException as exc:
+        token = _connection_budget.set(None)
+        try:
+            errors = cleanup_android_remote(result)
+        finally:
+            _connection_budget.reset(token)
+        if errors:
+            if isinstance(exc, AndroidRemoteBootstrapError):
+                exc.details["cleanup_errors"] = errors
+            else:
+                raise AndroidRemoteBootstrapError("android_bootstrap_failed", str(exc), details={"cleanup_errors": errors}) from exc
+        raise
+
+
+def _prepare_android_service_steps(result: AndroidBootstrapResult, opts: AndroidBootstrapOptions, borrowed: bool, activity_component: str) -> AndroidBootstrapResult:
+    adb_path, package_name, apk_path = result.adb_path, result.package_name, result.apk_path
+    device = AdbDevice(serial=result.device_serial, state="device", detail="")
+    remote_port, forward_spec = result.remote_port, result.forward_spec
     existing_socket_ports = _list_renderdoc_socket_ports(adb_path, device.serial)
 
-    if opts.install_apk:
-        _ensure_android_helper_installed(adb_path, device.serial, package_name, str(apk_path), result)
+    if not borrowed:
+        if opts.install_apk:
+            _ensure_android_helper_installed(adb_path, device.serial, package_name, str(apk_path), result)
 
-    if opts.push_config:
-        config_path = _write_renderdoc_conf(package_name)
-        remote_dir = f"/sdcard/Android/data/{package_name}/files"
-        remote_conf = f"{remote_dir}/renderdoc.conf"
-        _adb_shell(
-            adb_path,
-            device.serial,
-            "mkdir",
-            "-p",
-            remote_dir,
-            timeout_s=15.0,
-            error_code="android_config_push_failed",
-            error_message="Failed to create remote RenderDoc config directory",
-        )
-        _run_subprocess(
-            _adb_base_cmd(adb_path, device.serial) + ["push", str(config_path), remote_conf],
-            timeout_s=30.0,
-            error_code="android_config_push_failed",
-            error_message="Failed to push renderdoc.conf to Android device",
-        )
-        result.config_local_path = str(config_path)
-        result.config_remote_path = remote_conf
-        result.pushed_config = True
-        result.cleanup_actions.append("config-pushed")
+        if opts.push_config:
+            config_path = _write_renderdoc_conf(package_name)
+            result.config_local_path = str(config_path)
+            remote_dir = f"/sdcard/Android/data/{package_name}/files"
+            remote_conf = f"{remote_dir}/renderdoc.conf"
+            _adb_shell(
+                adb_path,
+                device.serial,
+                "mkdir",
+                "-p",
+                remote_dir,
+                timeout_s=15.0,
+                error_code="android_config_push_failed",
+                error_message="Failed to create remote RenderDoc config directory",
+            )
+            _run_subprocess(
+                _adb_base_cmd(adb_path, device.serial) + ["push", str(config_path), remote_conf],
+                timeout_s=30.0,
+                error_code="android_config_push_failed",
+                error_message="Failed to push renderdoc.conf to Android device",
+            )
+            result.config_remote_path = remote_conf
+            result.pushed_config = True
+            result.cleanup_actions.append("config-pushed")
 
 
-    launch_error: AndroidRemoteBootstrapError | None = None
-    try:
-        _adb_shell(
-            adb_path,
-            device.serial,
-            "am",
-            "start",
-            "-W",
-            "-n",
-            activity_component,
-            '-e',
-            'renderdoccmd',
-            'remoteserver',
-            timeout_s=20.0,
-            error_code="android_remote_launch_failed",
-            error_message="Failed to launch RenderDocCmd activity",
-        )
-    except AndroidRemoteBootstrapError as exc:
-        launch_error = exc
-
-    if not _is_package_running(adb_path, device.serial, package_name):
+        launch_error: AndroidRemoteBootstrapError | None = None
         try:
             _adb_shell(
                 adb_path,
                 device.serial,
-                "monkey",
-                "-p",
-                package_name,
-                "-c",
-                "android.intent.category.LAUNCHER",
-                "1",
+                "am",
+                "start",
+                "-W",
+                "-n",
+                activity_component,
+                '-e',
+                'renderdoccmd',
+                'remoteserver',
                 timeout_s=20.0,
                 error_code="android_remote_launch_failed",
                 error_message="Failed to launch RenderDocCmd activity",
             )
         except AndroidRemoteBootstrapError as exc:
             launch_error = exc
+        finally:
+            token = _connection_budget.set(None)
+            try:
+                result.owned_pids = _package_pids(adb_path, device.serial, package_name)
+                result.started_activity = bool(result.owned_pids)
+            finally:
+                _connection_budget.reset(token)
 
-    deadline = time.time() + 15.0
-    while time.time() < deadline:
-        if any(_package_pids(adb_path, device.serial, helper) for helper in _PACKAGE_MAP.values()):
-            result.owned_pids = _package_pids(adb_path, device.serial, package_name)
-            result.started_activity = bool(result.owned_pids)
-            break
-        time.sleep(1.0)
+        _remaining(1.0)
+        if not _is_package_running(adb_path, device.serial, package_name):
+            try:
+                _adb_shell(
+                    adb_path,
+                    device.serial,
+                    "monkey",
+                    "-p",
+                    package_name,
+                    "-c",
+                    "android.intent.category.LAUNCHER",
+                    "1",
+                    timeout_s=20.0,
+                    error_code="android_remote_launch_failed",
+                    error_message="Failed to launch RenderDocCmd activity",
+                )
+            except AndroidRemoteBootstrapError as exc:
+                launch_error = exc
+            finally:
+                token = _connection_budget.set(None)
+                try:
+                    result.owned_pids = _package_pids(adb_path, device.serial, package_name)
+                    result.started_activity = bool(result.owned_pids)
+                finally:
+                    _connection_budget.reset(token)
 
-    if not result.started_activity:
-        raise launch_error or AndroidRemoteBootstrapError(
-            "android_remote_launch_failed",
-            "Failed to confirm RenderDocCmd process startup on Android device.",
-            details={"package_name": package_name, "device_serial": device.serial},
-        )
-    result.cleanup_actions.append("activity-started")
+        deadline = time.monotonic() + _remaining(15.0)
+        while time.monotonic() < deadline:
+            _remaining(1.0)
+            if _package_pids(adb_path, device.serial, package_name):
+                result.owned_pids = _package_pids(adb_path, device.serial, package_name)
+                result.started_activity = bool(result.owned_pids)
+                break
+            time.sleep(1.0)
 
+        if not result.started_activity:
+            raise launch_error or AndroidRemoteBootstrapError(
+                "android_remote_launch_failed",
+                "Failed to confirm RenderDocCmd process startup on Android device.",
+                details={"package_name": package_name, "device_serial": device.serial},
+            )
+        result.cleanup_actions.append("activity-started")
+
+    socket_deadline = time.monotonic() + _remaining(15.0)
+    ports = _list_renderdoc_socket_ports(adb_path, device.serial)
+    while not ports and time.monotonic() < socket_deadline:
+        time.sleep(min(0.25, _remaining(0.25)))
+        ports = _list_renderdoc_socket_ports(adb_path, device.serial)
     remote_socket_port = _select_remote_socket_port(
         int(remote_port),
         existing_socket_ports,
-        _list_renderdoc_socket_ports(adb_path, device.serial),
+        ports,
     )
     result.remote_port = int(remote_socket_port)
 
-    _run_subprocess(
-        _adb_base_cmd(adb_path, device.serial)
-        + ["forward", forward_spec, f"localabstract:{_REMOTE_SOCKET_TEMPLATE.format(port=int(remote_socket_port))}"],
-        timeout_s=10.0,
-        error_code="adb_forward_failed",
-        error_message="Failed to establish adb forward for RenderDoc remote socket",
-    )
-    result.created_forward = True
+    # Join this bounded mutation before observing cancellation, so an acquired
+    # mapping is recorded and can be rolled back by the transaction above.
+    timeout_s = _remaining(10.0)
+    token = _connection_budget.set(None)
+    try:
+        _run_subprocess(
+            _adb_base_cmd(adb_path, device.serial)
+            + ["forward", "--no-rebind", forward_spec, f"localabstract:{_REMOTE_SOCKET_TEMPLATE.format(port=int(remote_socket_port))}"],
+            timeout_s=timeout_s,
+            error_code="adb_forward_failed",
+            error_message="Failed to establish adb forward for RenderDoc remote socket",
+        )
+        result.created_forward = True
+    finally:
+        _connection_budget.reset(token)
+    _remaining(1.0)
     result.cleanup_actions.append("adb-forward")
     return result
 
@@ -588,21 +702,35 @@ def cleanup_android_remote(result: AndroidBootstrapResult) -> list[str]:
     errors: list[str] = []
     if result.created_forward:
         try:
-            _run_subprocess(
+            proc = _run_subprocess([result.adb_path, "forward", "--list"], timeout_s=10.0,
+                                   error_code="adb_forward_query_failed", error_message="Failed to verify adb forward ownership")
+            rows = [line.split() for line in proc.stdout.splitlines()]
+            matches = [row for row in rows if len(row) == 3 and row[1] == result.forward_spec]
+            expected = [result.device_serial, result.forward_spec, f"localabstract:renderdoc_{result.remote_port}"]
+            if matches and matches != [expected]:
+                raise AndroidRemoteBootstrapError("adb_forward_ownership_changed", "ADB forward identity changed; refusing to remove it")
+            if not matches:
+                result.created_forward = False
+            else:
+                _run_subprocess(
                 _adb_base_cmd(result.adb_path, result.device_serial) + ["forward", "--remove", result.forward_spec],
                 timeout_s=10.0,
                 error_code="adb_forward_remove_failed",
                 error_message="Failed to remove adb forward",
-            )
+                )
+                result.created_forward = False
         except AndroidRemoteBootstrapError as exc:
             errors.append(exc.message)
 
     if result.started_activity:
         try:
             current_pids = _package_pids(result.adb_path, result.device_serial, result.package_name)
-            if not result.owned_pids or current_pids != result.owned_pids:
+            if not current_pids:
+                result.started_activity = False
+            elif not result.owned_pids or current_pids != result.owned_pids:
                 raise AndroidRemoteBootstrapError("android_helper_ownership_changed", "Helper process identity changed; refusing to stop it")
-            _adb_shell(
+            if result.started_activity:
+                _adb_shell(
                 result.adb_path,
                 result.device_serial,
                 "am",
@@ -611,7 +739,9 @@ def cleanup_android_remote(result: AndroidBootstrapResult) -> list[str]:
                 timeout_s=10.0,
                 error_code="android_remote_stop_failed",
                 error_message="Failed to stop RenderDocCmd activity",
-            )
+                )
+                result.started_activity = False
+                result.owned_pids = []
         except AndroidRemoteBootstrapError as exc:
             errors.append(exc.message)
 

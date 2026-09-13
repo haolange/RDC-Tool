@@ -1,9 +1,13 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import asyncio
 import json
+import struct
 import sys
+from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 from rdx import server
 from rdx.core.session_manager import SessionManager, SessionState, _map_graphics_api
@@ -65,7 +69,7 @@ class _FakeRenderDocModule:
         return _OkStatus(), self.remote
 
 
-def test_remote_open_uses_fresh_connection_and_native_remote_copy(monkeypatch) -> None:
+def test_remote_open_reuses_owning_connection_and_native_remote_copy(monkeypatch) -> None:
     remote = _FreshRemoteServer()
     fake_renderdoc = _FakeRenderDocModule(remote)
     monkeypatch.setitem(sys.modules, "renderdoc", fake_renderdoc)
@@ -73,10 +77,10 @@ def test_remote_open_uses_fresh_connection_and_native_remote_copy(monkeypatch) -
     state = SessionState(
         session_id="sess_remote",
         backend_type=BackendType.REMOTE,
-        remote_server=DummyRemoteServer(),
+        remote_server=remote,
         remote_host="127.0.0.1",
         remote_port=64590,
-        remote_transport="adb_android",
+        remote_transport="renderdoc",
     )
 
     opened_remote, remote_path, controller = SessionManager()._open_remote_capture_sync(state, "C:/captures/WhiteHair.rdc")
@@ -84,7 +88,7 @@ def test_remote_open_uses_fresh_connection_and_native_remote_copy(monkeypatch) -
     assert opened_remote is remote
     assert controller is not None
     assert remote_path == "/remote/copied.rdc"
-    assert fake_renderdoc.connections == ["127.0.0.1:64590"]
+    assert fake_renderdoc.connections == []
     assert remote.copied == ["C:/captures/WhiteHair.rdc"]
     assert remote.opened == ["/remote/copied.rdc"]
 
@@ -142,7 +146,7 @@ class FakeMeshFormat:
     type = 1
     compCount = 4
     compByteWidth = 4
-    compType = "Float"
+    compType = 1
     special = False
     bgraOrder = False
     srgbCorrected = False
@@ -159,7 +163,7 @@ class FakeMesh:
         self.indexByteSize = 0
         self.indexByteStride = 0
         self.numIndices = 2
-        self.topology = "TriangleList"
+        self.topology = 3
         self.status = ""
         self.format = FakeMeshFormat()
 
@@ -463,7 +467,7 @@ def test_dispatch_remote_launch_app_surfaces_execute_and_inject_status(monkeypat
         server._runtime.enable_remote = original_enable_remote
 
 
-def test_dispatch_mesh_post_gs_returns_empty_payload_when_stage_not_bound(monkeypatch) -> None:
+def test_dispatch_mesh_post_transform_gs_returns_empty_payload_when_stage_not_bound(monkeypatch) -> None:
     async def _inline_offload(fn, *args, **kwargs):
         return fn(*args, **kwargs)
 
@@ -486,8 +490,8 @@ def test_dispatch_mesh_post_gs_returns_empty_payload_when_stage_not_bound(monkey
     payload = json.loads(
         asyncio.run(
             server._dispatch_mesh(
-                "get_post_gs_data",
-                {"session_id": "sess_demo", "event_id": 314, "instance": 0, "max_primitives": 64},
+                "get_post_transform_data",
+                {"session_id": "sess_demo", "event_id": 314, "stage": "gs", "instance": 0, "max_vertices": 64},
             )
         )
     )
@@ -499,7 +503,7 @@ def test_dispatch_mesh_post_gs_returns_empty_payload_when_stage_not_bound(monkey
     assert mesh["vertex_count"] == 0
 
 
-def test_dispatch_mesh_post_vs_serializes_format_payload(monkeypatch) -> None:
+def test_dispatch_mesh_post_transform_vs_serializes_format_payload(monkeypatch) -> None:
     async def _inline_offload(fn, *args, **kwargs):
         return fn(*args, **kwargs)
 
@@ -517,8 +521,8 @@ def test_dispatch_mesh_post_vs_serializes_format_payload(monkeypatch) -> None:
     payload = json.loads(
         asyncio.run(
             server._dispatch_mesh(
-                "get_post_vs_data",
-                {"session_id": "sess_demo", "event_id": 314, "view": "vs_out", "instance": 0, "view_index": 0, "max_vertices": 8},
+                "get_post_transform_data",
+                {"session_id": "sess_demo", "event_id": 314, "stage": "vs", "instance": 0, "view_index": 0, "max_vertices": 8},
             )
         )
     )
@@ -528,6 +532,141 @@ def test_dispatch_mesh_post_vs_serializes_format_payload(monkeypatch) -> None:
     assert mesh["vertex_count"] == 2
     assert mesh["mesh_format"]["format"]["compCount"] == 4
     assert mesh["mesh_format"]["format"]["compByteWidth"] == 4
+
+
+def test_export_mesh_writes_real_indexed_obj_and_rejects_unsupported_options(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    class _IndexedMesh:
+        vertexResourceId = "ResourceId::vertices"
+        vertexByteOffset = 0
+        vertexByteSize = 48
+        vertexByteStride = 16
+        indexResourceId = "ResourceId::indices"
+        indexByteOffset = 0
+        indexByteStride = 2
+        numIndices = 3
+        baseVertex = 0
+        topology = 3
+        format = FakeMeshFormat()
+
+    class _IndexedController:
+        def GetPostVSData(self, instance: int, view_index: int, stage: object) -> _IndexedMesh:
+            return _IndexedMesh()
+
+        def GetBufferData(self, resource_id: object, offset: int, size: int) -> bytes:
+            if str(resource_id) == "ResourceId::vertices":
+                return b"".join(
+                    struct.pack("<ffff", *position)
+                    for position in ((0.0, 0.0, 0.0, 1.0), (1.0, 0.0, 0.0, 1.0), (0.0, 1.0, 0.0, 1.0))
+                )
+            return struct.pack("<HHH", 0, 1, 2)
+
+    async def _inline_offload(fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    async def _fake_get_controller(session_id: str) -> _IndexedController:
+        return _IndexedController()
+
+    async def _fake_ensure_event(session_id: str, event_id: int | None) -> int:
+        return int(event_id or 17)
+
+    monkeypatch.setattr(server.server_runtime, "_offload", _inline_offload)
+    monkeypatch.setattr(server.server_runtime, "_get_controller", _fake_get_controller)
+    monkeypatch.setattr(server.server_runtime, "_ensure_event", _fake_ensure_event)
+    monkeypatch.setattr(
+        server.server_runtime,
+        "_get_rd",
+        lambda: SimpleNamespace(
+            MeshDataStage=SimpleNamespace(VSOut="vs"),
+            CompType=SimpleNamespace(Float=1),
+            Topology=SimpleNamespace(TriangleList=3, TriangleStrip=4, LineList=1, PointList=0),
+        ),
+    )
+    monkeypatch.setattr(server.server_runtime, "_is_null_resource_id", lambda rid: str(rid) in {"", "0", "ResourceId::0"})
+
+    output_path = tmp_path / "triangle.obj"
+    payload = json.loads(
+        asyncio.run(
+            server._dispatch_export(
+                "mesh",
+                {
+                    "session_id": "sess_demo",
+                    "event_id": 17,
+                    "output_path": str(output_path),
+                    "format": "obj",
+                    "space": "postvs",
+                    "include_attributes": False,
+                },
+            )
+        )
+    )
+    rejected_path = tmp_path / "unsupported.ply"
+    rejected = json.loads(
+        asyncio.run(
+            server._dispatch_export(
+                "mesh",
+                {"session_id": "sess_demo", "output_path": str(rejected_path), "format": "ply"},
+            )
+        )
+    )
+
+    assert payload["success"] is True
+    assert payload["vertex_count"] == 3
+    assert payload["primitive_count"] == 1
+    assert output_path.read_text(encoding="utf-8").splitlines() == [
+        "# RDX post-VS positions, event 17",
+        "v 0 0 0",
+        "v 1 0 0",
+        "v 0 1 0",
+        "f 1 2 3",
+    ]
+    assert rejected["success"] is False
+    assert rejected["code"] == "mesh_export_unsupported"
+    assert not rejected_path.exists()
+
+
+def test_buffer_base64_read_stays_in_memory_without_an_artifact(monkeypatch: pytest.MonkeyPatch) -> None:
+    restored = []
+    class _BufferController:
+        def GetBuffers(self):
+            return [SimpleNamespace(resourceId="ResourceId::buffer", length=3)]
+
+        def SetFrameEvent(self, event, force):
+            restored.append(event)
+
+        def GetBufferData(self, resource_id: object, offset: int, size: int) -> bytes:
+            return b"\x01\x02\x03"
+
+    async def _inline_offload(fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    async def _fake_get_controller(session_id: str) -> _BufferController:
+        return _BufferController()
+
+    async def _fake_resolve_resource_id(session_id: str, resource_id: object) -> str:
+        return str(resource_id)
+
+    monkeypatch.setattr(server.server_runtime, "_offload", _inline_offload)
+    monkeypatch.setattr(server.server_runtime, "_get_controller", _fake_get_controller)
+    monkeypatch.setattr(server.server_runtime, "_resolve_resource_id", _fake_resolve_resource_id)
+    monkeypatch.setattr(server.server_runtime, "_active_event", lambda _: 11)
+
+    payload = json.loads(
+        asyncio.run(
+            server._dispatch_buffer(
+                "get_data",
+                {"session_id": "sess_demo", "buffer_id": "ResourceId::buffer", "as_base64": True},
+            )
+        )
+    )
+
+    assert payload == {"success": True, "byte_size": 3, "base64": "AQID", "buffer_id": "ResourceId::buffer",
+                       "state": "current", "resolved_event_id": 11, "restored_event_id": 11,
+                       "replay_state_restored": True, "initial_provenance": None}
+    assert restored == [11, 11]
+    assert "artifact_path" not in payload
 
 
 def test_capture_copy_reports_actual_native_progress(monkeypatch):
@@ -546,3 +685,199 @@ def test_capture_copy_reports_actual_native_progress(monkeypatch):
     manager._open_remote_capture_sync(state, 'capture.rdc')
     assert progress == [('capture_transfer_started', 0.0), ('capture_transfer_progress', 0.25),
                         ('capture_transfer_progress', 0.75), ('capture_transfer_done', 1.0)]
+
+
+def test_remote_ping_failure_releases_acquired_connection(monkeypatch):
+    runtime = server.server_runtime
+    remote = DummyRemoteServer()
+    remote.Ping = lambda: SimpleNamespace(OK=lambda: False, Message=lambda: 'Ping failed')
+    monkeypatch.setattr(runtime, '_wait_for_remote_endpoint', lambda *a: None)
+    monkeypatch.setattr(runtime, '_create_remote_server_connection', lambda *a: remote)
+    with pytest.raises(Exception, match='Ping'):
+        asyncio.run(runtime._connect_remote_endpoint('host', 1, 'renderdoc', {}, 1000))
+    assert remote.shutdown_called
+
+
+def test_borrowed_disconnect_never_shuts_down_remote_service(monkeypatch):
+    runtime = server.server_runtime
+    remote = DummyRemoteServer()
+    remote.ShutdownServerAndConnection = lambda: pytest.fail('must never stop borrowed server')
+    handle = SimpleNamespace(remote_server=remote, transport='adb_android', bootstrap_result=None)
+    assert runtime._disconnect_remote_handle_sync(handle) == []
+    assert remote.shutdown_called
+
+
+def test_remote_connect_cancel_joins_worker_and_releases_late_connection(monkeypatch):
+    import threading
+    runtime = server.server_runtime
+    remote = DummyRemoteServer()
+    entered, release = threading.Event(), threading.Event()
+    monkeypatch.setattr(runtime, '_wait_for_remote_endpoint', lambda *a: None)
+    def create(*a):
+        entered.set()
+        assert release.wait(2)
+        return remote
+    monkeypatch.setattr(runtime, '_create_remote_server_connection', create)
+    async def run():
+        task = asyncio.create_task(runtime._connect_remote_endpoint('host', 1, 'renderdoc', {}, 3000))
+        while not entered.is_set():
+            await asyncio.sleep(0)
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert remote.shutdown_called
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('message', ['Remote side of network connection is busy', 'Incompatible remote version'])
+def test_native_terminal_connection_status_does_not_retry(monkeypatch, message):
+    runtime = server.server_runtime
+    status = SimpleNamespace(OK=lambda: False, Message=lambda: message)
+    monkeypatch.setattr(runtime, '_get_rd', lambda: SimpleNamespace(CheckRemoteServerConnection=lambda *a: status))
+    monkeypatch.setattr(runtime.time, 'sleep', lambda *a: pytest.fail('terminal status must not retry'))
+    with pytest.raises(Exception, match=message):
+        runtime._wait_for_remote_endpoint('host:1', 10000)
+
+
+def test_remote_capture_keeps_runtime_connection_ownership(monkeypatch):
+    manager = SessionManager()
+    remote = _FreshRemoteServer()
+    state = SessionState(session_id='owned', backend_type=BackendType.REMOTE, remote_server=remote, remote_server_owned=False)
+    async def offload(fn, *args): return fn(*args)
+    async def output(*args): pass
+    monkeypatch.setattr(manager, '_offload', offload)
+    monkeypatch.setattr(manager, '_create_headless_output', output)
+    monkeypatch.setattr(manager, '_open_remote_capture_sync', lambda *args: (remote, '/remote/capture.rdc', object()))
+    asyncio.run(manager._open_remote_capture(state, 'capture.rdc'))
+    assert state.remote_server is remote
+    assert state.remote_server_owned is False
+
+
+@pytest.mark.parametrize('cleanup_errors', [[], ['forward identity changed']])
+def test_clear_context_closes_only_owned_remotes_and_retains_failed_ownership(monkeypatch, cleanup_errors):
+    runtime = server.server_runtime
+    owned = SimpleNamespace(origin_context_id='clear-test')
+    foreign = SimpleNamespace(origin_context_id='foreign')
+    monkeypatch.setattr(runtime._runtime, 'remotes', {'owned': owned, 'foreign': foreign})
+    monkeypatch.setattr(runtime, '_runtime_context_id', lambda: 'clear-test')
+    monkeypatch.setattr(runtime, '_context_state', lambda *a: {'sessions': {}})
+    async def noop(*a): pass
+    async def offload(fn, *args): return fn(*args)
+    monkeypatch.setattr(runtime, '_close_preview_binding', noop)
+    monkeypatch.setattr(runtime, '_offload', offload)
+    def disconnect(handle):
+        assert handle is owned
+        return cleanup_errors
+    monkeypatch.setattr(runtime, '_disconnect_remote_handle_sync', disconnect)
+    resets = []
+    monkeypatch.setattr(runtime, '_reset_context_snapshot', lambda ctx: resets.append(ctx) or {'context_id': ctx})
+    result = json.loads(asyncio.run(runtime._dispatch_session('clear_context', {})))
+    assert result['success'] is (not cleanup_errors)
+    assert runtime._runtime.remotes['foreign'] is foreign
+    assert ('owned' in runtime._runtime.remotes) is bool(cleanup_errors)
+    assert resets == ([] if cleanup_errors else ['clear-test'])
+
+
+def test_android_transfer_does_not_break_rpc_with_native_copy_attempt(monkeypatch):
+    remote = _FreshRemoteServer()
+    monkeypatch.setitem(sys.modules, "renderdoc", _FakeRenderDocModule(remote))
+    manager = SessionManager()
+    state = SessionState(session_id="adb-copy", backend_type=BackendType.REMOTE, remote_server=remote, remote_transport="adb_android")
+    monkeypatch.setattr(manager, "_copy_android_capture_with_adb", lambda *a: "/verified/capture.rdc")
+    _, path, _ = manager._open_remote_capture_sync(state, "capture.rdc")
+    assert path == "/verified/capture.rdc"
+    assert remote.copied == []
+    assert remote.opened == [path]
+
+
+def test_native_copy_failure_does_not_attempt_fallback_or_open(monkeypatch):
+    remote = _FreshRemoteServer()
+    remote.CopyCaptureToRemote = lambda *a: ""
+    monkeypatch.setitem(sys.modules, "renderdoc", _FakeRenderDocModule(remote))
+    manager = SessionManager()
+    monkeypatch.setattr(manager, "_copy_android_capture_with_adb", lambda *a: pytest.fail("no fallback"))
+    state = SessionState(session_id="failed-copy", backend_type=BackendType.REMOTE, remote_server=remote)
+    with pytest.raises(Exception, match="Capture transfer"):
+        manager._open_remote_capture_sync(state, "capture.rdc")
+    assert remote.opened == []
+
+
+@pytest.mark.parametrize("existing,verified,success", [(True, True, True), (False, True, True), (False, False, False)])
+def test_android_transfer_verifies_content_and_owns_only_new_paths(monkeypatch, tmp_path, existing, verified, success):
+    import hashlib
+    import rdx.core.session_manager as module
+    capture=tmp_path / "tiny.rdc"
+    capture.write_bytes(b"capture")
+    digest=hashlib.sha256(b"capture").hexdigest()
+    commands=[]
+    owned=[]
+    probes=0
+    def run(argv, **kwargs):
+        nonlocal probes
+        commands.append(argv)
+        if "sha256sum" in argv:
+            probes += 1
+            found=existing or (probes > 1 and verified)
+            return SimpleNamespace(returncode=0 if found else 1, stdout=digest+" file" if found else "", stderr="" if found else "No such file or directory")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+    monkeypatch.setattr(module.subprocess,"run",run)
+    state=SessionState(session_id="copy",backend_type=BackendType.REMOTE,
+        remote_server=SimpleNamespace(TakeOwnershipCapture=owned.append),
+        remote_device_serial="device",remote_bootstrap={"adb_path":"adb", "package_name":"org.renderdoc.renderdoccmd.arm64"})
+    if success:
+        assert SessionManager()._copy_android_capture_with_adb(state,str(capture)).endswith(digest+".rdc")
+    else:
+        with pytest.raises(RuntimeError,match="SHA256"):
+            SessionManager()._copy_android_capture_with_adb(state,str(capture))
+    assert bool(owned) is (not existing)
+    assert sum("push" in cmd for cmd in commands) == (0 if existing else 1)
+    assert any("rm" in cmd for cmd in commands) is (not success)
+
+
+@pytest.mark.parametrize("error", ["device offline", "Permission denied", ""])
+def test_android_transfer_refuses_unverifiable_existing_path(monkeypatch, tmp_path, error):
+    import rdx.core.session_manager as module
+    capture = tmp_path / "tiny.rdc"
+    capture.write_bytes(b"capture")
+    commands = []
+    def run(argv, **kwargs):
+        commands.append(argv)
+        return SimpleNamespace(returncode=1, stdout="", stderr=error)
+    monkeypatch.setattr(module.subprocess, "run", run)
+    state = SessionState(session_id="copy", backend_type=BackendType.REMOTE,
+        remote_server=SimpleNamespace(TakeOwnershipCapture=lambda p: pytest.fail("unverified ownership")),
+        remote_device_serial="device", remote_bootstrap={"adb_path": "adb", "package_name": "org.renderdoc.renderdoccmd.arm64"})
+    with pytest.raises(RuntimeError, match="Cannot verify"):
+        SessionManager()._copy_android_capture_with_adb(state, str(capture))
+    assert len(commands) == 1 and "sha256sum" in commands[0]
+
+
+def test_texture_save_keeps_native_readback_failure_message(monkeypatch):
+    from rdx.core import render_service
+    monkeypatch.setattr(render_service, "_get_rd", lambda: SimpleNamespace(ResultCode=SimpleNamespace(Succeeded=0)))
+    result = SimpleNamespace(code=29, Message=lambda: "Couldn't readback bytes for mip 2, slice 1, sample 0")
+    ok, detail = render_service._save_texture_result(result)
+    assert not ok
+    assert detail["status_text"] == result.Message()
+    assert detail["result_code_raw"] == "29"
+
+
+def test_android_failed_transfer_preserves_cleanup_failure(monkeypatch, tmp_path):
+    import rdx.core.session_manager as module
+    capture = tmp_path / "tiny.rdc"
+    capture.write_bytes(b"capture")
+    def run(argv, **kwargs):
+        if "sha256sum" in argv:
+            return SimpleNamespace(returncode=1, stdout="", stderr="No such file or directory")
+        if "push" in argv:
+            raise RuntimeError("transfer disconnected")
+        return SimpleNamespace(returncode=1 if "rm" in argv else 0, stdout="", stderr="cleanup denied")
+    monkeypatch.setattr(module.subprocess, "run", run)
+    state = SessionState(session_id="copy", backend_type=BackendType.REMOTE,
+        remote_server=SimpleNamespace(TakeOwnershipCapture=lambda p: None),
+        remote_device_serial="device", remote_bootstrap={"adb_path": "adb", "package_name": "org.renderdoc.renderdoccmd.arm64"})
+    with pytest.raises(RuntimeError, match="transfer disconnected; owned capture cleanup failed: cleanup denied"):
+        SessionManager()._copy_android_capture_with_adb(state, str(capture))
