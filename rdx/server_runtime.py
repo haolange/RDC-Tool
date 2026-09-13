@@ -205,6 +205,7 @@ class RuntimeState:
     previews: Dict[str, "PreviewBinding"] = field(default_factory=dict)
     shader_debugs: Dict[str, ShaderDebugHandle] = field(default_factory=dict)
     shader_replacements: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
+    restored_shader_sessions: set[str] = field(default_factory=set)
     initialized: bool = False
     enable_remote: bool = True
 
@@ -5839,6 +5840,7 @@ async def runtime_shutdown(*, clear_context_state: bool = True) -> None:
                 except Exception:
                     pass
         _runtime.shader_replacements.clear()
+        _runtime.restored_shader_sessions.clear()
         for info in list(_session_manager.list_sessions()):
             try:
                 await _session_manager.close_session(info.session_id)
@@ -5894,6 +5896,7 @@ async def _dispatch_core(action: str, args: Dict[str, Any]) -> str:
                 except Exception:
                     pass
         _runtime.shader_replacements.clear()
+        _runtime.restored_shader_sessions.clear()
         for context_id in list(_runtime.previews.keys()):
             try:
                 await _close_preview_binding(context_id)
@@ -6296,6 +6299,7 @@ def _tool_mutates_state(tool_name: str) -> bool:
         "rd.remote.connect",
         "rd.remote.disconnect",
         "rd.session.update_context",
+        "rd.session.observe",
         "rd.session.open_preview",
         "rd.session.close_preview",
         "rd.session.select_session",
@@ -7117,6 +7121,9 @@ async def _dispatch_capture(action: str, args: Dict[str, Any]) -> str:
         )
         _progress("session_created", "Replay session allocated", progress_pct=0.72, details={"session_id": session_info.session_id, "backend_type": backend_type})
         try:
+            reporter = _current_progress_reporter()
+            if backend_type == "remote" and reporter is not None:
+                _session_manager.get_state(session_info.session_id).transfer_progress = lambda stage, fraction: reporter.emit(stage, "Transferring capture", progress_pct=fraction, details={"session_id": session_info.session_id})
             cap_info = await _session_manager.open_capture(session_info.session_id, handle.file_path)
             _progress("capture_open_done", "Capture opened for replay", progress_pct=0.82, details={"session_id": session_info.session_id})
             # The session already exists in SessionManager after open_capture().
@@ -7202,6 +7209,7 @@ async def _dispatch_capture(action: str, args: Dict[str, Any]) -> str:
             except Exception:
                 pass
         _runtime.shader_replacements.pop(session_id, None)
+        _runtime.restored_shader_sessions.discard(session_id)
         _runtime.replays.pop(session_id, None)
         await _session_manager.close_session(session_id)
         if owned_remote is not None and owned_remote.remote_id in _runtime.remotes:
@@ -10500,6 +10508,7 @@ async def _dispatch_shader(action: str, args: Dict[str, Any]) -> str:
             r for r in repl if str(r.get("replacement_id")) != replacement_id
         ]
         _runtime.shader_replacements[session_id] = remaining_replacements
+        _runtime.restored_shader_sessions.add(session_id)
         _sync_context_session_replacements(session_id, remaining_replacements)
         try:
             await _maybe_refresh_remote_session_after_revert(

@@ -525,12 +525,14 @@ class RenderService:
         event_id: int,
         texture_id: Any,
         session_manager: SessionManager,
-        artifact_store: ArtifactStore,
+        artifact_store: Optional[ArtifactStore],
         *,
         output_format: str = "png",
         output_path: Optional[str] = None,
         subresource: Optional[Dict[str, int]] = None,
-    ) -> Tuple[ArtifactRef, Dict[str, Any], Optional[str]]:
+    ) -> Tuple[Optional[ArtifactRef], Dict[str, Any], Optional[str]]:
+        if artifact_store is None and not output_path:
+            raise ValueError("An unpublished texture requires an explicit output path")
         rd = _get_rd()
         controller = session_manager.get_controller(session_id)
         backend_type = "unknown"
@@ -639,7 +641,7 @@ class RenderService:
                 mime=mime,
                 suffix=suffix,
                 meta=meta,
-            )
+            ) if artifact_store is not None else None
             return artifact_ref, meta, str(target_path) if output_path else None
         finally:
             if owns_temp_file:

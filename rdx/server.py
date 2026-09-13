@@ -12,6 +12,8 @@ from rdx.progress import ProgressReporter, ProgressSink
  
 _core_engine: Optional[CoreEngine] = None
 _PREVIEW_SELF_SYNCED_OPERATIONS = {
+    "rd.session.observe",
+    "rd.session.get_replay_events",
     "rd.capture.open_replay",
     "rd.event.set_active",
     "rd.replay.set_frame",

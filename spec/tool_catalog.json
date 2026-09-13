@@ -1,7 +1,7 @@
 {
   "source_path": "spec/doc_extracted.txt",
-  "tool_count": 194,
-  "generated_at": "2026-06-23T09:50:40.038846Z",
+  "tool_count": 196,
+  "generated_at": "2026-09-12T18:16:25.213986Z",
   "groups": {
     "3.1，核心与环境管理 (Core & Environment)": 14,
     "3.2，捕获文件与 Replay Session (Capture & Replay)": 13,
@@ -18,7 +18,7 @@
     "3.14，诊断工具 (Diagnostics, Heuristic Checks)": 11,
     "3.15，专家级宏工作流 (Expert Macro Workflows)": 10,
     "3.16，通用辅助工具 (Utilities, Optional)": 6,
-    "3.17，上下文快照工具 (Context Snapshot Tools)": 11,
+    "3.17，上下文快照工具 (Context Snapshot Tools)": 13,
     "3.18，VFS 导航工具 (VFS Navigation Tools)": 4
   },
   "tools": [
@@ -3817,6 +3817,45 @@
             "rd.capture.open_replay"
           ],
           "reason": "This tool operates on a live replay session."
+        }
+      ]
+    },
+    {
+      "name": "rd.session.get_replay_events",
+      "group": "3.17，上下文快照工具 (Context Snapshot Tools)",
+      "description": "Read the complete discrete action event index of the selected live context without changing its event.",
+      "parameter_raw": "",
+      "returns_raw": "ok (bool)<br>data (dict): {data, error}<br>artifacts (list)<br>error (dict|null)<br>meta (dict)<br>projections (dict, 可选)",
+      "param_names": [],
+      "prerequisites": [
+        {
+          "requires": "session_id",
+          "via_tools": [
+            "rd.capture.open_replay"
+          ],
+          "reason": "Requires an open replay"
+        }
+      ]
+    },
+    {
+      "name": "rd.session.observe",
+      "group": "3.17，上下文快照工具 (Context Snapshot Tools)",
+      "description": "Atomically apply an event and export its color output without a desktop window; missing event observes the current state. Remote device presentation is reported separately, never inferred from PNG success.",
+      "parameter_raw": "out_path (str): fresh absolute PNG path<br>event_id (int, optional)<br>final_output (bool, optional): explicit Present resource selection, cannot combine with event_id or target<br>target (dict, optional): {texture_id, rt_index}; actual color attachment slot",
+      "returns_raw": "ok (bool)<br>data (dict): {data, error}<br>artifacts (list)<br>error (dict|null)<br>meta (dict)<br>projections (dict, 可选)",
+      "param_names": [
+        "out_path",
+        "event_id",
+        "final_output",
+        "target"
+      ],
+      "prerequisites": [
+        {
+          "requires": "session_id",
+          "via_tools": [
+            "rd.capture.open_replay"
+          ],
+          "reason": "Requires an open replay"
         }
       ]
     },

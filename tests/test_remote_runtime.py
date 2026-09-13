@@ -528,3 +528,21 @@ def test_dispatch_mesh_post_vs_serializes_format_payload(monkeypatch) -> None:
     assert mesh["vertex_count"] == 2
     assert mesh["mesh_format"]["format"]["compCount"] == 4
     assert mesh["mesh_format"]["format"]["compByteWidth"] == 4
+
+
+def test_capture_copy_reports_actual_native_progress(monkeypatch):
+    import rdx.core.session_manager as manager_module
+    progress = []
+    def copy(path, callback):
+        callback(0.25)
+        callback(0.75)
+        return '/remote/capture.rdc'
+    remote = SimpleNamespace(CopyCaptureToRemote=copy, OpenCapture=lambda *a: (True, object()))
+    monkeypatch.setattr(manager_module, '_get_rd', lambda: SimpleNamespace(ReplayOptions=lambda: None))
+    monkeypatch.setattr(manager_module, '_check_status', lambda *a, **k: None)
+    state = SessionState(session_id='progress', backend_type=BackendType.REMOTE, remote_server=remote,
+                         transfer_progress=lambda stage, fraction: progress.append((stage, fraction)))
+    manager = object.__new__(SessionManager)
+    manager._open_remote_capture_sync(state, 'capture.rdc')
+    assert progress == [('capture_transfer_started', 0.0), ('capture_transfer_progress', 0.25),
+                        ('capture_transfer_progress', 0.75), ('capture_transfer_done', 1.0)]

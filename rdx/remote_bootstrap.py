@@ -1,4 +1,4 @@
-﻿"""Android remote bootstrap helpers for standalone `rdx-tools`."""
+"""Android remote bootstrap helpers for standalone `rdx-tools`."""
 
 from __future__ import annotations
 
@@ -54,6 +54,7 @@ class AndroidBootstrapResult:
     config_local_path: str = ""
     config_remote_path: str = ""
     started_activity: bool = False
+    owned_pids: list[int] = field(default_factory=list)
     installed_apk: bool = False
     pushed_config: bool = False
     created_forward: bool = False
@@ -349,22 +350,6 @@ def _adb_shell(adb_path: str, device_serial: str, *args: str, timeout_s: float, 
     return _run_subprocess(cmd, timeout_s=timeout_s, error_code=error_code, error_message=error_message)
 
 
-def _stop_package(adb_path: str, device_serial: str, package_name: str) -> None:
-    try:
-        _adb_shell(
-            adb_path,
-            device_serial,
-            "am",
-            "force-stop",
-            package_name,
-            timeout_s=10.0,
-            error_code="android_remote_stop_failed",
-            error_message="Failed to stop RenderDocCmd activity",
-        )
-    except AndroidRemoteBootstrapError:
-        return
-
-
 def detect_device_arch(adb_path: str, device_serial: str) -> tuple[str, str]:
     for prop in ("ro.product.cpu.abilist64", "ro.product.cpu.abilist", "ro.product.cpu.abi"):
         proc = _adb_shell(
@@ -389,7 +374,7 @@ def detect_device_arch(adb_path: str, device_serial: str) -> tuple[str, str]:
     )
 
 
-def _is_package_running(adb_path: str, device_serial: str, package_name: str) -> bool:
+def _package_pids(adb_path: str, device_serial: str, package_name: str) -> list[int]:
     try:
         proc = subprocess.run(
             _adb_base_cmd(adb_path, device_serial) + ["shell", "pidof", package_name],
@@ -400,9 +385,17 @@ def _is_package_running(adb_path: str, device_serial: str, package_name: str) ->
             timeout=10.0,
             check=False,
         )
-    except Exception:
-        return False
-    return proc.returncode == 0 and bool(str(proc.stdout or "").strip())
+    except Exception as exc:
+        raise AndroidRemoteBootstrapError("android_helper_state_unknown", "Unable to verify Android helper ownership") from exc
+    stdout, stderr = str(proc.stdout or "").strip(), str(proc.stderr or "").strip()
+    if proc.returncode == 1 and not stdout and not stderr:
+        return []
+    if proc.returncode == 0 and stdout and all(part.isdigit() for part in stdout.split()):
+        return sorted(int(part) for part in stdout.split())
+    raise AndroidRemoteBootstrapError("android_helper_state_unknown", "Unable to verify Android helper ownership")
+
+def _is_package_running(adb_path: str, device_serial: str, package_name: str) -> bool:
+    return bool(_package_pids(adb_path, device_serial, package_name))
 
 
 def _list_renderdoc_socket_ports(adb_path: str, device_serial: str) -> list[int]:
@@ -485,6 +478,8 @@ def bootstrap_android_remote(
         apk_path=str(apk_path),
         forward_spec=forward_spec,
     )
+    if any(_package_pids(adb_path, device.serial, helper) for helper in _PACKAGE_MAP.values()):
+        raise AndroidRemoteBootstrapError("android_helper_occupied", "RenderDoc helper is already running; refusing to restart an externally owned helper.", details={"package_name": package_name, "device_serial": device.serial})
     existing_socket_ports = _list_renderdoc_socket_ports(adb_path, device.serial)
 
     if opts.install_apk:
@@ -515,8 +510,6 @@ def bootstrap_android_remote(
         result.pushed_config = True
         result.cleanup_actions.append("config-pushed")
 
-    _stop_package(adb_path, device.serial, package_name)
-    time.sleep(0.5)
 
     launch_error: AndroidRemoteBootstrapError | None = None
     try:
@@ -558,8 +551,9 @@ def bootstrap_android_remote(
 
     deadline = time.time() + 15.0
     while time.time() < deadline:
-        if _is_package_running(adb_path, device.serial, package_name):
-            result.started_activity = True
+        if any(_package_pids(adb_path, device.serial, helper) for helper in _PACKAGE_MAP.values()):
+            result.owned_pids = _package_pids(adb_path, device.serial, package_name)
+            result.started_activity = bool(result.owned_pids)
             break
         time.sleep(1.0)
 
@@ -605,6 +599,9 @@ def cleanup_android_remote(result: AndroidBootstrapResult) -> list[str]:
 
     if result.started_activity:
         try:
+            current_pids = _package_pids(result.adb_path, result.device_serial, result.package_name)
+            if not result.owned_pids or current_pids != result.owned_pids:
+                raise AndroidRemoteBootstrapError("android_helper_ownership_changed", "Helper process identity changed; refusing to stop it")
             _adb_shell(
                 result.adb_path,
                 result.device_serial,

@@ -1,6 +1,6 @@
 ﻿# Tools
 
-`spec/tool_catalog.json` defines 194 `rd.*` tools. The public transport is CLI; raw tool calls use `rdx call <rd.*>`.
+`spec/tool_catalog.json` defines 196 `rd.*` tools. The public transport is CLI; raw tool calls use `rdx call <rd.*>`.
 
 ```bat
 rdx tools list --json

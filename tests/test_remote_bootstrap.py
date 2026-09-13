@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from types import SimpleNamespace
 
@@ -53,6 +53,7 @@ def test_describe_android_remote_exposes_bootstrap_flags() -> None:
         installed_apk=True,
         pushed_config=True,
         started_activity=True,
+        owned_pids=[123],
         created_forward=True,
         install_mode="force_replace",
         install_reason="signature_mismatch",
@@ -148,6 +149,7 @@ def test_cleanup_android_remote_removes_forward_and_config(monkeypatch: pytest.M
     monkeypatch.setattr(remote_bootstrap, "_run_subprocess", _fake_run)
     monkeypatch.setattr(remote_bootstrap, "_adb_shell", _fake_shell)
 
+    monkeypatch.setattr(remote_bootstrap, "_package_pids", lambda *a: [123])
     config_path = tmp_path / "renderdoc.conf"
     config_path.write_text("", encoding="utf-8")
 
@@ -165,6 +167,7 @@ def test_cleanup_android_remote_removes_forward_and_config(monkeypatch: pytest.M
         config_local_path=str(config_path),
         config_remote_path="/sdcard/Android/data/org.renderdoc.renderdoccmd.arm64/files/renderdoc.conf",
         started_activity=True,
+        owned_pids=[123],
         created_forward=True,
     )
 
@@ -181,3 +184,36 @@ def test_select_remote_socket_port_prefers_requested_port() -> None:
 
 def test_select_remote_socket_port_falls_back_to_detected_single_port() -> None:
     assert remote_bootstrap._select_remote_socket_port(38920, [], [39920]) == 39920
+
+
+def test_bootstrap_refuses_running_external_helper_before_mutation(monkeypatch, tmp_path):
+    monkeypatch.setattr(remote_bootstrap, 'resolve_adb_path', lambda: 'adb')
+    monkeypatch.setattr(remote_bootstrap, '_run_subprocess', lambda *a, **k: SimpleNamespace(stdout='List of devices attached\nserial-1 device\n'))
+    monkeypatch.setattr(remote_bootstrap, 'detect_device_arch', lambda *a: ('arm64', 'arm64-v8a'))
+    monkeypatch.setattr(remote_bootstrap, 'select_android_package', lambda *a: ('helper', tmp_path / 'helper.apk'))
+    monkeypatch.setattr(remote_bootstrap, 'allocate_local_port', lambda *a: 38960)
+    monkeypatch.setattr(remote_bootstrap, '_package_pids', lambda *a: [123])
+    def forbidden(*args, **kwargs):
+        raise AssertionError('must not mutate external helper')
+    monkeypatch.setattr(remote_bootstrap, '_ensure_android_helper_installed', forbidden)
+    monkeypatch.setattr(remote_bootstrap, '_adb_shell', forbidden)
+    with pytest.raises(remote_bootstrap.AndroidRemoteBootstrapError) as error:
+        remote_bootstrap.bootstrap_android_remote()
+    assert error.value.code == 'android_helper_occupied'
+
+@pytest.mark.parametrize('returncode,stdout,stderr', [(1, '', 'device offline'), (0, '', ''), (2, '', '')])
+def test_helper_ownership_probe_fails_closed(monkeypatch, returncode, stdout, stderr):
+    monkeypatch.setattr(remote_bootstrap.subprocess, 'run', lambda *a, **k: SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr))
+    with pytest.raises(remote_bootstrap.AndroidRemoteBootstrapError) as error:
+        remote_bootstrap._package_pids('adb', 'serial', 'helper')
+    assert error.value.code == 'android_helper_state_unknown'
+
+
+def test_helper_cleanup_refuses_replaced_process(monkeypatch):
+    monkeypatch.setattr(remote_bootstrap, '_package_pids', lambda *a: [456])
+    def forbidden(*a, **k):
+        raise AssertionError('must not stop replacement helper')
+    monkeypatch.setattr(remote_bootstrap, '_adb_shell', forbidden)
+    result = AndroidBootstrapResult(adb_path='adb', device_serial='serial', package_name='helper', activity_name='helper.Loader',
+        abi='arm64', host='127.0.0.1', port=1, remote_port=2, apk_path='', forward_spec='', started_activity=True, owned_pids=[123])
+    assert remote_bootstrap.cleanup_android_remote(result) == ['Helper process identity changed; refusing to stop it']

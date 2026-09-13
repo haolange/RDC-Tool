@@ -2,7 +2,7 @@
 
 This file is generated from `spec/tool_catalog.json`. Do not edit it by hand; run `python scripts/generate_tool_reference.py`.
 
-- Tool count: 194
+- Tool count: 196
 - Group count: 17
 - Canonical transport: `rdx call <rd.*> --format json`
 - Human facade: `rdx event|pipeline|shader|export|pixel|resource ...` maps to the same canonical tools
@@ -27,7 +27,7 @@ This file is generated from `spec/tool_catalog.json`. Do not edit it by hand; ru
 | 3.14，诊断工具 (Diagnostics, Heuristic Checks) | 11 |
 | 3.15，专家级宏工作流 (Expert Macro Workflows) | 10 |
 | 3.16，通用辅助工具 (Utilities, Optional) | 6 |
-| 3.17，上下文快照工具 (Context Snapshot Tools) | 11 |
+| 3.17，上下文快照工具 (Context Snapshot Tools) | 13 |
 | 3.18，VFS 导航工具 (VFS Navigation Tools) | 4 |
 
 ## 3.1，核心与环境管理 (Core & Environment)
@@ -288,6 +288,8 @@ This file is generated from `spec/tool_catalog.json`. Do not edit it by hand; ru
 
 | Tool | Summary | Parameters | Prerequisites |
 | --- | --- | --- | --- |
+| rd.session.get_replay_events | Read the complete discrete action event index of the selected live context without changing its event. | - | session_id; rd.capture.open_replay; Requires an open replay |
+| rd.session.observe | Atomically apply an event and export its color output without a desktop window; missing event observes the current state. Remote device presentation is reported separately, never inferred from PNG success. | out_path (str): fresh absolute PNG path<br>event_id (int, optional)<br>final_output (bool, optional): explicit Present resource selection, cannot combine with event_id or target<br>target (dict, optional): {texture_id, rt_index}; actual color attachment slot | session_id; rd.capture.open_replay; Requires an open replay |
 | rd.session.get_context | 读取当前 context 快照与持久化状态索引，返回 runtime、remote、focus、session 表、恢复信息、最近操作与限制配置。 | - | - |
 | rd.session.update_context | 更新当前 context 的 user-owned 字段，例如 focus_pixel、focus_resource_id、focus_shader_id 与 notes。 | key (str)<br>value (json, 可选): 传 null 表示清除对应 user-owned 字段 | - |
 | rd.session.create_context | Create or initialize an isolated CLI daemon context namespace. | new_context_id (str)<br>context_id (str, optional): current daemon context when omitted | - |

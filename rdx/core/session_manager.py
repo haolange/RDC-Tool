@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import asyncio
 import functools
@@ -130,6 +130,7 @@ class SessionState:
     remote_bootstrap: Dict[str, Any] = field(default_factory=dict)
     remote_bootstrap_result: Any = None
     remote_device_serial: str = ""
+    transfer_progress: Any = None
     capabilities: SessionCapabilities = field(default_factory=SessionCapabilities)
     capture_id: Optional[str] = None
     is_initialized: bool = False
@@ -372,7 +373,10 @@ class SessionManager:
     async def _open_remote_capture(self, state: SessionState, rdc_path: str) -> None:
         if state.remote_server is None:
             raise SessionError(code="no_remote_server", message="Remote session has no active server connection")
-        remote_server, remote_rdc_path, controller = await self._offload(self._open_remote_capture_sync, state, rdc_path)
+        try:
+            remote_server, remote_rdc_path, controller = await self._offload(self._open_remote_capture_sync, state, rdc_path)
+        finally:
+            state.transfer_progress = None
         state.remote_server = remote_server
         state.remote_server_owned = True
         state.controller = controller
@@ -394,7 +398,11 @@ class SessionManager:
             )
         copy_error = ""
         try:
-            remote_rdc_path = remote_server.CopyCaptureToRemote(rdc_path, None)
+            if state.transfer_progress:
+                state.transfer_progress("capture_transfer_started", 0.0)
+            remote_rdc_path = remote_server.CopyCaptureToRemote(rdc_path, lambda fraction: state.transfer_progress("capture_transfer_progress", float(fraction)) if state.transfer_progress else None)
+            if state.transfer_progress and str(remote_rdc_path or "").strip():
+                state.transfer_progress("capture_transfer_done", 1.0)
         except Exception as exc:
             remote_rdc_path = ""
             copy_error = str(exc)

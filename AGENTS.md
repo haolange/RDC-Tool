@@ -23,3 +23,8 @@ Remote self-tests should cover `rd.remote.connect`, `rd.remote.ping`, and `rd.ca
 涉及 preview / 几何观察面改动时，必须同步检查 `rd.session.open_preview`、`preview.display`、`preview_geometry_smoke.py` 与 CLI 文档。
 
 Complete the requested changes and relevant validation before delivery; continue past the first implementation until those checks pass, or report a concrete blocker with evidence.
+
+Window-free embedded observation (`rd.session.observe`) must preserve atomic
+context apply/export and truthful device-presentation status. Keep its catalog,
+regressions and session-model contract synchronized; do not route it through the
+standalone preview-window lifecycle.

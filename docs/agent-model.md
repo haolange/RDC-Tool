@@ -15,3 +15,9 @@ For shader edits, always read `edit_plan` from `rd.shader.get_source`, `rd.shade
 Agents use `rd.session.open_preview` through CLI commands when a human observer needs the preview window. `preview.display` is the stable state surface for window and framebuffer geometry.
 
 For the task-level rdx-native SOP, use [rdx-native agent playbook](rdx-native-agent-playbook.md). For exact catalog coverage, use [Tool reference](tool-reference.md), generated from `spec/tool_catalog.json`.
+
+Embedded consumers use `rd.session.get_replay_events` and `rd.session.observe`
+for complete event navigation and window-free PNG observation. See
+[session-model.md](session-model.md#embedded-replay-observations) for the atomic
+apply and partial-failure contract. These operations do not replace the independent
+CLI `rd.session.open_preview` / `preview.display` window workflow.

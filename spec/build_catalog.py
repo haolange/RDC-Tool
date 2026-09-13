@@ -22,6 +22,22 @@ _VFS_GROUP = "3.18\uff0cVFS \u5bfc\u822a\u5de5\u5177 (VFS Navigation Tools)"
 _OVERLAY_PATH = Path(__file__).resolve().with_name("tool_catalog_overlay.json")
 _MANUAL_TOOLS = [
     {
+        "name": "rd.session.get_replay_events",
+        "group": _CONTEXT_GROUP,
+        "description": "Read the complete discrete action event index of the selected live context without changing its event.",
+        "parameter_raw": "",
+        "returns_raw": "ok (bool)<br>data (dict): {context_id, session_id, events:[{event_id,name}], complete}<br>error (dict|null)",
+        "prerequisites": [{"requires": "session_id", "via_tools": ["rd.capture.open_replay"], "reason": "Requires an open replay"}],
+    },
+    {
+        "name": "rd.session.observe",
+        "group": _CONTEXT_GROUP,
+        "description": "Atomically apply an event and export its color output without a desktop window; missing event observes the current state. Remote device presentation is reported separately, never inferred from PNG success.",
+        "parameter_raw": "out_path (str): fresh absolute PNG path<br>event_id (int, optional)<br>final_output (bool, optional): explicit Present resource selection, cannot combine with event_id or target<br>target (dict, optional): {texture_id, rt_index}; actual color attachment slot",
+        "returns_raw": "ok (bool)<br>data (dict): {context_id,session_id,revision,event_id,image_event_id,target,targets,is_final_output,final_output_error,image_path,image_error,remote_display,width,height}<br>error (dict|null)",
+        "prerequisites": [{"requires": "session_id", "via_tools": ["rd.capture.open_replay"], "reason": "Requires an open replay"}],
+    },
+    {
         "name": "rd.session.get_context",
         "group": _CONTEXT_GROUP,
         "description": "\u8bfb\u53d6\u5f53\u524d context \u5feb\u7167\u4e0e\u6301\u4e45\u5316\u72b6\u6001\u7d22\u5f15\uff0c\u8fd4\u56de runtime\u3001remote\u3001focus\u3001session \u8868\u3001\u6062\u590d\u4fe1\u606f\u3001\u6700\u8fd1\u64cd\u4f5c\u4e0e\u9650\u5236\u914d\u7f6e\u3002",

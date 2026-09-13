@@ -1,6 +1,6 @@
 ﻿# rdx-tools
 
-`rdx-tools` is a CLI-only RenderDoc `.rdc` runtime package for Windows x64 local replay plus remote Android replay. It exposes 194 JSON-first `rd.*` tools through the `rdx` command.
+`rdx-tools` is a CLI-only RenderDoc `.rdc` runtime package for Windows x64 local replay plus remote Android replay. It exposes 196 JSON-first `rd.*` tools through the `rdx` command.
 
 ## Entry Points
 

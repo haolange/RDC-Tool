@@ -37,7 +37,7 @@ def test_catalog_boundaries_remove_pre_ga_surfaces_and_expand_export_params() ->
     payload = json.loads(catalog.read_text(encoding="utf-8"))
     tools = payload.get("tools", [])
     names = {str(t.get("name", "")).strip() for t in tools}
-    assert int(payload.get("tool_count") or 0) == 194
+    assert int(payload.get("tool_count") or 0) == 196
 
     removed = {
         "rd.resource.rename",

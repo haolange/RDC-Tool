@@ -24,3 +24,12 @@ Keep `options.remote_id` explicit for `rd.capture.open_replay` so remote replay
 never falls back to local.
 
 Run `preview_geometry_smoke.py` when the Android remote smoke changes preview behavior.
+
+Embedded replay acceptance additionally calls `rd.session.get_replay_events`,
+then `rd.session.observe` with a fresh absolute PNG path and `final_output: true`,
+and again with a visibly different event. Check requested/applied/image EIDs,
+PNG dimensions and failure diagnostics independently from device presentation.
+The current bundled client binding cannot confirm Android screen presentation;
+record `remote_display.status=unsupported` as an external helper/API acceptance
+blocker even if remote open and PNG export succeed. Do not stop or replace an
+already running user-owned RenderDoc Android helper merely to obtain this proof.
