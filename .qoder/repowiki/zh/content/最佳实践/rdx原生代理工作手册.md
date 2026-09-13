@@ -19,6 +19,12 @@
 - [rdx/context_snapshot.py](file://rdx/context_snapshot.py)
 </cite>
 
+## 更新摘要
+**变更内容**
+- doctor命令现在支持条件性执行，基于运行时就绪状态自适应判断
+- 输出大小管理优化，优先使用列表和摘要命令定位未知目标或直接查询已知目标
+- 地面规则变得更加自适应，提升工具链的智能化程度
+
 ## 目录
 1. [简介](#简介)
 2. [项目结构](#项目结构)
@@ -37,6 +43,7 @@
 - 支持平台：Windows x64（本地）、Android（远程）
 - 入口方式：命令行工具 rdx 或直接调用 Python 启动脚本
 - 核心特性：上下文状态管理、预览会话、工具目录、守护进程通信、渲染管线分析、着色器导出与断言等
+- **新增特性**：智能地面规则、条件性doctor命令、自适应输出管理
 
 ## 项目结构
 仓库采用按功能域划分的模块化组织方式，核心目录与职责如下：
@@ -81,6 +88,7 @@ D --> D9["context_snapshot.py 上下文快照"]
 - CLI 启动器与入口
   - 独立启动器负责解析参数、设置环境变量、检查依赖、引导运行时并转发到 rdx.cli 主程序
   - 提供版本查询、诊断、工具列表、上下文管理、守护进程控制、VFS、事件与管线分析、资源导出等命令
+  - **增强功能**：支持条件性doctor命令执行，基于运行时就绪状态自适应判断
 - 守护进程客户端
   - 通过命名管道与守护进程通信，支持启动、状态查询、心跳、客户端挂接/离线、清理过期状态等
 - 执行引擎
@@ -103,7 +111,7 @@ D --> D9["context_snapshot.py 上下文快照"]
 - [rdx/context_snapshot.py:1-541](file://rdx/context_snapshot.py#L1-L541)
 
 ## 架构总览
-rdx 的整体架构由“CLI 启动器 → 守护进程 → 执行引擎”三层组成，配合上下文状态与制品发布机制，形成可扩展的工具链。
+rdx 的整体架构由"CLI 启动器 → 守护进程 → 执行引擎"三层组成，配合上下文状态与制品发布机制，形成可扩展的工具链。
 
 ```mermaid
 graph TB
@@ -159,11 +167,13 @@ C --> CS
 ### CLI 启动器与主程序
 - run_cli.py
   - 初始化工具根目录与运行时目录，注入环境变量，检查缺失依赖；在 doctor 命令中可快速返回诊断结果
+  - **新增功能**：支持条件性doctor命令执行，当检测到依赖缺失时直接返回最小化诊断信息，避免不必要的运行时加载
   - 引导渲染运行时，加载 rdx.cli 并执行命令
 - rdx/cli.py
   - 定义完整的命令集：版本、诊断、工具列表/搜索、守护进程、上下文、会话预览、VFS、事件与管线、资源、导出、像素分析、断言与差异等
   - 实现 TSV 投影渲染、JSON 结果输出、超时策略、Windows 命令行参数提取等
   - 通过 daemon_request 将操作转发给守护进程，并对结果进行标准化封装
+  - **增强功能**：doctor命令现在基于运行时就绪状态进行条件性执行，提供更智能的诊断流程
 
 ```mermaid
 sequenceDiagram
@@ -174,16 +184,21 @@ participant Daemon as "daemon/client.py"
 participant Worker as "runtime_worker.py"
 User->>Launcher : rdx doctor
 Launcher->>Launcher : 检查依赖/设置环境
+alt 依赖缺失且为doctor命令
+Launcher->>Launcher : _emit_minimal_doctor()
+Launcher-->>User : 返回最小化诊断结果
+else 正常执行
 Launcher->>CLI : 转发命令
 CLI->>Daemon : ensure_daemon()/status
 Daemon->>Worker : 启动/连接工作进程
 Worker-->>Daemon : ready
 Daemon-->>CLI : 返回状态
 CLI-->>User : JSON诊断结果
+end
 ```
 
 **图表来源**
-- [cli/run_cli.py:226-283](file://cli/run_cli.py#L226-L283)
+- [cli/run_cli.py:121-283](file://cli/run_cli.py#L121-L283)
 - [rdx/cli.py:407-530](file://rdx/cli.py#L407-L530)
 - [rdx/daemon/client.py:576-674](file://rdx/daemon/client.py#L576-L674)
 - [rdx/runtime_worker.py:30-52](file://rdx/runtime_worker.py#L30-L52)
@@ -279,6 +294,33 @@ Meta --> End(["返回结果"])
 - [rdx/models.py:1-562](file://rdx/models.py#L1-L562)
 - [rdx/context_snapshot.py:1-541](file://rdx/context_snapshot.py#L1-L541)
 
+### 智能工具管理与输出优化
+- **新增功能**：工具列表和搜索命令优化
+  - tools list 命令支持 namespace、group、capability、role、intent 等结构化条件过滤
+  - tools search 命令支持名称、描述、group、capability 与 intent 的轻量级 discovery
+  - **输出大小管理**：优先使用列表和摘要命令定位未知目标，或直接查询已知目标，避免大量数据传输
+  - 支持 limit 参数控制返回结果数量，默认限制为 20 条
+  - 提供 summary 和 full 两种详细级别，默认使用 summary 减少输出体积
+
+```mermaid
+flowchart TD
+A["用户请求工具信息"] --> B{"目标是否已知?"}
+B --> |是| C["直接查询已知目标"]
+B --> |否| D["使用tools list/search定位"]
+D --> E{"是否需要详细信息?"}
+E --> |否| F["返回summary级别"]
+E --> |是| G["返回full级别"]
+C --> H["返回结果"]
+F --> H
+G --> H
+```
+
+**图表来源**
+- [rdx/cli.py:691-745](file://rdx/cli.py#L691-L745)
+
+**章节来源**
+- [rdx/cli.py:691-890](file://rdx/cli.py#L691-L890)
+
 ## 依赖关系分析
 - 组件耦合
   - CLI 层依赖守护进程客户端与路径/依赖管理模块
@@ -326,12 +368,17 @@ CE --> CM["models.py"]
   - TSV 投影需确保工具返回正确的列与行结构，否则会触发验证错误并提示回退到 JSON
 - 文件写入
   - 使用原子写入与备份恢复机制，减少竞态条件与部分写入风险
+- **新增优化**：智能输出管理
+  - 优先使用摘要级别返回减少数据传输量
+  - 条件性doctor命令避免不必要的运行时加载
+  - 工具搜索和列表命令支持分页和限制，控制输出大小
 
 [本节为通用指导，无需特定文件分析]
 
 ## 故障排除指南
 - 依赖缺失
   - 使用 doctor 命令查看缺失依赖列表；根据提示安装或修复
+  - **新增**：doctor命令现在支持条件性执行，在依赖缺失时返回最小化诊断信息
 - 渲染运行时布局问题
   - 检查 renderdoc.dll、renderdoc.json、renderdoc.pyd 是否存在；验证捆绑 Python 布局是否完整
 - 守护进程未就绪
@@ -340,6 +387,10 @@ CE --> CM["models.py"]
   - 检查 active_request_count 与 active_operation；根据恢复提示清理上下文后重试
 - 输出格式错误
   - 当请求 TSV 投影但工具未返回投影时，会收到验证错误；改用 JSON 或确认工具支持该投影
+- **新增**：工具查找问题
+  - 使用 `rdx tools list --limit 10` 获取工具概览
+  - 使用 `rdx tools search <query>` 精确查找特定工具
+  - 利用 summary 级别减少输出体积
 
 **章节来源**
 - [rdx/cli.py:407-530](file://rdx/cli.py#L407-L530)
@@ -347,7 +398,7 @@ CE --> CM["models.py"]
 - [rdx/io_utils.py:1-161](file://rdx/io_utils.py#L1-L161)
 
 ## 结论
-rdx 原生代理通过清晰的分层设计与严格的运行时管理，为 RenderDoc 分析提供了稳定可靠的 CLI 工具链。结合上下文状态与守护进程机制，可在本地与远程场景下高效完成捕获分析、管线调试与资源导出等任务。建议在 CI 环境中优先使用 doctor 命令进行自检，并遵循上下文隔离与预览会话的最佳实践。
+rdx 原生代理通过清晰的分层设计与严格的运行时管理，为 RenderDoc 分析提供了稳定可靠的 CLI 工具链。结合上下文状态与守护进程机制，可在本地与远程场景下高效完成捕获分析、管线调试与资源导出等任务。**最新的智能地面规则和条件性执行机制进一步提升了工具的自适应能力和用户体验**。建议在 CI 环境中优先使用 doctor 命令进行自检，并遵循上下文隔离与预览会话的最佳实践。
 
 [本节为总结性内容，无需特定文件分析]
 
@@ -355,6 +406,7 @@ rdx 原生代理通过清晰的分层设计与严格的运行时管理，为 Ren
 - 常用命令速查
   - 版本与诊断：`rdx --version`、`rdx version --json`、`rdx --json doctor`
   - 工具目录：`rdx tools list --json`、`rdx tools search <query> --json`
+  - **新增**：工具管理优化：`rdx tools list --limit 10`、`rdx tools search pipeline --detail-level summary`
   - 守护进程：`rdx daemon start|stop|status --daemon-context <id>`
   - 上下文：`rdx context status|update|list|clear --daemon-context <id>`
   - 预览：`rdx session preview on|off|status`
@@ -366,3 +418,4 @@ rdx 原生代理通过清晰的分层设计与严格的运行时管理，为 Ren
 **章节来源**
 - [README.md:7-26](file://README.md#L7-L26)
 - [rdx/cli.py:62-104](file://rdx/cli.py#L62-L104)
+- [rdx/cli.py:691-745](file://rdx/cli.py#L691-L745)
