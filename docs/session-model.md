@@ -2,7 +2,7 @@
 
 The CLI runtime stores context state per daemon context. `rdx context status` returns the current state; `rdx context update` changes agent-facing fields such as notes and focus. `session_locator` summarizes the active `.rdc`, session, frame, and event.
 
-`--daemon-context <id>` selects the continuous runtime namespace. It is not a daemon-mode switch; omitting it uses `default`. `rdx context list` shows known namespaces and `rdx context clear` clears the selected namespace.
+`--daemon-context <id>` selects the continuous runtime namespace. It is not a daemon-mode switch; omitting it uses `default`. `rdx context list` shows known namespaces and `rdx context clear` clears the selected namespace. Creating a new namespace is limited by live occupancy (`max_contexts`), not by how many state files remain on disk. Reusing an existing namespace does not consume an extra slot. `rdx context clear` still deletes that namespace's state files when it succeeds.
 
 Read a different namespace by issuing `rd.session.get_context` with that daemon context. There is no context-selection operation that mutates an implicit current namespace.
 

@@ -414,13 +414,26 @@ def _context_state_exists(context_id: Optional[str] = None) -> bool:
     return context_state_path(normalize_context_id(context_id or _runtime_context_id())).is_file()
 
 
+def _occupying_context_ids() -> set[str]:
+    from rdx.daemon.client import list_occupying_context_ids
+
+    occupying = {normalize_context_id(item) for item in list_occupying_context_ids()}
+    if _runtime.replays or _runtime.previews:
+        occupying.add(normalize_context_id(_runtime_context_id()))
+    occupying.update(normalize_context_id(item) for item in _runtime.previews.keys())
+    return occupying
+
+
 def _ensure_context_capacity(context_id: Optional[str] = None) -> None:
     ctx = normalize_context_id(context_id or _runtime_context_id())
     if _context_state_exists(ctx) or ctx in _runtime.context_states:
         return
     max_contexts = int(_runtime_limits().get("max_contexts", 8) or 8)
-    existing = {normalize_context_id(item) for item in list_context_ids()}
-    if len(existing) >= max_contexts:
+    occupying = _occupying_context_ids()
+    if ctx in occupying:
+        return
+    if len(occupying) >= max_contexts:
+        known = {normalize_context_id(item) for item in list_context_ids()}
         raise CoreError(
             code="context_limit_exceeded",
             message=f"Context limit exceeded for {ctx}",
@@ -428,7 +441,8 @@ def _ensure_context_capacity(context_id: Optional[str] = None) -> None:
             details={
                 "context_id": ctx,
                 "max_contexts": max_contexts,
-                "known_contexts": sorted(existing),
+                "occupying_contexts": sorted(occupying),
+                "known_contexts": sorted(known),
             },
         )
 
@@ -6496,7 +6510,9 @@ def _runtime_metrics_payload(context_id: Optional[str] = None) -> Dict[str, Any]
     metrics["live_runtime_session_count"] = len(_runtime.replays)
     metrics["live_runtime_capture_count"] = len(_runtime.captures)
     metrics["live_remote_count"] = len(_runtime.remotes)
-    metrics["known_context_count"] = len({normalize_context_id(item) for item in list_context_ids()} | {ctx})
+    known = {normalize_context_id(item) for item in list_context_ids()} | {ctx}
+    metrics["known_context_count"] = len(known)
+    metrics["occupying_context_count"] = len(_occupying_context_ids())
     metrics["current_session_id"] = str(state.get("current_session_id") or "")
     metrics["current_capture_file_id"] = str(state.get("current_capture_file_id") or "")
     return {

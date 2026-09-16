@@ -262,6 +262,38 @@ def load_daemon_state(context: Optional[str] = "default") -> Dict[str, Any]:
     return _normalize_daemon_state_payload(payload, context)
 
 
+def list_daemon_context_ids() -> list[str]:
+    state_dir = cli_runtime_dir()
+    if not state_dir.is_dir():
+        return []
+    ids: list[str] = []
+    for path in state_dir.glob("daemon_state*.json"):
+        if path.is_file():
+            ids.append(_context_from_state_path(path))
+    return ids
+
+
+def context_occupies_capacity(context: Optional[str] = None) -> bool:
+    state = load_daemon_state(context=context)
+    if not state:
+        return False
+    worker = state.get("worker") if isinstance(state.get("worker"), dict) else {}
+    for pid in (
+        int(state.get("pid") or 0),
+        int(state.get("owner_pid") or 0),
+        int(worker.get("pid") or 0),
+    ):
+        if pid > 0 and _is_process_running(pid):
+            return True
+    return False
+
+
+def list_occupying_context_ids() -> list[str]:
+    ids = { _normalize_context(item) for item in list_context_ids() }
+    ids.update(_normalize_context(item) for item in list_daemon_context_ids())
+    return sorted(ctx for ctx in ids if context_occupies_capacity(ctx))
+
+
 def save_daemon_state(payload: Dict[str, Any], context: Optional[str] = "default") -> None:
     _save_json(_daemon_state_path(context), _normalize_daemon_state_payload(payload, context))
 
