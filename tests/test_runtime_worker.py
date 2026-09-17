@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
 
 from rdx.daemon import worker as daemon_worker
@@ -77,6 +78,7 @@ def test_worker_uses_source_runtime_directly(tmp_path: Path, monkeypatch) -> Non
         assert env["RDX_RUNTIME_DLL_DIR"] == str(source_root.resolve())
         assert env["RDX_RENDERDOC_PATH"] == str((source_root / "pymodules").resolve())
         assert env["RDX_WORKER_SOURCE_MANIFEST"] == str((source_root / "manifest.runtime.json").resolve())
+        assert env["RDX_DAEMON_PID"] == str(os.getpid())
 
         worker_state = worker.snapshot()
         assert worker_state["binaries_dir"] == str(source_root.resolve())

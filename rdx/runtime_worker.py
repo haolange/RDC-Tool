@@ -7,6 +7,8 @@ import asyncio
 import json
 import os
 import sys
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict
 
@@ -28,6 +30,38 @@ def _context_id() -> str:
     return str(os.environ.get("RDX_CONTEXT_ID") or "default").strip() or "default"
 
 
+def _is_pid_running(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        import ctypes
+        process_query_limited_information = 0x1000
+        handle = ctypes.windll.kernel32.OpenProcess(process_query_limited_information, False, int(pid))
+        if not handle:
+            return False
+        try:
+            code = ctypes.c_ulong()
+            if not ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return True
+            return bool(code.value == 259)
+        finally:
+            ctypes.windll.kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def _watch_parent_daemon() -> None:
+    parent_pid = int(os.environ.get("RDX_DAEMON_PID") or 0)
+    if parent_pid <= 0:
+        return
+    while _is_pid_running(parent_pid):
+        time.sleep(1.0)
+    os._exit(0)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="RDX RenderDoc runtime worker")
     parser.add_argument("--context-id", default=_context_id())
@@ -41,6 +75,8 @@ def main(argv: list[str] | None = None) -> int:
         _emit({"kind": "startup_error", "message": f"{exc.__class__.__name__}: {exc}"})
         return 1
 
+    watcher = threading.Thread(target=_watch_parent_daemon, name="rdx-worker-parent-watch", daemon=True)
+    watcher.start()
     _emit(
         {
             "kind": "ready",

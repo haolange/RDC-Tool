@@ -228,8 +228,11 @@ def _extract(payload: Dict[str, Any], key: str, default: Any = None) -> Any:
     return payload.get(key, default)
 
 
+_cli_owner_pid: Optional[int] = None
+
+
 def _ensure_daemon_state(context: str) -> Dict[str, Any]:
-    ok, message, state = ensure_daemon(context=context)
+    ok, message, state = ensure_daemon(context=context, owner_pid=_cli_owner_pid)
     if not ok:
         raise RuntimeError(message)
     if not state:
@@ -1380,6 +1383,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"rdx {TOOL_VERSION}")
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON output.")
     parser.add_argument("--daemon-context", default="default", help="Daemon state namespace (default: default)")
+    parser.add_argument("--owner-pid", type=int, default=None, help="Host process PID used for daemon auto-stop")
     sub = parser.add_subparsers(dest="command", required=True)
 
     def add_session_arg(command_parser: argparse.ArgumentParser) -> None:
@@ -1416,7 +1420,6 @@ def _build_parser() -> argparse.ArgumentParser:
     s_daemon = p_daemon.add_subparsers(dest="daemon_cmd", required=True)
     p_daemon_start = s_daemon.add_parser("start")
     p_daemon_start.add_argument("--pipe-name", default=None)
-    p_daemon_start.add_argument("--owner-pid", type=int, default=None, help="Optional launcher shell PID used for auto stop")
     s_daemon.add_parser("stop")
     s_daemon.add_parser("status")
     p_daemon_attach = s_daemon.add_parser("attach", help=argparse.SUPPRESS)
@@ -1605,6 +1608,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 async def _main_async(args: argparse.Namespace) -> int:
+    global _cli_owner_pid
+    _cli_owner_pid = args.owner_pid if getattr(args, "owner_pid", None) else None
     ctx = str(args.daemon_context)
     if args.command == "version":
         return _cmd_version(args)
@@ -1632,9 +1637,10 @@ async def _main_async(args: argparse.Namespace) -> int:
             ok, message, state = ensure_daemon(
                 pipe_name=args.pipe_name,
                 context=ctx,
-                owner_pid=args.owner_pid if hasattr(args, "owner_pid") else None,
+                owner_pid=_cli_owner_pid,
             )
-            payload = canonical_success(result_kind="rdx.daemon.start", data={"message": message, "state": state}, transport="cli") if ok else canonical_error(result_kind="rdx.daemon.start", code="runtime_error", category="runtime", message=message, transport="cli")
+            owner_pid = int((state or {}).get("owner_pid") or _cli_owner_pid or 0)
+            payload = canonical_success(result_kind="rdx.daemon.start", data={"message": message, "state": state, "context_id": ctx, "owner_pid": owner_pid}, transport="cli") if ok else canonical_error(result_kind="rdx.daemon.start", code="runtime_error", category="runtime", message=message, transport="cli")
             _print_json(payload)
             return EXIT_OK if ok else EXIT_RUNTIME_ERR
         if args.daemon_cmd == "stop":
@@ -1653,6 +1659,7 @@ async def _main_async(args: argparse.Namespace) -> int:
                 client_type=str(args.client_type),
                 pid=int(args.pid or 0),
                 lease_timeout_seconds=int(args.lease_timeout_seconds or 120),
+                owner_pid=_cli_owner_pid,
             )
             _print_json(canonical_success(result_kind="rdx.daemon.attach_client", data={"message": message, "state": state}, transport="cli") if ok else canonical_error(result_kind="rdx.daemon.attach_client", code="runtime_error", category="runtime", message=message, details={"state": state}, transport="cli"))
             return EXIT_OK if ok else EXIT_RUNTIME_ERR
@@ -1700,7 +1707,7 @@ async def _main_async(args: argparse.Namespace) -> int:
             _print_json(
                 canonical_success(
                     result_kind="rdx.context.clear",
-                    data={"message": message, "cleared": details},
+                    data={"message": message, "cleared": details, "context_id": ctx},
                     transport="cli",
                 ),
             )
@@ -1752,6 +1759,9 @@ def main() -> None:
     except Exception as exc:  # noqa: BLE001
         _print_json(_exception_error_payload("rdx.cli", exc, transport="cli"))
         code = EXIT_RUNTIME_ERR
+    finally:
+        global _cli_owner_pid
+        _cli_owner_pid = None
     raise SystemExit(int(code))
 
 

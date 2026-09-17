@@ -77,6 +77,7 @@ class RuntimeWorkerProcess:
         }
         env = dict(os.environ)
         env["RDX_CONTEXT_ID"] = self.context_id
+        env["RDX_DAEMON_PID"] = str(os.getpid())
         env["RDX_RUNTIME_DLL_DIR"] = runtime["binaries_dir"]
         env["RDX_RENDERDOC_PATH"] = runtime["pymodules_dir"]
         env["RDX_WORKER_SOURCE_MANIFEST"] = runtime["source_manifest"]

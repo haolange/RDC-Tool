@@ -18,6 +18,7 @@ from rdx.context_snapshot import clear_context_snapshot
 from rdx.daemon.client import (
     DEFAULT_IDLE_TIMEOUT_S,
     DEFAULT_LEASE_TIMEOUT_S,
+    owner_lost_should_stop,
     save_daemon_state,
 )
 from rdx.daemon.worker import RuntimeWorkerProcess
@@ -123,6 +124,7 @@ class DaemonRuntime(ProgressSink):
             default=DEFAULT_IDLE_TIMEOUT_S,
         )
         self.running = True
+        self._serve_started = False
         now_iso = _utc_now_iso()
         self.state: Dict[str, Any] = {
             "context_id": self.daemon_context,
@@ -224,7 +226,10 @@ class DaemonRuntime(ProgressSink):
 
     def _stop(self) -> None:
         if self._worker is not None:
-            self._worker.stop()
+            try:
+                self._worker.stop()
+            except Exception:
+                logger.exception("daemon context=%s worker stop failed", self.daemon_context)
         self.running = False
         self._stop_event.set()
         if self._listener is not None:
@@ -232,6 +237,12 @@ class DaemonRuntime(ProgressSink):
                 self._listener.close()
             except Exception:
                 pass
+        if self._serve_started:
+            try:
+                _daemon_state_path(self.daemon_context).unlink(missing_ok=True)
+            except Exception:
+                pass
+            os._exit(0)
 
     def _clear_context_snapshot_locked(self) -> None:
         self.state["session_id"] = ""
@@ -387,6 +398,20 @@ class DaemonRuntime(ProgressSink):
         self._persist_state()
         return self._status_payload()
 
+    def _handle_claim_owner(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        owner_pid = int(params.get("owner_pid") or 0)
+        if owner_pid <= 0:
+            return {"ok": False, "error": {"code": "bad_request", "message": "owner_pid is required"}}
+        with self._state_lock:
+            current = int(self.state.get("owner_pid") or 0)
+            if current > 0 and current != owner_pid:
+                return {"ok": False, "error": {"code": "conflict", "message": "owner_pid already set"}}
+            self.owner_pid = owner_pid
+            self.state["owner_pid"] = owner_pid
+            self.state["last_activity_at"] = _utc_now_iso()
+        self._persist_state()
+        return self._status_payload()
+
     def _handle_heartbeat(self, params: Dict[str, Any]) -> Dict[str, Any]:
         client_id = str(params.get("client_id") or "").strip()
         if not client_id:
@@ -511,24 +536,34 @@ class DaemonRuntime(ProgressSink):
             now_ms = _now_ms()
             should_stop = False
             reason = ""
-            with self._state_lock:
-                self._prune_clients_locked(now_ms)
-                self.state["pid"] = int(os.getpid())
-                attached = list(self.state.get("attached_clients", []))
-                active_request_count = int(self.state.get("active_request_count") or 0)
-                last_activity_ms = _iso_to_ms(self.state.get("last_activity_at"))
-                owner_pid = int(self.state.get("owner_pid") or 0)
-                if owner_pid > 0 and not _is_process_running(owner_pid) and not attached and active_request_count == 0:
-                    lease_ms = self.lease_timeout_seconds * 1000
-                    if last_activity_ms <= 0 or (now_ms - last_activity_ms) >= lease_ms:
+            try:
+                with self._state_lock:
+                    self._prune_clients_locked(now_ms)
+                    self.state["pid"] = int(os.getpid())
+                    attached = list(self.state.get("attached_clients", []))
+                    active_request_count = int(self.state.get("active_request_count") or 0)
+                    last_activity_ms = _iso_to_ms(self.state.get("last_activity_at"))
+                    owner_pid = int(self.state.get("owner_pid") or 0)
+                    owner_running = _is_process_running(owner_pid) if owner_pid > 0 else True
+                    if owner_lost_should_stop(
+                        owner_pid=owner_pid,
+                        owner_running=owner_running,
+                        has_live_clients=bool(attached),
+                        last_activity_ms=last_activity_ms,
+                        now_ms=now_ms,
+                        lease_timeout_seconds=self.lease_timeout_seconds,
+                    ):
                         should_stop = True
                         reason = f"owner pid {owner_pid} lost and lease expired"
-                if not should_stop and not attached and active_request_count == 0:
-                    idle_ms = self.idle_timeout_seconds * 1000
-                    if last_activity_ms > 0 and (now_ms - last_activity_ms) >= idle_ms:
-                        should_stop = True
-                        reason = f"idle timeout exceeded ({self.idle_timeout_seconds}s)"
-            self._persist_state()
+                    if not should_stop and not attached and active_request_count == 0:
+                        idle_ms = self.idle_timeout_seconds * 1000
+                        if last_activity_ms > 0 and (now_ms - last_activity_ms) >= idle_ms:
+                            should_stop = True
+                            reason = f"idle timeout exceeded ({self.idle_timeout_seconds}s)"
+                self._persist_state()
+            except Exception:
+                logger.exception("daemon context=%s lifecycle watch failed", self.daemon_context)
+                continue
             if should_stop:
                 logger.info("daemon context=%s stopping: %s", self.daemon_context, reason)
                 self._stop()
@@ -558,6 +593,8 @@ class DaemonRuntime(ProgressSink):
             self._touch_activity()
             self._stop()
             return {"ok": True, "result": {"stopping": True, "state": self._snapshot_state()}}
+        if method == "claim_owner":
+            return self._handle_claim_owner(params)
         if method == "attach_client":
             return self._handle_attach_client(params)
         if method == "heartbeat":
@@ -619,6 +656,7 @@ class DaemonRuntime(ProgressSink):
 
     def serve_forever(self) -> int:
         self._listener = Listener(address=self.address, family="AF_PIPE")
+        self._serve_started = True
         logger.info("daemon listening on %s", self.address)
         self._persist_state()
         try:

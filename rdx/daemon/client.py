@@ -399,6 +399,21 @@ def _is_process_running(pid: int) -> bool:
     return False
 
 
+def owner_lost_should_stop(
+    *,
+    owner_pid: int,
+    owner_running: bool,
+    has_live_clients: bool,
+    last_activity_ms: int,
+    now_ms: int,
+    lease_timeout_seconds: int,
+) -> bool:
+    if int(owner_pid) <= 0 or owner_running or has_live_clients:
+        return False
+    lease_ms = _normalize_timeout(lease_timeout_seconds, default=DEFAULT_LEASE_TIMEOUT_S) * 1000
+    return last_activity_ms <= 0 or (now_ms - last_activity_ms) >= lease_ms
+
+
 def _is_client_live(client: Dict[str, Any], now_ms: int) -> bool:
     pid = int(client.get("pid") or 0)
     if pid > 0 and not _is_process_running(pid):
@@ -621,6 +636,17 @@ def ensure_daemon(
     if existing:
         pid = int(existing.get("pid") or 0)
         if pid > 0 and _is_process_running(pid):
+            if owner_pid is not None and int(existing.get("owner_pid") or 0) == 0:
+                try:
+                    claimed = daemon_request(
+                        "claim_owner",
+                        params={"owner_pid": int(owner_pid)},
+                        context=chosen_ctx,
+                        state=existing,
+                    )
+                    existing = _update_saved_state_from_response(claimed, chosen_ctx) or existing
+                except Exception:
+                    pass
             try:
                 response = daemon_request("status", params={}, context=chosen_ctx, state=existing)
             except Exception:
@@ -732,9 +758,14 @@ def attach_client(
     client_type: str,
     pid: int,
     lease_timeout_seconds: int = DEFAULT_LEASE_TIMEOUT_S,
+    owner_pid: Optional[int] = None,
 ) -> Tuple[bool, str, Dict[str, Any]]:
     chosen_ctx = _normalize_context(context)
-    ok, message, state = ensure_daemon(context=chosen_ctx, lease_timeout_seconds=lease_timeout_seconds)
+    ok, message, state = ensure_daemon(
+        context=chosen_ctx,
+        owner_pid=owner_pid,
+        lease_timeout_seconds=lease_timeout_seconds,
+    )
     if not ok:
         return False, message, {}
     response = daemon_request(
@@ -853,10 +884,16 @@ def stop_daemon(context: Optional[str] = "default") -> Tuple[bool, str]:
         return False, "no active daemon"
 
     pid = int(st.get("pid") or 0)
+    worker = st.get("worker") if isinstance(st.get("worker"), dict) else {}
+    worker_pid = int(worker.get("pid") or 0)
     _shutdown_stateful_daemon(pid, st, chosen_ctx)
 
     if pid and _is_process_running(pid):
         return False, "daemon stop timed out"
+
+    if worker_pid > 0 and _is_process_running(worker_pid):
+        if not _kill_process(worker_pid) or not _wait_for_pid_exit(worker_pid, 3.0):
+            return False, "worker stop timed out"
 
     clear_daemon_state(context=chosen_ctx)
     clear_session_state(context=chosen_ctx)

@@ -24,9 +24,11 @@ rdx --daemon-context task-123 vfs tree --path /draws --depth 2 --max-nodes 2000 
 rdx --daemon-context task-123 event list --format tsv
 rdx --daemon-context task-123 pipeline show --event-id 42 --format json
 rdx --daemon-context task-123 context update --key notes --value "triaged" --json
-rdx --daemon-context task-123 context clear --json
-rdx --daemon-context task-123 daemon stop
+rdx --owner-pid %PID% --daemon-context task-123 context clear --json
+rdx --owner-pid %PID% --daemon-context task-123 daemon stop
 ```
+
+`context clear` only releases that namespace's replay/preview/remote/snapshot. `daemon stop` stops that namespace's daemon and worker. Hosts must pass `--owner-pid` so a dead launcher can reap the daemon after the lease, even if a request count is stuck. Do not treat clear success as process exit.
 
 After enabling preview for an opened capture, agents should inspect `preview.display` in `context status --json` for framebuffer, window, and fit geometry instead of inferring geometry from screenshots alone.
 
