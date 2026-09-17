@@ -1,0 +1,10 @@
+schema_version: 1
+module_path: spec_catalog
+title: 工具目录构建与校验（spec）
+scope:
+    - spec/
+source_files: []
+depends_on: []
+related_to:
+    - path: docs
+    - path: tests
