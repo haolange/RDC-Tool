@@ -3,11 +3,11 @@ schema_version: 1
 locale: zh-CN
 branch: main
 nodes_managed: true
-exported_at: "2026-09-17T06:43:43Z"
+exported_at: "2026-09-19T14:48:53Z"
 modules:
     "":
-        dir_name: rdx-tools 项目根（RenderDoc 本地_远程工具运行时）
-        title: rdx-tools 项目根（RenderDoc 本地/远程工具运行时）
+        dir_name: RDX-Tools 单包聚合工程
+        title: RDX-Tools 单包聚合工程
         scope:
             - README.md
             - THIRD_PARTY_NOTICES.md
@@ -29,8 +29,8 @@ modules:
         depends_on: []
         related_to: []
     docs:
-        dir_name: rdx-tools 项目文档集
-        title: rdx-tools 项目文档集
+        dir_name: rdx-tools CLI 文档集
+        title: rdx-tools CLI 文档集
         scope:
             - docs/
         source_files: []
@@ -40,8 +40,8 @@ modules:
             - path: scripts_and_packaging
             - path: spec_catalog
     platform_binaries:
-        dir_name: 平台二进制产物与运行时依赖
-        title: 平台二进制产物与运行时依赖
+        dir_name: 平台二进制产物分发目录（Windows x64 与 Android APK）
+        title: 平台二进制产物分发目录（Windows x64 与 Android APK）
         scope:
             - binaries/
         source_files: []
@@ -50,19 +50,19 @@ modules:
         related_to:
             - path: scripts_and_packaging
     rdx_runtime:
-        dir_name: RDX RenderDoc 运行时与守护进程
-        title: RDX RenderDoc 运行时与守护进程
+        dir_name: RDX Python 运行时与操作调度层
+        title: RDX Python 运行时与操作调度层
         scope:
             - rdx/
         source_files: []
         children: []
         depends_on: []
         related_to:
-            - path: scripts_and_packaging
+            - path: spec_catalog
             - path: tests
     scripts_and_packaging:
-        dir_name: rdx-tools 构建、打包与发布门禁脚本集
-        title: rdx-tools 构建、打包与发布门禁脚本集
+        dir_name: rdx-tools 发布与冒烟测试脚本集
+        title: rdx-tools 发布与冒烟测试脚本集
         scope:
             - scripts/
         source_files: []
@@ -71,10 +71,9 @@ modules:
         related_to:
             - path: docs
             - path: platform_binaries
-            - path: rdx_runtime
     spec_catalog:
-        dir_name: 工具目录构建与校验（spec）
-        title: 工具目录构建与校验（spec）
+        dir_name: 工具目录构建与校验（spec_catalog）
+        title: 工具目录构建与校验（spec_catalog）
         scope:
             - spec/
         source_files: []
@@ -82,10 +81,10 @@ modules:
         depends_on: []
         related_to:
             - path: docs
-            - path: tests
+            - path: rdx_runtime
     tests:
-        dir_name: RDX 工具集集成与单元测试套件
-        title: RDX 工具集集成与单元测试套件
+        dir_name: RDX CLI_运行时_重放_预览集成测试套件
+        title: RDX CLI/运行时/重放/预览集成测试套件
         scope:
             - tests/
         source_files: []
@@ -93,4 +92,3 @@ modules:
         depends_on: []
         related_to:
             - path: rdx_runtime
-            - path: spec_catalog

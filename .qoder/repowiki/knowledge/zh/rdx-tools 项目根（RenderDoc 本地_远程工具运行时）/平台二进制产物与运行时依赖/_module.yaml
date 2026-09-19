@@ -1,9 +1,0 @@
-schema_version: 1
-module_path: platform_binaries
-title: 平台二进制产物与运行时依赖
-scope:
-    - binaries/
-source_files: []
-depends_on: []
-related_to:
-    - path: scripts_and_packaging
