@@ -43,7 +43,8 @@ RELEASE_ROOT_FILES = {
     "THIRD_PARTY_NOTICES.md",
     "README.md",
     "pyproject.toml",
-    "rdx.bat",
+    "bin/rdx.cmd",
+    "install.cmd",
 }
 RELEASE_DIRS = {
     "bin",
@@ -139,7 +140,7 @@ def _write_release_metadata(staging_root: Path, files: list[dict[str, object]]) 
         "version": TOOL_VERSION,
         "platform": PACKAGE_PLATFORM,
         "public_commands": ["rdx"],
-        "entrypoints": ["rdx.bat", "bin/rdx", "cli/run_cli.py"],
+        "entrypoints": ["bin/rdx.cmd", "bin/rdx", "cli/run_cli.py", "install.cmd"],
         "file_count": len(files),
         "files": files,
     }

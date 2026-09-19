@@ -8,9 +8,9 @@ Stable public command:
 
 Packaged launcher files:
 
-- `rdx.bat`
+- `bin/rdx.cmd`
 - `bin/rdx`
-- `python cli/run_cli.py`
+- `bundled-python cli/run_cli.py`
 
 Stable agent-facing commands:
 

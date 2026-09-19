@@ -1,8 +1,10 @@
-# Tool convergence execution ledger
+﻿# Tool convergence execution ledger
+
+Current approved scope: Runtime/host final closeout C01–C07 at the end of this ledger. Earlier R/H/T tables, budgets, launcher records and capability fingerprints are historical snapshots; they do not override current facts or authorize new calls.
 
 Original approved scope: Tools 196 → 124, RDC-Agent fixed integration and capability policy,
 three specialist manuals, real configuration upgrade, required validation and cleanup.
-Current mode: approved necessary-capability restoration, with the deleted-operation review retained below. No new agent, branch, commit, push, compatibility route,
+Historical restoration mode: approved necessary-capability restoration, with the deleted-operation review retained below. No new agent, branch, commit, push, compatibility route,
 unrelated refactor, large capture copy or distribution-package generation.
 
 Baseline: Tools `7f5b085b999641977863f91cdb984e667db36629`; Agent
@@ -25,6 +27,57 @@ Approved repair scope: 18 missing capabilities, adjacent RDC-Agent integration, 
 | R07 Android repeated observation | R02 | 通过 | Fix EID3029 → EID3027 → EID3029 DataNotAvailable; close and reopen | Matching runtime resolved the old handshake failure. Device log proved idle receive timed out after five seconds; native server now waits for a packet before applying its bounded receive deadline. CLI 3029 → 3027 → 3029 passed after an idle gap, with two fresh 1552×720 PNGs and correct no-color result. Android transfer uses verified SHA256 reuse without repeated upload. 34 remote/worker/error tests passed; actual Agent Android close/reopen, fresh repeated observation and 900×760 UI passed; final UI close cleared the picture; ADB helper/forward queries empty |
 | R08 Real acceptance | R03,R04,R05,R06,R07 | 通过 | Small themed local/Android batches, isolated Browser QA, <=6 provider requests | Small fixture CLI open/thumbnail/pipeline/descriptors/structured/initial/timing passed; Large local direct open/thumbnail/pipeline/root signature/resource states/structured query passed. Browser small fixture Present21 → draw15 → no-color17 → draw15, close/reopen passed; 900×760 drawer, Composer and adjacent empty panels inspected. ClinePass DeepSeek V4 Flash executed one shell.rdx query with actual output, retained EID15; Provider request snapshots: 2/6. local and Browser batches complete; Android CLI and actual Capture sequence, close/reopen, error recovery and narrow UI passed. Device presentation unsupported; unavailable API hardware/model Mission quality remain explicit boundaries |
 | R09 Docs, gates and cleanup | R01–R08 | 通过 | Current generated docs, necessary full gates/build, own resources removed and startup restored | Tools full run: 326 passed, 3 stale fixture/interface assertions failed; all 3 repaired and targeted rechecks passed. Native-thumbnail repair: 7 affected tests passed. Agent full run: 2815 passed, 8 failed; two empty-stdout process classification failures repaired, six timeout files rerun with two workers and unchanged assertions/timeouts; all eight files/70 tests passed. Type/lint/guides/gates/build passed. Tools source gate: only two unknown-operation error-code failures; repaired CLI preflight, 13 tests and both real negative CLI calls passed. Windows runtime DLL/binding and both APKs deployed; manifest integrity, final Markdown/reference and affected 34+19 tests plus failed-transfer cleanup regression passed. QA, three task-owned gate daemons, device sample and forwarding released; temporary root, test spill root and runtime backups removed. Current Windows build moved without copying to native x64; original inputs/history and older unowned daemons preserved; canonical desktop lock absent |
+
+## Runtime and host convergence (2026-09-19)
+
+Approved scope: thin CLI and explicit installer; sequential fail-fast read-only batch; strict host binding; dedicated file routing and session-local read-before-edit; replay fact audit; generated guides and acceptance. No commit, push, release or branch creation.
+
+| Task | Dependencies | State | Completion criterion |
+|---|---|---|---|
+| H01 Launchers and installer | — | 通过 | install.cmd and bin/rdx.cmd; old bat and PowerShell runtime removed; installer and package checks |
+| H02 Read-only batch | H01 | 通过 | One Python process; canonical envelopes with index; first error stops; cancellation |
+| H03 Host binding | — | 通过 | Paired bundled Python/CLI; persisted invalid settings blocked; Settings UI |
+| H04 File routing and read-before-edit | — | 通过 | Four modes; command-position matching; session-local successful realpath reads |
+| H05 Replay facts | — | 通过 | Real alignment/mesh/usage JSON audit; truthful supported and unavailable fields |
+| H06 Knowledge and generated contracts | H05 | 通过 | CLI and Agent recipes; explicit catalog generation; matching fingerprints |
+| H07 Gates and live acceptance | H01–H06 | 通过 | Domain and full checks; Browser/argv/timing evidence; owned-resource cleanup |
+### 本轮事实与验收证据
+
+源码基线：Tools `453f75611bc8fb6008d6d3c8f71ecc31a9dfa428`，Agent `2dd81bc99e61f0bb1ab07c46ee9b4a9a32df48bf`；以下结果对应未提交工作区，不能归因于基线提交本身。原始样例和进程回执保留在本库 `intermediate/runtime-host-evidence/`，不入分发包。
+
+原始输入未修改：`tests/fixtures/vkcube.rdc`（SHA256 `00797a27e6316a0cf4369327f9db30a21635fa757673b3f9712af07989145ba8`，EID11）和 `vkcube_validation.rdc`（SHA256 `c50cd1e7c29241c64fd33faf07cb35e802f9dc85692a8512aa36db01c956b385`，EID15）。A/B 使用同 context 不同 session；B 打开后仍可显式读取 A；同 capture_file_id 再次 open_replay 返回 reused_session=true。ResourceId 只作单 capture 内关联。
+
+`sample_ok=true` 表示真实回执符合声明，包括如实报告缺失或不支持，不表示缺失能力已实现。下列 sample_path 相对上述证据目录；a-/b- 代表两份 JSON。
+
+| intent | operation | field | present/added/unsupported | sample_ok | sample_path |
+|---|---|---|---|---|---|
+| 完整事件索引 | rd.session.get_replay_events | complete / events[].event_id | present | true | a-/b-index.json |
+| 父链与 marker | rd.session.get_replay_events | parent_chain / marker_path | added；无 marker 为 null | true | a-/b-index.json；a-index-after-b.json |
+| action 与附件 | rd.event.get_action_details | parent_chain / marker_path / depth_output | added；不推断唯一 marker | true | a-/b-details.json |
+| 稳定 shader 键 | rd.pipeline.get_state | shader.hash | added；原始 bytes SHA256，缺失 null | true | a-/b-pipeline.json |
+| shader 调试名 | rd.pipeline.get_state | shader.debug_name | added；样例 null，排除自动 ResourceId 名称 | true | a-/b-pipeline.json |
+| VS 布局与位置 | rd.mesh.get_post_transform_data | mesh_format / vertex_rows[].position / attributes | added；可靠 Float32 布局 | true | a-/b-mesh.json |
+| 法线与 UV | rd.mesh.get_post_transform_data | attributes.normal / attributes.uv | unsupported；无可靠语义布局 | true | a-/b-mesh.json |
+| GS 可用性 | rd.mesh.get_post_transform_data | stage_bound / availability_reason / vertex_rows | present；未绑定是合法空结果 | true | a-/b-gs.json |
+| 有界 mesh 读取 | rd.mesh.get_post_transform_data | vertex_byte_size / truncated | added；无界原生长度且达到请求上限时 truncated=null | true | a-/b-mesh.json |
+| OBJ 输出 | rd.export.mesh | vertex_count / primitive_count / attributes | position present；normal/uv unsupported | true | a-/b-obj.json；a.obj / b.obj |
+| usage 读写 | rd.resource.get_usage | usage_name / is_read / is_write | added；native enum 分类，未知 null | true | a-/b-usage-color.json |
+| usage 绑定边界 | rd.resource.get_usage | binding_only_observable | added；false，不声明纯绑定或未使用 | true | a-/b-usage-depth.json |
+| event 与附件关联 | rd.resource.get_usage | event_id / raw_event_id / event_resolvable / attachments | added；color slot 与 depth | true | a-/b-usage-color.json；a-/b-usage-depth.json |
+
+Clear 真实样例 read=false/write=true；ColorTarget read=null/write=true，不能据此断言无读取。法线/UV、无 marker 限制已同步教法，不生成跨 capture 对齐结论或依赖图。
+
+生成顺序：字段修复 → catalog/reference → 教法 → 三本 Agent 手册。CLI discovery、catalog 文件和三本手册 fingerprint 一致：`8681825a610af3466a968eb379268bbebe36e174b670a788a4fda33c02fced1a`。完整128操作集保留，无 batch catalog 操作。
+
+`thin-process.json` 保存实际 cmd→Python 父子 PID 与完整 command line，无 PowerShell 子进程；`timing-processes.json` 保存单 Python 两条 batch；`agent-native-read.json` 保存两次 shell.rdx 冻结 argv，discovery 无进程；`batch-process.jsonl` 保存两个 canonical 信封。
+
+分段各3次：PowerShell 启动776.831/582.746/593.713ms；Python启动+import178.595/202.083/137.239ms；热pipe status2.329/2.314/2.538ms；首次/clear后open_replay1808.793/491.470/493.379ms。回放不含客户端启动和open_file，后两次复用已初始化worker。不将首次回放成本算作启动器成本，不以差值宣称优化收益。
+
+Browser `browser-qa.json`：disposable Settings拒绝/保存/验证，Capture打开、EID切换与关闭；1813×1145和390×844，键盘焦点及disabled/selected/running状态通过。修复已有Browser PNG字节解码缺口后，EID11真实图像603×653可见。没有真实账号、模型质量、Android屏幕或额外全实验声明。
+
+Tools最终完整回归384项通过；source release gate通过，未生成整套发行包。Agent完整测试、覆盖率、综合门禁及受影响复验结果记入Agent验收账本。资源清理单独核对，context clear不等同daemon stop。
+
+本轮收口：Agent最终全量413文件/2936测试通过，4项外部条件测试默认跳过；真实read/parser两项另行通过。覆盖率 lines75.12%、functions76.81%、branches62.19%、statements72.70%，ratchet通过。Tools384项及release gate通过。源码逐文件SHA256见 `source-manifest.json`，验证汇总见 `verification.json`。删除709个经归属/链接/进程核验的本轮目录；Vitest临时目录现纳入既有隔离根并随退出释放，全量复跑没有再生成外部fixture残留。Browser标签页和viewport已还原，QA/桌面进程退出，canonical lock不存在；实际桌面窗口启动成功后正常关闭，桌面启动权已交还。
 
 ## Original convergence tasks
 
@@ -196,3 +249,15 @@ Latest initial-read checks: 38 tests passed; four export fixtures could not crea
 Final restoration cleanup: no helper or ADB forward remained after application close. The verified task device copy was removed; original WhiteHair and local RDC were preserved. Browser tab/viewport and QA PID127104 were released; three task-root gate daemons stopped through CLI. Both temporary roots capability-restoration and tool-convergence-tests are absent. Native x64 is now a real directory holding the current build, with no temporary junction. Existing SDK/NDK/CMake and current runtime/build are retained. Three older contexts predate this restoration and were preserved because they are outside proven task ownership. Real Mission model effectiveness remains the user-planned debug loop; no extra Provider calls were issued.
 
 Publication cleanup recheck: 295 OS-temp investigation fixture directories from this execution window were removed after checking fixture contents, process references and reparse boundaries. Older task evidence, user histories, dependencies and current builds remain intact. Both repositories publish independently on main with structured Changes, Validation and Acceptance boundaries; remote commit equality is checked after each push.
+
+## Runtime/host final closeout (approved 2026-09-19)
+
+| Item | Dependencies | State | Scope | Verification / blocker |
+|---|---|---|---|---|
+| C01 Desktop facts | H01-H07 | 通过 | IRP EID1346 Float32 normal/UV and full input OBJ; marker and named resource | 42 domain tests, real canonical receipts and independent review passed; shader debug name absent remains null |
+| C02 Phone presentation | H01-H07 | 通过 | Paired native runtime, existing remote preview and correlated acknowledgement | Physical color/clear/restore/background/reopen, Agent actual phone output, paired builds and rebuilt desktop consumer smoke all passed; android/acceptance.json |
+| C03 Canonical generation | C01, C02 interfaces | 通过 | Tool definitions/catalog/reference, Agent manuals and fingerprint | Explicit source generated fingerprint 4eefd77d649bef8a03d53ab408f097314c781c33ff01b0eec436c5c1562caf4f; three manuals fresh |
+| C04 Model and Browser | C03 | 通过 | Three real scenarios; original24 plus explicitly approved6 DeepSeek calls, max3000 output tokens/request | Supplement6 allHTTP200; current A/B context, replay, capture, lease, SHA, events and trace match actual open/query receipts. Artifacts equal model writes; independent verification passed. Seventh continuation denied before dispatch after B artifact readback; no extra final text claimed. agent/supplement/verification.json |
+| C05 Short A-B-A | H01-H07 | 通过 | Small disposable fixture; two native runs completed in about 22 seconds | Actual pixel change/restoration and five signed receipts independently verified; applicable original fingerprint retained |
+| C06 Independent verification | C01-C05 | 通过 | Domain tests, native/device proofs, Agent gates and independent review | Current Agent2944/413 files, contracts248, coverage ratchet/typecheck/lint/gates/build; Tools405 and release gate; native/device and independent scoped review passed; verification.json; C04 narrow supplement independently passed |
+| C07 Closeout | C06 | 通过 | Contracts/ledger, owned resource cleanup and desktop ownership | Docs and evidence synchronized; credentials/test copies/QA cleaned, contexts cleared before owned daemon/helper stop, no forwards; ordinary desktop launch/exit and absent canonical lock verified. Supplemental two contexts released, credentials/copies/QA cleaned, ordinary desktop window verified and canonical lock absent. All C01-C07 complete; agent/supplement/cleanup.json |

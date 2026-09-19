@@ -2,7 +2,7 @@
 
 ## 范围与权威
 
-本文件约束 `rdx-tools` CLI 工程（`rdx/`、`cli/`、`docs/`、`scripts/`、`tests/`、`spec/`）。本库是 CLI-only；公开命令为 `rdx`，`rdx.bat`、`bin/rdx`、`python cli/run_cli.py` 是包启动文件。
+本文件约束 `rdx-tools` CLI 工程（`rdx/`、`cli/`、`docs/`、`scripts/`、`tests/`、`spec/`）。本库是 CLI-only；公开命令为 `rdx`，`bin/rdx.cmd`、`bin/rdx` 与同安装捆绑 Python + `cli/run_cli.py` 是运行入口；`install.cmd` 只包装安装脚本。
 
 - 先核对当前工作区改动、实际调用链、公开契约和已有证据，再实现；不覆盖其他工作，不重复已完成工作。若代码、文档、catalog 或测试不一致，结合用户要求与真实行为判断错误方并同步修正，不能只因文档写错就修改运行语义。
 - 用户当前明确要求优先；本文件维护长期工程规则，任务状态与验收事实放现有 Task 和主题文档。不要把临时禁令、机器路径、PID、某轮延期或进度流水账写成永久规则。

@@ -44,12 +44,21 @@ This path creates no desktop preview window. `rd.session.open_preview`,
 CLI window contract and geometry smoke coverage. Both use the same native replay
 controller; an embedded consumer must not enable the independent window lifecycle.
 
-Device-side presentation is independent of PNG success. The bundled RemoteServer
-binding exposes no display/preview acknowledgement API. Its BecomeRemoteServer
-previewWindow callback is a server-side integration point, not a client command.
-Until the Android helper exposes verified presentation control and receipts,
-`remote_display.status` is `unsupported` (local: `not_applicable`). A connected
-Android device or successful export must not be reported as device-screen sync.
+Device-side presentation is independent of PNG success. The paired native RemoteServer
+`PresentReplay(eventId, textureId)` validates the already applied replay event, renders
+that texture through the existing native preview window, and returns a fresh sequence
+only after successful GPU presentation on a visible foreground surface. A null texture
+clears the surface. The client and Android helper must use the matching protocol; an old
+helper fails the handshake instead of falling back.
+
+Every `remote_display` contains `status`, `event_id`, `texture_id`, `sequence`, and `reason`.
+`presented` requires a positive monotonic sequence and matching selected target; local
+observations are `not_applicable`. Missing binding capability is `unsupported`; surface,
+transport, or rendering failure is `unavailable` with no stale completion sequence.
+No-color events return `unavailable` and `reason=no_color_output`; a positive sequence
+then proves the native surface was cleared, not that a texture was presented. A new
+native replay handle resets receipt tracking. Successful export or connectivity is
+never proof of device-screen sync; acceptance also records actual screen samples.
 
 Observation PNGs are process results, not automatically an Agent investigation
 trace. The host records them only after actual operations, outside performance

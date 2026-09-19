@@ -904,7 +904,7 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'description': '获取单个 Action 的详细信息，包括 Drawcall 参数、Marker 范围以及输出目标等摘要。',
   'parameter_raw': 'session_id (string): session_id (str)<2>event_id (int)<br>event_id (integer, '
                    'optional): See input_schema for constraints.',
-  'returns_raw': 'ok (bool)<br>data (dict): {action}<br>artifacts (list)<br>error '
+  'returns_raw': 'Returns parent_chain, nullable marker_path and depth_output; ResourceId is local to this capture.<br>ok (bool)<br>data (dict): {action}<br>artifacts (list)<br>error '
                  '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
   'param_names': ['session_id', 'event_id'],
   'prerequisites': [{'requires': 'session_id',
@@ -1246,12 +1246,12 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'path_inputs': [{'name': 'output_dir', 'access': 'write'}]},
  {'name': 'rd.export.mesh',
   'group': '3.11，导出、报告与可复现打包 (Export & Reporting)',
-  'description': 'Export real post-VS positions and primitive indices as Wavefront OBJ. Supports '
+  'description': 'Export post-VS positions or explicit VS input position/normal/UV as Wavefront OBJ. Supports '
                  'float32 positions and triangle list/strip, line list or point list topology; '
-                 'other formats and attributes are unavailable.',
+                 'VS input attributes require float semantics in original input space; postvs remains positions only.',
   'parameter_raw': 'session_id (string), output_path (string), event_id (integer, optional), '
-                   'format=obj, space=postvs, include_attributes=false',
-  'returns_raw': 'data: '
+                   'format=obj, space=postvs|vs_input, include_attributes=false|true (true requires vs_input)',
+  'returns_raw': 'JSON declares exported attributes. VS input with include_attributes=true exports v/vt/vn with matching face indices; postvs is positions only.<br>data: '
                  '{saved_path,export_format,space,include_attributes,resolved_event_id,vertex_count,primitive_count}. '
                  'Unsupported geometry produces mesh_export_unsupported; no placeholder file is '
                  'written.',
@@ -1270,10 +1270,9 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                                   'output_path': {'description': 'output_path (str)',
                                                   'type': 'string'},
                                   'include_attributes': {'type': 'boolean',
-                                                         'enum': [False],
-                                                         'default': False},
+                                                                                                                  'default': False},
                                   'space': {'type': 'string',
-                                            'enum': ['postvs'],
+                                            'enum': ['postvs', 'vs_input'],
                                             'default': 'postvs'}},
                    'required': ['session_id', 'output_path'],
                    'additionalProperties': False},
@@ -1542,18 +1541,18 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'description': '获取当前 drawcall 的 mesh 配置：使用哪些 VB/IB、topology、baseVertex、indexOffset、instanceCount '
                  '等。',
   'parameter_raw': 'session_id (string): session_id (str)<br>event_id (integer, optional): '
-                   'event_id (int, 可选)',
-  'returns_raw': 'ok (bool)<br>data (dict): {config}<br>artifacts (list)<br>error '
+                   'event_id (int, 可选); instance (integer, default 0); max_vertices (integer, default 128; 0 reads full draw)',
+  'returns_raw': 'ok (bool)<br>data (dict): {mesh_config: {event_id, topology, bindings, vertex_input}}; vertex_input includes source=vs_input, vertex_rows with draw/vertex indices and typed semantic values, attributes position/normal/uv status, layout, index_binding, truncated. Values are shader inputs in original coordinate space; packed normal encoding is not interpreted as a geometric normal<br>artifacts (list)<br>error '
                  '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
-  'param_names': ['session_id', 'event_id'],
+  'param_names': ['session_id', 'event_id', 'instance', 'max_vertices'],
   'prerequisites': [{'requires': 'session_id',
                      'via_tools': ['rd.capture.open_file', 'rd.capture.open_replay'],
                      'reason': 'This tool operates on a live replay session.'}],
   'namespace': 'mesh',
   'input_schema': {'type': 'object',
-                   'properties': {'session_id': {'description': 'session_id (str)',
+                   'properties': {'instance': {'type': 'integer', 'minimum': 0, 'default': 0}, 'max_vertices': {'type': 'integer', 'minimum': 0, 'default': 128}, 'session_id': {'description': 'session_id (str)',
                                                  'type': 'string'},
-                                  'event_id': {'description': 'event_id (int, 可选)',
+                                  'event_id': {'description': 'event_id (int, 可选); instance (integer, default 0); max_vertices (integer, default 128; 0 reads full draw)',
                                                'type': 'integer',
                                                'minimum': 0}},
                    'required': ['session_id'],
@@ -1571,7 +1570,7 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                    'instance (int, 可选, 默认 0)<br>view_index (integer, optional): Integer '
                    'multiview/VR view index.<br>max_vertices (integer, optional): max_vertices '
                    '(int, 可选): 限制导出顶点数<br>stage (string): See input_schema for constraints.',
-  'returns_raw': 'ok (bool)<br>data (dict): {mesh_data}<br>artifacts (list)<br>error '
+  'returns_raw': 'vertex_rows retain raw bytes and nullable typed position. attributes explicitly reports position/normal/uv present or unsupported; outputs separately exposes a verified D3D11/12 stream-zero float output signature layout and per-row outputs, without assigning TEXCOORD to normal. source=post_transform; no input values are substituted. No attribute layout is guessed. truncated is null when an unbounded native buffer view prevents proving total size.<br>ok (bool)<br>data (dict): {mesh_data}<br>artifacts (list)<br>error '
                  '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
   'param_names': ['session_id', 'event_id', 'instance', 'view_index', 'max_vertices', 'stage'],
   'prerequisites': [{'requires': 'session_id',
@@ -1884,7 +1883,7 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                    'context_id (str, optional): choose the context to use; defaults to the current '
                    'daemon context<br>detail (string): detail<br>sections (array): Only request '
                    'these state sections; omitted selects all.',
-  'returns_raw': 'data: resolved_event_id, pipeline_state. Full indexed viewports/scissors, blend '
+  'returns_raw': 'Shader hash is SHA-256 of recorded shader rawBytes, or null when unavailable; debug_name is the native non-autogenerated shader resource debug name or null; resource_name retains the native display name including autogenerated names; debug_source_files lists actual debug source filenames separately. Neither is derived from ResourceId.<br>data: resolved_event_id, pipeline_state. Full indexed viewports/scissors, blend '
                  'options and complete front/back stencil. API-specific sections carry api, status '
                  'and native data; failed reads are not empty states.',
   'param_names': ['session_id', 'event_id', 'context_id', 'detail', 'sections'],
@@ -2429,7 +2428,7 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'description': '获取资源的使用情况，即哪些 event 读/写/绑定该资源。',
   'parameter_raw': 'session_id (string): session_id (str)<br>resource_id (string): resource_id '
                    '(str)<br>max_events (integer, optional): max_events (int, 可选, 默认 20000)',
-  'returns_raw': 'ok (bool)<br>data (dict): {usage}<br>artifacts (list)<br>error '
+  'returns_raw': 'Usage includes native usage_name, nullable is_read/is_write, binding_only_observable=false, event identity and color/depth attachments. These are recorded usages, not per-pixel access proof.<br>ok (bool)<br>data (dict): {usage}<br>artifacts (list)<br>error '
                  '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
   'param_names': ['session_id', 'resource_id', 'max_events'],
   'prerequisites': [{'requires': 'session_id',
@@ -2583,7 +2582,7 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
  {'name': 'rd.session.get_context',
   'group': '3.17，上下文快照工具 (Context Snapshot Tools)',
   'description': '读取当前 context 快照与持久化状态索引，返回 runtime、remote、focus、session 表、恢复信息、最近操作与限制配置。',
-  'parameter_raw': 'context_id (string, optional): Must identify the current daemon context.',
+  'parameter_raw': 'context_id (string, optional): Must identify the current daemon context. session_id (string, optional): Same-context replay session.',
   'returns_raw': 'ok (bool)<br>data (dict): {context_id, backend, session_locator, runtime, '
                  'remote, focus, notes, last_artifacts, '
                  'preview{enabled,state,view_mode,bound_session_id,bound_capture_file_id,bound_event_id,backend,recovered_from_session_id,rebind_count,last_error,display{output_slot,texture_id,texture_format,framebuffer_extent,viewport_rect,scissor_rect,effective_region_rect,region_marker_mode,window_rect,fit_mode,screen_cap_ratio},updated_at_ms}, '
@@ -2610,17 +2609,17 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
  {'name': 'rd.session.get_replay_events',
   'group': '3.17，上下文快照工具 (Context Snapshot Tools)',
   'description': 'Read the complete discrete action event index of the selected live context '
-                 'without changing its event.',
+                 'without changing its event. Events include parent_chain and nullable marker_path. An explicit session_id must belong to the same daemon context.',
   'parameter_raw': 'context_id (string, optional): Must identify the current daemon context.',
   'returns_raw': 'ok (bool)<br>data (dict): {data, error}<br>artifacts (list)<br>error '
                  '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
-  'param_names': ['context_id'],
+  'param_names': ['context_id', 'session_id'],
   'prerequisites': [{'requires': 'session_id',
                      'via_tools': ['rd.capture.open_replay'],
                      'reason': 'Requires an open replay'}],
   'namespace': 'session',
   'input_schema': {'type': 'object',
-                   'properties': {'context_id': {'type': 'string',
+                   'properties': {'session_id': {'type': 'string', 'description': 'Optional replay session owned by this daemon context; defaults to selected session.'}, 'context_id': {'type': 'string',
                                                  'description': 'Must identify the current daemon '
                                                                 'context.'}},
                    'required': [],
@@ -2676,15 +2675,21 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'group': '3.17，上下文快照工具 (Context Snapshot Tools)',
   'description': 'Atomically apply an event and export its color output without a desktop window; '
                  'missing event observes the current state. Remote device presentation is reported '
-                 'separately, never inferred from PNG success.',
+                 'separately from PNG export, using a fresh native acknowledgement for the applied event '
+                 'and selected texture. No color target clears the native output. Missing native '
+                 'capability is unsupported; surface and presentation failures are unavailable.',
   'parameter_raw': 'out_path (string): out_path (str): fresh absolute PNG path<br>event_id '
                    '(integer, optional): event_id (int, optional)<br>final_output (boolean, '
                    'optional): final_output (bool, optional): explicit Present resource selection, '
                    'cannot combine with event_id or target<br>target (object, optional): See '
                    'input_schema for constraints.<br>context_id (string, optional): Must identify '
                    'the current daemon context.',
-  'returns_raw': 'ok (bool)<br>data (dict): {data, error}<br>artifacts (list)<br>error '
-                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
+  'returns_raw': 'ok (bool)<br>data (dict): {context_id, session_id, revision, event_id, image_event_id, '
+                 'image_path, target, targets, image_error, remote_display{status: presented|unavailable|'
+                 'unsupported|not_applicable, event_id, texture_id, sequence, reason}}. Presented requires '
+                 'successful native GPU presentation and a fresh positive sequence. No-color output '
+                 'is unavailable with a successful clear sequence when the surface was cleared; '
+                 'failures never reuse a prior receipt.<br>artifacts (list)<br>error (dict|null)<br>meta (dict)',
   'param_names': ['out_path', 'event_id', 'final_output', 'target', 'context_id'],
   'prerequisites': [{'requires': 'session_id',
                      'via_tools': ['rd.capture.open_replay'],

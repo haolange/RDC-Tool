@@ -175,7 +175,7 @@ def test_version_command_emits_stable_json(monkeypatch) -> None:
     assert captured[0]["ok"] is True
     assert captured[0]["result_kind"] == "rdx.version"
     assert captured[0]["data"]["public_commands"] == ["rdx"]
-    assert {"windows_bat", "posix_shell", "python_cli"} <= set(captured[0]["data"]["entrypoints"])
+    assert {"windows_cmd", "posix_shell", "python_cli"} <= set(captured[0]["data"]["entrypoints"])
     assert captured[0]["data"]["compatibility"]["json_envelope"] == "stable"
     assert captured[0]["data"]["compatibility"]["stability"] == "current-contract"
 

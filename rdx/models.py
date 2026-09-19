@@ -225,7 +225,10 @@ class ShaderInfo(BaseModel):
     resource_id: str
     stage: ShaderStage
     entry_point: str = "main"
-    hash: str = ""
+    hash: Optional[str] = None
+    debug_name: Optional[str] = None
+    resource_name: Optional[str] = None
+    debug_source_files: List[str] = Field(default_factory=list)
     encoding: str = ""  # SPIR-V, DXBC, DXIL, GLSL, etc.
 
 

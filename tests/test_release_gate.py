@@ -302,7 +302,8 @@ def test_release_gate_verifies_release_package_when_present(monkeypatch, tmp_pat
 
 
 def test_release_gate_rejects_stale_release_package_manifest(tmp_path: Path) -> None:
-    source = tmp_path / "rdx.bat"
+    source = tmp_path / "bin" / "rdx.cmd"
+    source.parent.mkdir(parents=True, exist_ok=True)
     source.write_text("new\n", encoding="utf-8")
     package = tmp_path / "dist" / "rdx-tools-1.0.0-windows-x64.zip"
     package.parent.mkdir(parents=True, exist_ok=True)
@@ -311,11 +312,11 @@ def test_release_gate_rejects_stale_release_package_manifest(tmp_path: Path) -> 
         "version": "1.0.0",
         "platform": "windows-x64",
         "public_commands": ["rdx"],
-        "entrypoints": ["rdx.bat"],
+        "entrypoints": ["bin/rdx.cmd"],
         "file_count": 1,
         "files": [
             {
-                "path": "rdx.bat",
+                "path": "bin/rdx.cmd",
                 "size": 4,
                 "sha256": "0" * 64,
             }
@@ -331,7 +332,8 @@ def test_release_gate_rejects_stale_release_package_manifest(tmp_path: Path) -> 
 
 
 def test_release_gate_accepts_zero_byte_files_in_release_manifest(tmp_path: Path) -> None:
-    source = tmp_path / "rdx.bat"
+    source = tmp_path / "bin" / "rdx.cmd"
+    source.parent.mkdir(parents=True, exist_ok=True)
     source.write_bytes(b"")
     package = tmp_path / "dist" / "rdx-tools-1.0.0-windows-x64.zip"
     package.parent.mkdir(parents=True, exist_ok=True)
@@ -341,9 +343,9 @@ def test_release_gate_accepts_zero_byte_files_in_release_manifest(tmp_path: Path
         "version": "1.0.0",
         "platform": "windows-x64",
         "public_commands": ["rdx"],
-        "entrypoints": ["rdx.bat"],
+        "entrypoints": ["bin/rdx.cmd"],
         "file_count": 1,
-        "files": [{"path": "rdx.bat", "size": 0, "sha256": source_sha}],
+        "files": [{"path": "bin/rdx.cmd", "size": 0, "sha256": source_sha}],
     }
     with zipfile.ZipFile(package, "w") as archive:
         archive.writestr("rdx-tools/RELEASE_MANIFEST.json", json.dumps(manifest))

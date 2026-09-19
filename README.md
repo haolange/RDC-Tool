@@ -24,7 +24,7 @@ rdx completion powershell
 bash resources/tools/bin/rdx --json doctor
 ```
 
-`--non-interactive` is a Windows launcher flag only. `rdx --non-interactive --json doctor` runs the same CLI on Windows.
+The thin Windows launcher has no private CLI flags; `rdx --json doctor` calls the same native Python entrypoint.
 
 ## Smoke
 
@@ -67,3 +67,9 @@ Use `rdx context status` to read context state and `rdx context update` to updat
 ## License
 
 `rdx-tools` is Apache-2.0. Test-only third-party fixture attribution is tracked in [Third-Party Notices](THIRD_PARTY_NOTICES.md).
+
+### Windows entrypoints
+
+Double-click `install.cmd` for installation; run `rdx` from the installed `bin` PATH entry. The thin `bin/rdx.cmd` calls bundled Python directly. Embedding hosts bind bundled Python and the matching `cli/run_cli.py`, never a batch or PowerShell launcher. See [installation](docs/install.md).
+
+`rdx --daemon-context case-1 batch queries.jsonl` executes predetermined read-only catalog operations sequentially in one client process. Each JSONL input contains `operation` and `args`; output is one canonical envelope per attempted entry, with `meta.batch.index` and `operation`. The first error stops the batch; no retry, skip or automatic daemon shutdown. See [playbook](docs/rdx-native-agent-playbook.md).

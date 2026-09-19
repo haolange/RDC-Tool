@@ -96,6 +96,7 @@ def _print_launcher_help() -> None:
         "  session preview on|off|status",
         "  completion powershell|bash|zsh|fish",
         "  call <operation> [--args-json ... | --args-file ...] [--format json|tsv] [--remote]",
+        "  batch <jsonl> [--remote]",
         "  capture open|status",
         "  vfs ls|cat|tree|resolve",
         "  diff pipeline|image",
@@ -179,7 +180,7 @@ def _emit_version(argv: list[str]) -> None:
                 "tools_root": str(root),
                 "public_commands": ["rdx"],
                 "entrypoints": {
-                    "windows_bat": str(root / "rdx.bat"),
+                    "windows_cmd": str(root / "bin/rdx.cmd"),
                     "posix_shell": str(root / "bin" / "rdx"),
                     "python_cli": str(root / "cli" / "run_cli.py"),
                 },
@@ -211,8 +212,8 @@ def _emit_minimal_doctor(argv: list[str], missing: list[str]) -> None:
                 "auth_required": False,
             },
             "launchers": {
-                "windows_bat": str(root / "rdx.bat"),
-                "windows_bat_exists": (root / "rdx.bat").is_file(),
+                "windows_cmd": str(root / "bin/rdx.cmd"),
+                "windows_cmd_exists": (root / "bin/rdx.cmd").is_file(),
                 "posix_shell": str(root / "bin" / "rdx"),
                 "posix_shell_exists": (root / "bin" / "rdx").is_file(),
                 "python_cli": str(root / "cli" / "run_cli.py"),

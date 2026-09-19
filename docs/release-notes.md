@@ -13,7 +13,7 @@
 ## CLI runtime baseline
 
 - `rdx-tools` is a CLI-only RenderDoc `.rdc` runtime.
-- The public user command is `rdx`; release packages keep `rdx.bat`, `bin/rdx`, and `python cli/run_cli.py` as launcher files.
+- The public user command is `rdx`; release packages keep `bin/rdx.cmd`, `bin/rdx`, and `bundled-python cli/run_cli.py` as launcher files.
 - This is the first GA public contract baseline. Pre-GA ownership, lease, baton, handoff, and runtime materialization experiments are intentionally outside the public contract.
 - CLI daemon contexts are isolated runtime namespaces chosen by the caller; business orchestration remains outside this package.
 - Workers use the packaged runtime binaries in place instead of materializing per-run binary copies.

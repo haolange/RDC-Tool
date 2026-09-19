@@ -667,9 +667,9 @@ def test_resource_usage_exposes_write_classification_and_raw_event_ids(monkeypat
             _FakeAction(202, flags=_FakeActionFlags.Drawcall),
         ],
         usage_entries=[
-            _FakeUsageEntry(101, "Read"),
-            _FakeUsageEntry(53, "Write"),
-            _FakeUsageEntry(1042, "Read"),
+            _FakeUsageEntry(101, "PS_Resource"),
+            _FakeUsageEntry(53, "CopyDst"),
+            _FakeUsageEntry(1042, "unknown"),
         ],
         resources=[
             SimpleNamespace(
@@ -684,6 +684,8 @@ def test_resource_usage_exposes_write_classification_and_raw_event_ids(monkeypat
         ],
     )
     _install_common_env(monkeypatch, controller)
+    rd = server.server_runtime._get_rd()
+    rd.ResourceUsage = SimpleNamespace(PS_Resource="PS_Resource", CopyDst="CopyDst")
     _seed_capture()
     _seed_session(101)
 
@@ -696,11 +698,12 @@ def test_resource_usage_exposes_write_classification_and_raw_event_ids(monkeypat
         )
     )
     assert usage["success"] is True
-    assert usage["usage"] == [
-        {"event_id": 101, "raw_event_id": 101, "event_resolvable": True, "usage": "Read", "is_write": False},
-        {"event_id": None, "raw_event_id": 53, "event_resolvable": False, "usage": "Write", "is_write": True},
-        {"event_id": None, "raw_event_id": 1042, "event_resolvable": False, "usage": "Read", "is_write": False},
-    ]
+    rows = usage["usage"]
+    assert [(r["event_id"], r["raw_event_id"], r["event_resolvable"]) for r in rows] == [(101, 101, True), (None, 53, False), (None, 1042, False)]
+    assert [(r["usage_name"], r["is_read"], r["is_write"]) for r in rows] == [("PS_Resource", True, False), ("CopyDst", False, True), (None, None, None)]
+    assert rows[0]["attachments"]["color"] == []
+    assert rows[1]["attachments"]["color"] is None
+    assert all(r["binding_only_observable"] is False for r in rows)
 
 
 

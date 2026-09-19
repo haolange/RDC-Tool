@@ -124,6 +124,7 @@ class SessionState:
     capture_file: Any = None
     remote_server: Any = None
     remote_server_owned: bool = True
+    presentation_sequence: int = 0
     remote_host: str = ""
     remote_port: Any = None
     remote_transport: str = ""
@@ -298,6 +299,23 @@ class SessionManager:
             raise SessionError(code="session_not_found", message=f"Unknown session_id: {session_id}")
         return state
 
+    async def present_remote(self, session_id: str, event_id: int, texture_id: Any) -> int:
+        """Present through this replay's native remote connection, requiring a fresh receipt."""
+        state = self._require_state(session_id)
+        if state.backend_type != BackendType.REMOTE or state.remote_server is None:
+            raise SessionError(code="remote_presentation_unavailable", message="No owning remote connection")
+        if not hasattr(state.remote_server, "PresentReplay"):
+            raise SessionError(code="remote_presentation_unsupported", message="Installed native binding lacks presentation acknowledgement; install the matching runtime and helper")
+        resource = texture_id if texture_id is not None else _get_rd().ResourceId.Null()
+        status, sequence = await self._offload(state.remote_server.PresentReplay, event_id, resource)
+        _check_status(status, "remote.PresentReplay", backend_type="remote",
+                      capture_context={"session_id": session_id, "event_id": event_id},
+                      source_layer="native_presentation")
+        if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence <= state.presentation_sequence:
+            raise SessionError(code="remote_presentation_stale", message="Native presentation receipt sequence is not fresh")
+        state.presentation_sequence = sequence
+        return sequence
+
     async def _ensure_local_replay_initialized(self) -> None:
         if self._replay_initialized:
             return
@@ -379,6 +397,7 @@ class SessionManager:
             state.transfer_progress = None
         state.remote_server = remote_server
         state.controller = controller
+        state.presentation_sequence = 0
         await self._create_headless_output(state, controller)
 
     def _open_remote_capture_sync(self, state: SessionState, rdc_path: str) -> tuple[Any, str, Any]:

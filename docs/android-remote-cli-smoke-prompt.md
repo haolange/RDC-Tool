@@ -34,10 +34,14 @@ subtree, close the owning replay, and reopen it once. Reuse the established
 remote connection and the already confirmed transfer result instead of uploading
 the same capture repeatedly. Put smoke logs and small observation images under
 `RDX_INTERMEDIATE_ROOT`; remove them after the recorded acceptance result is saved.
-The current bundled client binding cannot confirm Android screen presentation;
-record `remote_display.status=unsupported` as an explicit device-presentation capability
-boundary even if remote open and PNG export succeed. Do not stop or replace an
-already running user-owned RenderDoc Android helper merely to obtain this proof.
+The matching native client and helper expose `PresentReplay(event_id, texture_id)`.
+`remote_display.status=presented` requires the applied event, selected texture and fresh
+native completion sequence; PNG export alone does not prove presentation. Missing native
+capability reports `unsupported`; a missing/background surface or failed present reports
+`unavailable`. No-color output clears the native surface and returns `unavailable` with
+`reason=no_color_output` and its successful clear sequence. Screen samples independently
+verify actual output changes and restoration. Do not stop or replace a running user-owned
+helper merely to obtain this proof.
 
 Existing-service smoke must record the helper PID and forwards before connect, verify connect/Ping/disconnect/reconnect, then assert that the helper and pre-existing forwards survive. If no helper exists, let normal connect start it; a controlled fixture may create an idle service to exercise borrowing. Never ask the user to clear processes or manually launch RenderDoc Command. Clean only the fixture-owned resources after the application test.
 

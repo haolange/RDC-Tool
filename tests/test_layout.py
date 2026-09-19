@@ -149,8 +149,11 @@ def test_catalog_boundaries_remove_pre_ga_surfaces_and_expand_export_params() ->
     assert {"include_attributes", "space", "format", "output_path"} <= set(export_mesh.get("param_names", []))
     mesh_properties = export_mesh["input_schema"]["properties"]
     assert mesh_properties["format"]["enum"] == ["obj"]
-    assert mesh_properties["space"]["enum"] == ["postvs"]
-    assert mesh_properties["include_attributes"]["enum"] == [False]
+    assert mesh_properties["space"] == {"type": "string", "enum": ["postvs", "vs_input"], "default": "postvs"}
+    assert mesh_properties["include_attributes"] == {"type": "boolean", "default": False}
+    mesh_input = next(tool for tool in tools if tool.get("name") == "rd.mesh.get_drawcall_mesh_config")
+    assert mesh_input["input_schema"]["properties"]["instance"] == {"type": "integer", "minimum": 0, "default": 0}
+    assert mesh_input["input_schema"]["properties"]["max_vertices"] == {"type": "integer", "minimum": 0, "default": 128}
     assert "enable_app_api" not in set(core_init.get("param_names", []))
 
 

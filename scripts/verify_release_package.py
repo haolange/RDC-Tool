@@ -21,9 +21,9 @@ from scripts._shared import extract_json_payload
 
 
 PUBLIC_COMMAND = "rdx"
-WINDOWS_LAUNCHER_FILE = "rdx.bat"
+WINDOWS_LAUNCHER_FILE = "bin/rdx.cmd"
 EXPECTED_PUBLIC_COMMANDS = [PUBLIC_COMMAND]
-EXPECTED_ENTRYPOINTS = [WINDOWS_LAUNCHER_FILE, "bin/rdx", "cli/run_cli.py"]
+EXPECTED_ENTRYPOINTS = [WINDOWS_LAUNCHER_FILE, "bin/rdx", "cli/run_cli.py", "install.cmd"]
 REMOVED_CATALOG_TOOLS = {"rd.resource.rename", "rd.shader.save_binary"}
 MCP_DOC_MARKERS = (
     "mcp/run_mcp.py",
@@ -89,10 +89,10 @@ def _public_env(root: Path) -> dict[str, str]:
     env = os.environ.copy()
     env.pop("RDX_PYTHON", None)
     env["RDX_TOOLS_ROOT"] = str(root)
-    env["PATH"] = str(root) + os.pathsep + str(env.get("PATH") or "")
+    env["PATH"] = str(root / "bin") + os.pathsep + str(env.get("PATH") or "")
     pathext = str(env.get("PATHEXT") or "")
-    if ".BAT" not in pathext.upper().split(";"):
-        env["PATHEXT"] = pathext + (";" if pathext else "") + ".BAT"
+    if ".CMD" not in pathext.upper().split(";"):
+        env["PATHEXT"] = pathext + (";" if pathext else "") + ".CMD"
     return env
 
 
@@ -104,7 +104,7 @@ def _run_windows_launcher_file(root: Path, args: list[str], *, timeout_s: int = 
     env = os.environ.copy()
     env.pop("RDX_PYTHON", None)
     env["RDX_TOOLS_ROOT"] = str(root)
-    return _run([_cmd_exe(), "/c", WINDOWS_LAUNCHER_FILE, *args], root, timeout_s=timeout_s, env=env)
+    return _run([_cmd_exe(), "/c", str(cwd / WINDOWS_LAUNCHER_FILE), *args], root, timeout_s=timeout_s, env=env)
 
 
 def _expect_public_error(root: Path, args: list[str], expected_codes: set[str]) -> None:
@@ -185,7 +185,7 @@ def _verify_doctor(root: Path) -> None:
 
 
 def _verify_physical_launcher_file(root: Path) -> None:
-    code, output = _run_windows_launcher_file(root, ["--non-interactive", "--json", "doctor"])
+    code, output = _run_windows_launcher_file(root, ["--json", "doctor"])
     payload = extract_json_payload(output)
     if code != 0 or not payload or payload.get("ok") is not True:
         raise RuntimeError(f"windows launcher file doctor failed: exit={code}\n{output}")
@@ -202,7 +202,7 @@ def _verify_version_payload(root: Path) -> None:
     if data.get("public_commands") != EXPECTED_PUBLIC_COMMANDS:
         raise RuntimeError(f"version public_commands mismatch: {data.get('public_commands')!r}")
     entrypoints = data.get("entrypoints")
-    if not isinstance(entrypoints, dict) or "windows_bat" not in entrypoints or "posix_shell" not in entrypoints or "python_cli" not in entrypoints:
+    if not isinstance(entrypoints, dict) or "windows_cmd" not in entrypoints or "posix_shell" not in entrypoints or "python_cli" not in entrypoints:
         raise RuntimeError(f"version entrypoints missing physical launchers: {json.dumps(data)[:500]}")
 
 

@@ -71,6 +71,7 @@ def _print_launcher_help() -> None:
         "  session preview on|off|status",
         "  completion powershell|bash|zsh|fish",
         "  call <operation> [--args-json ... | --args-file ...] [--format json|tsv] [--remote]",
+        "  batch <jsonl> [--remote]",
         "  capture open|status",
         "  vfs ls|cat|tree|resolve",
         "  event list|show",
@@ -445,7 +446,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         )
 
     launcher_paths = {
-        "windows_bat": str(root / "rdx.bat"),
+        "windows_cmd": str(root / "bin/rdx.cmd"),
         "posix_shell": str(root / "bin" / "rdx"),
         "python_cli": str(root / "cli" / "run_cli.py"),
     }
@@ -501,7 +502,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         },
         "launchers": {
             **launcher_paths,
-            "windows_bat_exists": (root / "rdx.bat").is_file(),
+            "windows_cmd_exists": (root / "bin/rdx.cmd").is_file(),
             "posix_shell_exists": (root / "bin" / "rdx").is_file(),
             "python_cli_exists": (root / "cli" / "run_cli.py").is_file(),
         },
@@ -512,7 +513,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         and python_ok
         and not renderdoc_failures
         and not catalog_error
-        and (root / "rdx.bat").is_file()
+        and (root / "bin/rdx.cmd").is_file()
         and (root / "bin" / "rdx").is_file()
         and (root / "cli" / "run_cli.py").is_file()
     )
@@ -543,7 +544,7 @@ def _version_payload() -> Dict[str, Any]:
             "tools_root": str(root),
             "public_commands": ["rdx"],
             "entrypoints": {
-                "windows_bat": str(root / "rdx.bat"),
+                "windows_cmd": str(root / "bin/rdx.cmd"),
                 "posix_shell": str(root / "bin" / "rdx"),
                 "python_cli": str(root / "cli" / "run_cli.py"),
             },
@@ -1455,6 +1456,10 @@ def _build_parser() -> argparse.ArgumentParser:
     p_call.add_argument("--format", choices=("json", "tsv"), default="json")
     p_call.add_argument("--remote", action="store_true")
 
+    p_batch = sub.add_parser("batch", help="Execute a JSONL list of read-only operations; stop at first failure")
+    p_batch.add_argument("source")
+    p_batch.add_argument("--remote", action="store_true")
+
     p_capture = sub.add_parser("capture", help="Capture session helpers")
     s_capture = p_capture.add_subparsers(dest="capture_cmd", required=True)
     p_capture_open = s_capture.add_parser("open")
@@ -1712,6 +1717,10 @@ async def _main_async(args: argparse.Namespace) -> int:
                 ),
             )
             return EXIT_OK
+
+    if args.command == "batch":
+        from rdx.cli_batch import run_batch
+        return run_batch(args.source, lambda operation, arguments: _daemon_exec(operation, arguments, remote=bool(args.remote), context=ctx))
 
     if args.command == "call":
         return await _cmd_call(args)

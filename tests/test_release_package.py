@@ -23,7 +23,8 @@ def test_package_release_builds_self_contained_zip(tmp_path: Path, monkeypatch) 
         "THIRD_PARTY_NOTICES.md",
         "README.md",
         "pyproject.toml",
-        "rdx.bat",
+        "bin/rdx.cmd",
+        "install.cmd",
         "bin/rdx",
         "cli/run_cli.py",
         "docs/quickstart.md",
@@ -69,7 +70,7 @@ def test_package_release_builds_self_contained_zip(tmp_path: Path, monkeypatch) 
     assert project_component["license"] == "Apache-2.0"
     assert manifest["platform"] == "windows-x64"
     assert manifest["public_commands"] == ["rdx"]
-    assert sorted(manifest["entrypoints"]) == ["bin/rdx", "cli/run_cli.py", "rdx.bat"]
+    assert sorted(manifest["entrypoints"]) == ["bin/rdx", "bin/rdx.cmd", "cli/run_cli.py", "install.cmd"]
     manifest_paths = {entry["path"] for entry in manifest["files"]}
     assert "pyproject.toml" in manifest_paths
     assert "uv.lock" not in manifest_paths
@@ -79,18 +80,19 @@ def test_package_release_builds_self_contained_zip(tmp_path: Path, monkeypatch) 
 
 def test_verify_release_package_accepts_manifest_public_command_split(tmp_path: Path) -> None:
     root = tmp_path / "rdx-tools"
-    for rel in ("rdx.bat", "bin/rdx", "cli/run_cli.py"):
+    for rel in ("bin/rdx.cmd", "bin/rdx", "cli/run_cli.py", "install.cmd"):
         _write(root / rel)
     manifest = {
         "name": "rdx-tools",
         "version": "1.0.0",
         "platform": "windows-x64",
         "public_commands": ["rdx"],
-        "entrypoints": ["rdx.bat", "bin/rdx", "cli/run_cli.py"],
+        "entrypoints": ["bin/rdx.cmd", "bin/rdx", "cli/run_cli.py", "install.cmd"],
         "files": [
-            {"path": "rdx.bat", "size": 3, "sha256": "0" * 64},
+            {"path": "bin/rdx.cmd", "size": 3, "sha256": "0" * 64},
             {"path": "bin/rdx", "size": 3, "sha256": "0" * 64},
             {"path": "cli/run_cli.py", "size": 3, "sha256": "0" * 64},
+            {"path": "install.cmd", "size": 3, "sha256": "0" * 64},
         ],
     }
     _write(root / "RELEASE_MANIFEST.json", json.dumps(manifest))
@@ -100,17 +102,18 @@ def test_verify_release_package_accepts_manifest_public_command_split(tmp_path: 
 
 def test_verify_release_package_rejects_manifest_without_public_command(tmp_path: Path) -> None:
     root = tmp_path / "rdx-tools"
-    for rel in ("rdx.bat", "bin/rdx", "cli/run_cli.py"):
+    for rel in ("bin/rdx.cmd", "bin/rdx", "cli/run_cli.py", "install.cmd"):
         _write(root / rel)
     manifest = {
         "name": "rdx-tools",
         "version": "1.0.0",
         "platform": "windows-x64",
-        "entrypoints": ["rdx.bat", "bin/rdx", "cli/run_cli.py"],
+        "entrypoints": ["bin/rdx.cmd", "bin/rdx", "cli/run_cli.py", "install.cmd"],
         "files": [
-            {"path": "rdx.bat", "size": 3, "sha256": "0" * 64},
+            {"path": "bin/rdx.cmd", "size": 3, "sha256": "0" * 64},
             {"path": "bin/rdx", "size": 3, "sha256": "0" * 64},
             {"path": "cli/run_cli.py", "size": 3, "sha256": "0" * 64},
+            {"path": "install.cmd", "size": 3, "sha256": "0" * 64},
         ],
     }
     _write(root / "RELEASE_MANIFEST.json", json.dumps(manifest))
@@ -141,18 +144,19 @@ def test_verify_release_package_rejects_pre_ga_payload_marker(tmp_path: Path) ->
 
 def test_verify_release_package_rejects_manifest_with_rdc_fixture(tmp_path: Path) -> None:
     root = tmp_path / "rdx-tools"
-    for rel in ("rdx.bat", "bin/rdx", "cli/run_cli.py", "tests/fixtures/sample.rdc"):
+    for rel in ("bin/rdx.cmd", "bin/rdx", "cli/run_cli.py", "install.cmd", "tests/fixtures/sample.rdc"):
         _write(root / rel)
     manifest = {
         "name": "rdx-tools",
         "version": "1.0.0",
         "platform": "windows-x64",
         "public_commands": ["rdx"],
-        "entrypoints": ["rdx.bat", "bin/rdx", "cli/run_cli.py"],
+        "entrypoints": ["bin/rdx.cmd", "bin/rdx", "cli/run_cli.py", "install.cmd"],
         "files": [
-            {"path": "rdx.bat", "size": 3, "sha256": "0" * 64},
+            {"path": "bin/rdx.cmd", "size": 3, "sha256": "0" * 64},
             {"path": "bin/rdx", "size": 3, "sha256": "0" * 64},
             {"path": "cli/run_cli.py", "size": 3, "sha256": "0" * 64},
+            {"path": "install.cmd", "size": 3, "sha256": "0" * 64},
             {"path": "tests/fixtures/sample.rdc", "size": 3, "sha256": "0" * 64},
         ],
     }

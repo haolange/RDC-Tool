@@ -52,9 +52,9 @@ REQUIRED_FILES = [
 
 BASH_SMOKE_LOG = "intermediate/logs/smoke_cli.log"
 PUBLIC_COMMAND = "rdx"
-WINDOWS_LAUNCHER_FILE = "rdx.bat"
+WINDOWS_LAUNCHER_FILE = "bin/rdx.cmd"
 EXPECTED_PUBLIC_COMMANDS = [PUBLIC_COMMAND]
-EXPECTED_ENTRYPOINTS = [WINDOWS_LAUNCHER_FILE, "bin/rdx", "cli/run_cli.py"]
+EXPECTED_ENTRYPOINTS = [WINDOWS_LAUNCHER_FILE, "bin/rdx", "cli/run_cli.py", "install.cmd"]
 REMOVED_CATALOG_TOOLS = {"rd.resource.rename", "rd.shader.save_binary"}
 
 BANNED_SUFFIXES = {".pdb", ".lib", ".exp", ".ilk", ".h"}
@@ -123,10 +123,10 @@ def _launcher_env(root: Path | None = None) -> dict[str, str]:
     env = os.environ.copy()
     env.pop("RDX_PYTHON", None)
     if root is not None:
-        env["PATH"] = str(root) + os.pathsep + str(env.get("PATH") or "")
+        env["PATH"] = str(root / "bin") + os.pathsep + str(env.get("PATH") or "")
         pathext = str(env.get("PATHEXT") or "")
-        if ".BAT" not in pathext.upper().split(";"):
-            env["PATHEXT"] = pathext + (";" if pathext else "") + ".BAT"
+        if ".CMD" not in pathext.upper().split(";"):
+            env["PATHEXT"] = pathext + (";" if pathext else "") + ".CMD"
     return env
 
 
@@ -169,7 +169,7 @@ def _run_public_command_expect_error(args: list[str], cwd: Path, *, expected_cod
 
 
 def _run_windows_launcher_file(args: list[str], cwd: Path) -> tuple[bool, str]:
-    return _run([_cmd_exe(), "/c", WINDOWS_LAUNCHER_FILE, *args], cwd, env=_launcher_env())
+    return _run([_cmd_exe(), "/c", str(cwd / WINDOWS_LAUNCHER_FILE), *args], cwd, env=_launcher_env())
 
 
 def _bundled_python_for_gate(root: Path) -> str:
@@ -315,17 +315,17 @@ def _check_user_docs_no_bat_command_examples(root: Path) -> tuple[bool, str]:
         for lineno, line in enumerate(text.splitlines(), start=1):
             if command_pattern.search(line):
                 return False, f"{rel}:{lineno}: use `{PUBLIC_COMMAND}` for user commands: {line.strip()}"
-    return True, "user docs reserve rdx.bat for launcher-file references only"
+    return True, "user docs reserve bin/rdx.cmd for launcher-file references only"
 
 
 def _check_help_uses_public_command(help_text: str) -> tuple[bool, str]:
     if not help_text.strip():
         return False, "help output is empty"
     if re.search(r"(?i)(?:^|\s)(?:\.\\)?rdx\.bat\s+\S", help_text):
-        return False, "help output contains rdx.bat command examples"
+        return False, "help output contains removed bat command examples"
     if "usage: rdx" not in help_text:
         return False, "help output does not advertise usage: rdx"
-    return True, "help output advertises rdx and no rdx.bat command examples"
+    return True, "help output advertises rdx without removed launcher examples"
 
 
 def _check_catalog_public_surface(root: Path) -> tuple[bool, str]:
@@ -598,8 +598,8 @@ def main(argv: list[str] | None = None) -> int:
     results.append(("entry:rdx context clear --json", ok_context_clear, context_clear))
     ok_vfs_tsv, vfs_tsv = _run_public_command(["vfs", "ls", "--path", "/", "--format", "tsv"], cwd=root)
     results.append(("entry:rdx vfs ls --format tsv", ok_vfs_tsv, vfs_tsv))
-    ok_physical_launcher, physical_launcher = _run_windows_launcher_file(["--non-interactive", "--json", "doctor"], cwd=root)
-    results.append(("launcher-file:rdx.bat --non-interactive --json doctor", ok_physical_launcher, physical_launcher))
+    ok_physical_launcher, physical_launcher = _run_windows_launcher_file(["--json", "doctor"], cwd=root)
+    results.append(("launcher-file:bin/rdx.cmd --json doctor", ok_physical_launcher, physical_launcher))
     ok_vfs_bad_tsv, vfs_bad_tsv = _run_public_command_expect_error(
         ["vfs", "tree", "--path", "/", "--format", "tsv"],
         cwd=root,

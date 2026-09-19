@@ -43,6 +43,9 @@ def replay(monkeypatch):
     monkeypatch.setattr(runtime, '_get_texture_descriptor', descriptor)
     monkeypatch.setattr(runtime, '_render_service', SimpleNamespace(save_texture_file=save))
     monkeypatch.setattr(runtime, '_get_rd', lambda: SimpleNamespace(ActionFlags=SimpleNamespace(Present=2)))
+    async def present(session, event, resource):
+        return len(applied)
+    monkeypatch.setattr(runtime, '_session_manager', SimpleNamespace(present_remote=present))
     observation._revisions.clear()
     return applied
 
@@ -62,7 +65,7 @@ def test_current_event_observation_and_real_attachment_slot(replay, tmp_path):
     assert result['image_event_id'] == result['event_id'] == 42
     assert replay == [42]
     assert result['target']['output_slot'] == 3
-    assert result['remote_display']['status'] == 'unsupported'
+    assert result['remote_display'] == {'status': 'presented', 'event_id': 42, 'texture_id': 'resource-7', 'sequence': 1, 'reason': None}
     second = call('observe', {'out_path': str(tmp_path / 'b.png'), 'event_id': 12})
     assert second['revision'] == result['revision'] + 1
     assert second['image_event_id'] == 12
@@ -160,3 +163,36 @@ def test_observation_reports_actual_replacement_state(replay, tmp_path, monkeypa
     monkeypatch.setattr(observation.runtime, '_replacement_metadata_entries', lambda session: [])
     observation.runtime._runtime.restored_shader_sessions.add('sess')
     assert call('observe', {'out_path': str(tmp_path / 'restored.png')})['modification_state'] == 'restored'
+
+def test_remote_failure_does_not_reuse_previous_receipt(replay, tmp_path, monkeypatch):
+    first = call('observe', {'out_path': str(tmp_path / 'first.png')})
+    assert first['remote_display']['status'] == 'presented'
+    async def failed(*args):
+        raise RuntimeError('surface lost')
+    monkeypatch.setattr(observation.runtime, '_session_manager', SimpleNamespace(present_remote=failed))
+    result = call('observe', {'out_path': str(tmp_path / 'second.png'), 'event_id': 12})
+    assert result['remote_display'] == {'status': 'unavailable', 'event_id': 12,
+        'texture_id': 'resource-7', 'sequence': None, 'reason': 'surface lost'}
+    assert result['image_event_id'] == 12
+
+
+def test_no_color_sends_native_clear(replay, tmp_path, monkeypatch):
+    calls = []
+    async def outputs(*args):
+        return []
+    async def present(*args):
+        calls.append(args)
+        return 9
+    monkeypatch.setattr(observation.runtime, '_output_target_resource_ids', outputs)
+    monkeypatch.setattr(observation.runtime, '_session_manager', SimpleNamespace(present_remote=present))
+    result = call('observe', {'out_path': str(tmp_path / 'clear.png'), 'event_id': 5})
+    assert calls == [('sess', 5, None)]
+    assert result['remote_display'] == {'status': 'unavailable', 'event_id': 5,
+        'texture_id': None, 'sequence': 9, 'reason': 'no_color_output'}
+
+
+def test_local_receipt_is_explicitly_not_applicable(replay, tmp_path, monkeypatch):
+    monkeypatch.setattr(observation.runtime, '_context_state', lambda _: {'current_session_id': 'sess', 'backend': 'local'})
+    result = call('observe', {'out_path': str(tmp_path / 'local.png')})
+    assert result['remote_display'] == {'status': 'not_applicable', 'event_id': 42,
+        'texture_id': None, 'sequence': None, 'reason': None}

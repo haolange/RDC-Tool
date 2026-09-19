@@ -18,8 +18,8 @@
     },
     {
       "path": "pymodules/renderdoc.pyd",
-      "size": 5815296,
-      "sha256": "799b21727e61c1fecfe75c073021bcbe81563075641a4cb0540cddec9db7a1a3"
+      "size": 5817344,
+      "sha256": "b1c1c68411cbe2d5a671f04d9890a22aad5ff9b1ce96978398b71da8162f53d1"
     },
     {
       "path": "python/DLLs/_asyncio.pyd",
@@ -14808,8 +14808,8 @@
     },
     {
       "path": "renderdoc.dll",
-      "size": 25257984,
-      "sha256": "814c57ba0586fa029ae6c461fac08462ddba0045e1ec65c4c3ae4d0b9434bba5"
+      "size": 25262080,
+      "sha256": "30f00f10045fdc07516595a13f9c3f7b45085340d50c2156b4c96f47d03cbacb"
     },
     {
       "path": "renderdoc.json",

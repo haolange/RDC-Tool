@@ -1,4 +1,4 @@
-[CmdletBinding(SupportsShouldProcess = $true)]
+﻿[CmdletBinding(SupportsShouldProcess = $true)]
 param(
     [ValidateSet('install', 'upgrade', 'uninstall', 'doctor')]
     [string]$Action = 'install',
@@ -18,8 +18,8 @@ function Resolve-SourceRoot {
     if (-not $scriptPath) { throw 'script path cannot be resolved' }
     $scriptDir = Split-Path -Parent $scriptPath
     $root = Split-Path -Parent $scriptDir
-    if (-not (Test-Path -LiteralPath (Join-Path $root 'rdx.bat') -PathType Leaf)) {
-        throw "rdx.bat not found under source root: $root"
+    if (-not (Test-Path -LiteralPath (Join-Path $root 'bin\rdx.cmd') -PathType Leaf)) {
+        throw "bin/rdx.cmd not found under source root: $root"
     }
     return (Resolve-Path -LiteralPath $root).Path
 }
@@ -49,6 +49,19 @@ function Write-Step {
     Write-Output "[rdx-install] $Message"
 }
 
+function Assert-LinkFreePath {
+    param([string]$Path)
+    $cursor = [IO.Path]::GetFullPath($Path)
+    while ($cursor) {
+        if (Test-Path -LiteralPath $cursor) {
+            if ((Get-Item -LiteralPath $cursor -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "refusing linked installation path: $cursor" }
+        }
+        $parent = Split-Path -Parent $cursor
+        if ($parent -eq $cursor) { break }
+        $cursor = $parent
+    }
+}
+
 function Copy-RdxTools {
     param(
         [string]$SourceRoot,
@@ -60,11 +73,17 @@ function Copy-RdxTools {
         Write-Step "DRY-RUN copy $SourceRoot -> $TargetRoot"
         return
     }
+    Assert-LinkFreePath -Path $SourceRoot
+    Assert-LinkFreePath -Path $TargetRoot
+    if ($SourceRoot.TrimEnd('\') -ieq $TargetRoot.TrimEnd('\')) { throw 'source and target must differ' }
+    if ($TargetRoot.StartsWith($SourceRoot.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase) -or $SourceRoot.StartsWith($TargetRoot.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'source and target must not contain one another' }
     if (Test-Path -LiteralPath $TargetRoot) {
-        Remove-Item -LiteralPath $TargetRoot -Recurse -Force
+        if ((Get-Item -LiteralPath $TargetRoot).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'installation target must not be a link' }
+        if (-not (Test-Path -LiteralPath (Join-Path $TargetRoot 'cli\run_cli.py'))) { throw 'target is not an RDX installation' }
     }
     New-Item -ItemType Directory -Path $TargetRoot -Force | Out-Null
     Get-ChildItem -LiteralPath $SourceRoot -Recurse -Force | ForEach-Object {
+        if ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "refusing source link: $($_.FullName)" }
         $src = $_.FullName
         $rel = $src.Substring($SourceRoot.Length).TrimStart('\', '/')
         $parts = @($rel -split '[\\/]+' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
@@ -75,6 +94,7 @@ function Copy-RdxTools {
             }
         }
         $dst = Join-Path $TargetRoot $rel
+        Assert-LinkFreePath -Path $dst
         if ($_.PSIsContainer) {
             New-Item -ItemType Directory -Path $dst -Force | Out-Null
         }
@@ -83,50 +103,46 @@ function Copy-RdxTools {
             Copy-Item -LiteralPath $src -Destination $dst -Force
         }
     }
+    foreach ($obsolete in @('rdx.bat', 'scripts\rdx_bat_launcher.ps1')) {
+        $old = Join-Path $TargetRoot $obsolete
+        if (Test-Path -LiteralPath $old) {
+            if ((Get-Item -LiteralPath $old).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "refusing obsolete link: $old" }
+            Remove-Item -LiteralPath $old -Force
+        }
+    }
 }
 
 function Add-RdxToPath {
     param([string]$TargetRoot)
+    $bin = Join-Path $TargetRoot 'bin'
     $entries = @(Get-UserPathEntries)
-    if ($entries -contains $TargetRoot) {
-        Write-Step "PATH already contains $TargetRoot"
-        return
-    }
-    if ($DryRun) {
-        Write-Step "DRY-RUN add PATH entry $TargetRoot"
-        return
-    }
-    Set-UserPathEntries -Entries @($entries + $TargetRoot)
-    Write-Step "added PATH entry $TargetRoot"
+    $next = @($entries | Where-Object { $_.TrimEnd('\', '/') -ine $TargetRoot.TrimEnd('\', '/') -and $_.TrimEnd('\', '/') -ine $bin.TrimEnd('\', '/') }) + @($bin)
+    if ($DryRun) { Write-Step "DRY-RUN PATH converge $TargetRoot -> $bin"; return }
+    Set-UserPathEntries -Entries $next
+    Write-Step "PATH entry $bin"
 }
 
 function Remove-RdxFromPath {
     param([string]$TargetRoot)
+    $bin = Join-Path $TargetRoot 'bin'
     $entries = @(Get-UserPathEntries)
-    $next = @($entries | Where-Object { $_ -ne $TargetRoot })
-    if ($next.Count -eq $entries.Count) {
-        Write-Step "PATH does not contain $TargetRoot"
-        return
-    }
-    if ($DryRun) {
-        Write-Step "DRY-RUN remove PATH entry $TargetRoot"
-        return
-    }
+    $next = @($entries | Where-Object { $_.TrimEnd('\', '/') -ine $TargetRoot.TrimEnd('\', '/') -and $_.TrimEnd('\', '/') -ine $bin.TrimEnd('\', '/') })
+    if ($DryRun) { Write-Step "DRY-RUN remove PATH entries $TargetRoot and $bin"; return }
     Set-UserPathEntries -Entries $next
-    Write-Step "removed PATH entry $TargetRoot"
 }
 
 function Invoke-RdxDoctor {
     param([string]$Root)
-    $bat = Join-Path $Root 'rdx.bat'
+    $python = Join-Path $Root 'binaries\windows\x64\python\python.exe'
+    $entry = Join-Path $Root 'cli\run_cli.py'
     if ($DryRun) {
-        Write-Step "DRY-RUN doctor $bat --json doctor"
+        Write-Step "DRY-RUN doctor $python $entry --json doctor"
         return
     }
-    if (-not (Test-Path -LiteralPath $bat -PathType Leaf)) {
-        throw "rdx.bat not found: $bat"
+    if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
+        throw "bundled Python not found: $python"
     }
-    & $bat --json doctor
+    & $python $entry --json doctor
     if ($LASTEXITCODE -ne 0) {
         throw "rdx doctor failed with exit code $LASTEXITCODE"
     }
@@ -141,26 +157,29 @@ Write-Step "target=$targetRoot"
 switch ($Action) {
     'install' {
         Copy-RdxTools -SourceRoot $sourceRoot -TargetRoot $targetRoot
-        if ($AddToPath) { Add-RdxToPath -TargetRoot $targetRoot }
+        if ($AddToPath -or (@(Get-UserPathEntries | Where-Object { $_.TrimEnd('\', '/') -ieq $targetRoot.TrimEnd('\', '/') }).Count -gt 0)) { Add-RdxToPath -TargetRoot $targetRoot }
         Invoke-RdxDoctor -Root $targetRoot
     }
     'upgrade' {
         Copy-RdxTools -SourceRoot $sourceRoot -TargetRoot $targetRoot
-        if ($AddToPath) { Add-RdxToPath -TargetRoot $targetRoot }
+        if ($AddToPath -or (@(Get-UserPathEntries | Where-Object { $_.TrimEnd('\', '/') -ieq $targetRoot.TrimEnd('\', '/') }).Count -gt 0)) { Add-RdxToPath -TargetRoot $targetRoot }
         Invoke-RdxDoctor -Root $targetRoot
     }
     'uninstall' {
-        Remove-RdxFromPath -TargetRoot $targetRoot
         if ($DryRun) {
             Write-Step "DRY-RUN remove $targetRoot"
         }
         elseif (Test-Path -LiteralPath $targetRoot) {
-            if (-not (Test-Path -LiteralPath (Join-Path $targetRoot 'rdx.bat') -PathType Leaf)) {
+            if (-not (Test-Path -LiteralPath (Join-Path $targetRoot 'bin\rdx.cmd') -PathType Leaf)) {
                 throw "refusing to remove non-rdx-tools directory: $targetRoot"
             }
+            Assert-LinkFreePath -Path $targetRoot
+            if (@(Get-ChildItem -LiteralPath $targetRoot -Recurse -Force | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }).Count) { throw "refusing installation containing links: $targetRoot" }
+            if ($targetRoot -ieq $sourceRoot -or $sourceRoot.StartsWith($targetRoot.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) { throw "refusing removal of source installation" }
             Remove-Item -LiteralPath $targetRoot -Recurse -Force
             Write-Step "removed $targetRoot"
         }
+        Remove-RdxFromPath -TargetRoot $targetRoot
     }
     'doctor' {
         Invoke-RdxDoctor -Root $targetRoot

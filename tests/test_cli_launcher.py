@@ -31,9 +31,9 @@ def _launcher_env() -> dict[str, str]:
     return env
 
 
-def _run_bat(*args: str) -> tuple[int, dict, str]:
+def _run_cmd(*args: str) -> tuple[int, dict, str]:
     proc = subprocess.run(
-        [_cmd_exe(), "/c", "rdx.bat", *args],
+        [_cmd_exe(), "/c", str(ROOT / "bin" / "rdx.cmd"), *args],
         cwd=str(ROOT),
         stdin=subprocess.DEVNULL,
         capture_output=True,
@@ -48,9 +48,9 @@ def _run_bat(*args: str) -> tuple[int, dict, str]:
     return proc.returncode, _extract_json(combined), combined
 
 
-def _run_bat_from_cwd(cwd: Path, *args: str) -> tuple[int, dict, str]:
+def _run_cmd_from_cwd(cwd: Path, *args: str) -> tuple[int, dict, str]:
     proc = subprocess.run(
-        [_cmd_exe(), "/c", str(ROOT / "rdx.bat"), *args],
+        [_cmd_exe(), "/c", str(ROOT / str(ROOT / "bin" / "rdx.cmd")), *args],
         cwd=str(cwd),
         stdin=subprocess.DEVNULL,
         capture_output=True,
@@ -66,7 +66,7 @@ def _run_bat_from_cwd(cwd: Path, *args: str) -> tuple[int, dict, str]:
 
 
 def _cleanup_context(context_id: str) -> None:
-    for command in (("daemon", "stop"), ("context", "clear")):
+    for command in (("context", "clear"), ("daemon", "stop")):
         subprocess.run(
             [sys.executable, "cli/run_cli.py", "--daemon-context", context_id, *command],
             cwd=str(ROOT),
@@ -81,11 +81,11 @@ def _cleanup_context(context_id: str) -> None:
         )
 
 
-@pytest.mark.skipif(os.name != "nt", reason="rdx.bat launcher tests are windows-specific")
+@pytest.mark.skipif(os.name != "nt", reason="bin/rdx.cmd launcher tests are windows-specific")
 def test_noninteractive_daemon_status_returns_full_payload() -> None:
-    context_id = "pytest-bat-daemon-status"
+    context_id = "pytest-cmd-daemon-status"
     try:
-        code, payload, _ = _run_bat("--non-interactive", "--daemon-context", context_id, "daemon", "status")
+        code, payload, _ = _run_cmd( "--daemon-context", context_id, "daemon", "status")
     finally:
         _cleanup_context(context_id)
 
@@ -96,19 +96,19 @@ def test_noninteractive_daemon_status_returns_full_payload() -> None:
     assert isinstance(payload["data"].get("state"), dict)
 
 
-@pytest.mark.skipif(os.name != "nt", reason="rdx.bat launcher tests are windows-specific")
+@pytest.mark.skipif(os.name != "nt", reason="bin/rdx.cmd launcher tests are windows-specific")
 def test_noninteractive_doctor_returns_cli_only_payload() -> None:
-    code, payload, _ = _run_bat("--non-interactive", "--json", "doctor")
+    code, payload, _ = _run_cmd( "--json", "doctor")
 
     assert code == 0
     assert payload["ok"] is True
     assert payload["result_kind"] == "rdx.doctor"
 
 
-@pytest.mark.skipif(os.name != "nt", reason="rdx.bat launcher tests are windows-specific")
+@pytest.mark.skipif(os.name != "nt", reason="bin/rdx.cmd launcher tests are windows-specific")
 def test_noninteractive_unknown_command_uses_cli_usage_error() -> None:
     proc = subprocess.run(
-        [_cmd_exe(), "/c", "rdx.bat", "--non-interactive", "__unknown_command__"],
+        [_cmd_exe(), "/c", str(ROOT / "bin" / "rdx.cmd"),  "__unknown_command__"],
         cwd=str(ROOT),
         stdin=subprocess.DEVNULL,
         capture_output=True,
@@ -125,22 +125,18 @@ def test_noninteractive_unknown_command_uses_cli_usage_error() -> None:
     assert "invalid choice" in combined
 
 
-@pytest.mark.skipif(os.name != "nt", reason="rdx.bat launcher tests are windows-specific")
-def test_noninteractive_launcher_missing_command_keeps_short_status_payload() -> None:
-    code, payload, output = _run_bat("--non-interactive")
-
-    assert code == 2
-    assert payload["ok"] is False
-    assert payload["error_code"] == "missing_command"
-    assert "result_kind" not in payload
-    assert "missing command" in output
+@pytest.mark.skipif(os.name != "nt", reason="bin/rdx.cmd launcher tests are windows-specific")
+def test_launcher_missing_command_returns_usage_error() -> None:
+    proc = subprocess.run([_cmd_exe(), "/c", str(ROOT / "bin" / "rdx.cmd")], cwd=ROOT, stdin=subprocess.DEVNULL, capture_output=True, text=True, env=_launcher_env(), timeout=30)
+    assert proc.returncode == 2
+    assert "missing command" in proc.stderr
 
 
-@pytest.mark.skipif(os.name != "nt", reason="rdx.bat launcher tests are windows-specific")
+@pytest.mark.skipif(os.name != "nt", reason="bin/rdx.cmd launcher tests are windows-specific")
 def test_noninteractive_version_and_completion_are_available() -> None:
-    version_code, version_payload, _ = _run_bat("--non-interactive", "version", "--json")
+    version_code, version_payload, _ = _run_cmd( "version", "--json")
     completion_proc = subprocess.run(
-        [_cmd_exe(), "/c", "rdx.bat", "--non-interactive", "completion", "powershell"],
+        [_cmd_exe(), "/c", str(ROOT / "bin" / "rdx.cmd"),  "completion", "powershell"],
         cwd=str(ROOT),
         stdin=subprocess.DEVNULL,
         capture_output=True,
@@ -158,18 +154,18 @@ def test_noninteractive_version_and_completion_are_available() -> None:
     assert completion_proc.returncode == 0
     assert "Register-ArgumentCompleter" in completion_proc.stdout
 
-@pytest.mark.skipif(os.name != "nt", reason="rdx.bat launcher tests are windows-specific")
+@pytest.mark.skipif(os.name != "nt", reason="bin/rdx.cmd launcher tests are windows-specific")
 def test_noninteractive_facade_out_argument_is_passed_through() -> None:
-    context_id = "pytest-bat-facade-out"
+    context_id = "pytest-cmd-facade-out"
     try:
-        code, payload, output = _run_bat(
-            "--non-interactive",
+        code, payload, output = _run_cmd(
+
             "--daemon-context",
             context_id,
             "export",
             "screenshot",
             "--out",
-            "intermediate/artifacts/pytest-bat-facade-out.png",
+            "intermediate/artifacts/pytest-cmd-facade-out.png",
         )
     finally:
         _cleanup_context(context_id)
@@ -180,10 +176,10 @@ def test_noninteractive_facade_out_argument_is_passed_through() -> None:
     assert "Parameter cannot be processed" not in output
 
 
-@pytest.mark.skipif(os.name != "nt", reason="rdx.bat launcher tests are windows-specific")
+@pytest.mark.skipif(os.name != "nt", reason="bin/rdx.cmd launcher tests are windows-specific")
 def test_noninteractive_tools_list_passthroughs_canonical_payload() -> None:
-    code, payload, _ = _run_bat(
-        "--non-interactive",
+    code, payload, _ = _run_cmd(
+
         "tools",
         "list",
         "--json",
@@ -197,11 +193,11 @@ def test_noninteractive_tools_list_passthroughs_canonical_payload() -> None:
     assert payload["data"]["tool_count"] >= 1
 
 
-@pytest.mark.skipif(os.name != "nt", reason="rdx.bat launcher tests are windows-specific")
+@pytest.mark.skipif(os.name != "nt", reason="bin/rdx.cmd launcher tests are windows-specific")
 def test_noninteractive_tools_search_runs_from_caller_cwd(tmp_path: Path) -> None:
-    code, payload, _ = _run_bat_from_cwd(
+    code, payload, _ = _run_cmd_from_cwd(
         tmp_path,
-        "--non-interactive",
+
         "tools",
         "search",
         "pipeline",

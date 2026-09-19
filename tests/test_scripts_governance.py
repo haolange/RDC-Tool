@@ -12,7 +12,6 @@ SUPPORTED_SCRIPTS = (
     "scripts/package_release.py",
     "scripts/package_runtime.py",
     "scripts/rdx_install.ps1",
-    "scripts/rdx_bat_launcher.ps1",
     "scripts/release_gate.py",
     "scripts/smoke_cli.sh",
     "scripts/verify_release_package.py",

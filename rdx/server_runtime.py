@@ -7317,6 +7317,9 @@ async def _dispatch_event(action: str, args: Dict[str, Any]) -> str:
         if action_obj is None:
             return _err(f"Event not found: {event_id}")
         payload = _action_to_dict(action_obj, include_children=True)
+        payload["parent_chain"] = [{"event_id": int(item.eventId), "name": _action_name(item)} for item in _parent_chain(event_id)[:-1]]
+        payload["marker_path"] = [str(item.customName) for item in _parent_chain(event_id) if getattr(item, "customName", "") and _map_action_flags(item.flags).get("is_marker")] or None
+        payload["depth_output"] = None if _is_null_resource_id(getattr(action_obj, "depthOut", None)) else str(action_obj.depthOut)
         payload["children_event_ids"] = [int(c.eventId) for c in getattr(action_obj, "children", None) or []]
         return _ok(action=payload)
 
@@ -7647,7 +7650,11 @@ async def _dispatch_resource(action: str, args: Dict[str, Any]) -> str:
         raw_event_id = int(getattr(entry, "eventId", 0))
         event_lookup = await get_event_lookup()
         resolvable = raw_event_id > 0 and raw_event_id in event_lookup
+        action = event_lookup.get(raw_event_id)
+        color = [{"slot": slot, "resource_id": str(resource)} for slot, resource in enumerate(getattr(action, "outputs", None) or []) if not _is_null_resource_id(resource)] if action else None
+        depth = getattr(action, "depthOut", None)
         return {
+            "attachments": {"color": color, "depth": None if _is_null_resource_id(depth) else str(depth)},
             "event_id": raw_event_id if resolvable else None,
             "raw_event_id": raw_event_id,
             "event_resolvable": resolvable,
@@ -7782,6 +7789,7 @@ async def _dispatch_resource(action: str, args: Dict[str, Any]) -> str:
     if action == "get_usage":
         _require(args, "resource_id")
         rid = await _resolve_resource_id(session_id, args["resource_id"])
+        from rdx.core.replay_facts import usage_access
         usage_raw = await _offload(controller.GetUsage, rid)
         usage = []
         for entry in usage_raw:
@@ -7790,7 +7798,7 @@ async def _dispatch_resource(action: str, args: Dict[str, Any]) -> str:
                 {
                     **event_info,
                     "usage": str(getattr(entry, "usage", "")),
-                    "is_write": any(token in str(getattr(entry, "usage", "")).lower() for token in ("write", "rwresource", "rendertarget", "depthstencil", "cleared", "copydst", "resolvedst", "genmips")),
+                    **usage_access(_get_rd(), entry.usage),
                 },
             )
         return _ok(usage=usage[: _as_int(args.get("max_events"), 10000)])
@@ -8092,11 +8100,28 @@ async def _export_buffer_file(args: Dict[str, Any]) -> str:
 
 async def _export_mesh_file(args: Dict[str, Any]) -> str:
     _require(args, "session_id", "output_path")
-    if args.get("format", "obj") != "obj" or args.get("space", "postvs") != "postvs" or _as_bool(args.get("include_attributes"), False):
-        return _err("Mesh export supports postvs OBJ positions and primitive indices only", code="mesh_export_unsupported")
+    space = args.get("space", "postvs")
+    include_attributes = _as_bool(args.get("include_attributes"), False)
+    if args.get("format", "obj") != "obj" or space not in {"postvs", "vs_input"} or (space == "postvs" and include_attributes):
+        return _err("Post-VS OBJ supports positions only; attributes require explicit VS input space", code="mesh_export_unsupported")
     session_id = str(args["session_id"])
     event_id = await _ensure_event(session_id, _as_int(args["event_id"]) if args.get("event_id") is not None else None)
     controller = await _get_controller(session_id)
+    if space == "vs_input":
+        from rdx.core.mesh_data import vertex_input, input_obj, MeshReadError
+        try:
+            data = await _offload(vertex_input, controller, _get_rd(), event_id, 0, 0)
+            content, primitive_count = input_obj(data, include_attributes)
+        except MeshReadError as exc:
+            return _err(str(exc), code="mesh_input_failed")
+        except ValueError as exc:
+            return _err(str(exc), code="mesh_export_unsupported")
+        out = Path(str(args["output_path"]))
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(content, encoding="utf-8")
+        return _ok(saved_path=str(out), export_format="obj", space=space, include_attributes=include_attributes,
+                   resolved_event_id=event_id, vertex_count=data["vertex_count"], primitive_count=primitive_count,
+                   attributes={key: ("present" if key == "position" or include_attributes else "not_requested") for key in ("position", "normal", "uv")})
     mesh = await _offload(controller.GetPostVSData, 0, 0, _get_rd().MeshDataStage.VSOut)
     if _is_null_resource_id(mesh.vertexResourceId):
         return _err("No post-transform vertex data", code="mesh_post_transform_unavailable")
@@ -8143,7 +8168,8 @@ async def _export_mesh_file(args: Dict[str, Any]) -> str:
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return _ok(saved_path=str(out), export_format="obj", space="postvs", include_attributes=False,
-               resolved_event_id=event_id, vertex_count=len(positions), primitive_count=len(primitives))
+               resolved_event_id=event_id, vertex_count=len(positions), primitive_count=len(primitives),
+               attributes={"position": "present", "normal": "unsupported", "uv": "unsupported"})
 
 
 async def _read_at_capture_state(session_id: str, resource_id: Any, args: Dict[str, Any], reader: Any) -> Tuple[Any, Dict[str, Any]]:
@@ -8349,11 +8375,17 @@ def _mesh_vertex_rows(raw: bytes, *, stride: int, max_vertices: int) -> List[Dic
 
 async def _dispatch_mesh(action: str, args: Dict[str, Any]) -> str:
     if action == "get_drawcall_mesh_config":
-        _require(args, "session_id", "event_id")
+        _require(args, "session_id")
         session_id = str(args["session_id"])
-        event_id = _as_int(args["event_id"])
+        event_id = await _ensure_event(session_id, _as_int(args["event_id"]) if args.get("event_id") is not None else None)
         snap = await _pipeline_service.snapshot_pipeline(session_id, event_id, _session_manager)
-        return _ok(mesh_config={"event_id": event_id, "topology": snap.topology, "bindings": [b.model_dump(mode="json") for b in snap.bindings]})
+        from rdx.core.mesh_data import vertex_input
+        controller = await _get_controller(session_id)
+        try:
+            inputs = await _offload(vertex_input, controller, _get_rd(), event_id, _as_int(args.get("instance"), 0), _as_int(args.get("max_vertices"), 128))
+        except ValueError as exc:
+            return _err(str(exc), code="mesh_input_failed")
+        return _ok(mesh_config={"event_id": event_id, "topology": snap.topology, "bindings": [b.model_dump(mode="json") for b in snap.bindings], "vertex_input": inputs})
     if action == "get_post_transform_data":
         stage = str(args.get("stage", "")).lower()
         if stage not in {"vs", "gs"}:
@@ -8418,18 +8450,28 @@ async def _dispatch_mesh(action: str, args: Dict[str, Any]) -> str:
         vertex_stride = int(getattr(mesh, "vertexByteStride", 0) or 0)
         if vertex_stride <= 0 or vertex_size < 0:
             return _err("Invalid post-transform vertex layout", code="mesh_post_transform_unavailable")
-        read_size = min(vertex_size, max_vertices * vertex_stride) if max_vertices > 0 and vertex_size > 0 else vertex_size
+        unbounded = vertex_size == (1 << 64) - 1
+        read_size = (max_vertices * vertex_stride if max_vertices > 0 else 0) if unbounded else (min(vertex_size, max_vertices * vertex_stride) if max_vertices > 0 and vertex_size > 0 else vertex_size)
         raw = await _offload(controller.GetBufferData, vertex_resource_id, vertex_offset, read_size)
-        if read_size > 0 and len(raw) != read_size:
+        if read_size > 0 and not unbounded and len(raw) != read_size:
             return _err("Incomplete post-transform vertex readback", code="mesh_post_transform_failed")
         mesh_format = _mesh_format_payload(mesh)
         rows = _mesh_vertex_rows(raw, stride=vertex_stride, max_vertices=max_vertices)
+        from rdx.core.replay_facts import mesh_attributes, post_transform_outputs
+        attributes = mesh_attributes(rd, mesh, raw, vertex_stride, rows)
+        outputs = {"status": "unsupported", "reason": "No shader reflection available"}
+        if hasattr(controller, "GetPipelineState"):
+            pipe = await _offload(controller.GetPipelineState)
+            reflection = await _offload(pipe.GetShaderReflection, _rd_stage(stage))
+            api = await _offload(controller.GetAPIProperties)
+            outputs = post_transform_outputs(reflection, "D3D11" if api.pipelineType == rd.GraphicsAPI.D3D11 else "D3D12" if api.pipelineType == rd.GraphicsAPI.D3D12 else "unverified", vertex_stride, raw, rows)
         return _ok(
             mesh_data={
                 "mesh_format": mesh_format,
                 "vertex_rows": rows,
+                "attributes": attributes, "outputs": outputs, "source": "post_transform",
                 "vertex_count": len(rows),
-                "truncated": bool(max_vertices > 0 and vertex_size // vertex_stride > len(rows)),
+                "truncated": (None if unbounded and max_vertices > 0 and len(rows) == max_vertices else bool(max_vertices > 0 and not unbounded and vertex_size // vertex_stride > len(rows))),
                 "stage": stage.upper(), "stage_bound": True, "view_index": view_index,
             },
             resolved_event_id=int(event_id),
