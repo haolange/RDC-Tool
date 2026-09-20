@@ -1,4 +1,4 @@
-# Tool interface upgrade
+﻿# Tool interface upgrade
 
 The current interface removes the following public entries without runtime aliases.
 
