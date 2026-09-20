@@ -4,6 +4,8 @@
 
 ## Install or Upgrade
 
+RDC-Agent users may simply extract the zip and select the contained `rdc-tool` folder in Settings → Tools, then verify and apply. No PATH change or system Python installation is required. Detection uses the existing default installation `%LOCALAPPDATA%\Programs\rdc-tool`.
+
 Extract `rdc-tool-<version>-windows-x64.zip`, then run:
 
 ```powershell

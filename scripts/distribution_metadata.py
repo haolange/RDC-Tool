@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 import csv
 import hashlib
+import shutil
 import tomllib
 from pathlib import Path
 
@@ -12,6 +13,15 @@ def write_distribution_metadata(root: Path, site_packages: Path) -> None:
     project = tomllib.loads((root / 'pyproject.toml').read_text(encoding='utf-8'))['project']
     name, version = project['name'], project['version']
     directory = site_packages / f"{name.replace('-', '_')}-{version}.dist-info"
+    # Runtime packaging owns these generated metadata directories, not third-party packages.
+    for previous in site_packages.glob(f"{name.replace('-', '_')}-*.dist-info"):
+        if previous == directory:
+            continue
+        if previous.is_symlink() or previous.resolve().parent != site_packages.resolve():
+            raise RuntimeError(f'Unsafe distribution metadata path: {previous}')
+        if (previous / 'INSTALLER').read_text(encoding='utf-8').strip() != 'rdc-tool-runtime':
+            raise RuntimeError(f'Refusing to replace non-generated metadata: {previous}')
+        shutil.rmtree(previous)
     directory.mkdir(parents=True, exist_ok=True)
     fields = ['Metadata-Version: 2.3', f'Name: {name}', f'Version: {version}',
               f"Summary: {project['description']}", 'License: Apache-2.0',

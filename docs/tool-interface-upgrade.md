@@ -1,6 +1,6 @@
 ﻿# Tool interface upgrade
 
-The current interface removes the following public entries without runtime aliases.
+This is a historical disposition record, not the current contract or an alias map. Current definitions are owned by `rdc_tool/operation_definitions.py`; see [public contract](public-contract.md) and [generated reference](tool-reference.md). Runtime aliases are not provided.
 
 | Previous operation | Disposition |
 |---|---|

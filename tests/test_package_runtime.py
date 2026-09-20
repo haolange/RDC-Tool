@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 
 from scripts import package_runtime
+from rdc_tool import __version__
+from scripts.distribution_metadata import write_distribution_metadata
 
 
 def _write(path: Path, content: bytes | str) -> None:
@@ -68,12 +70,26 @@ def test_package_runtime_bundles_python_and_excludes_dev_only_packages(tmp_path:
     indexed = {item["path"]: item for item in manifest["files"]}
     assert "python/python.exe" in indexed
     assert "renderdoc.dll" in indexed
-    metadata = out_root / 'python/Lib/site-packages/rdc_tool-1.0.0.dist-info'
+    metadata = out_root / f'python/Lib/site-packages/rdc_tool-{__version__}.dist-info'
     assert 'Name: rdc-tool' in (metadata / 'METADATA').read_text(encoding='utf-8')
     assert not (metadata / 'direct_url.json').exists()
     assert 'rdc-tool = rdc_tool.cli:main' in (metadata / 'entry_points.txt').read_text(encoding='utf-8')
     removed_field = "worker_" + "materialize"
     assert all(removed_field not in item for item in manifest["files"])
+
+
+def test_metadata_upgrade_replaces_only_owned_previous_version(tmp_path: Path) -> None:
+    import pytest
+    root = Path(__file__).resolve().parents[1]
+    previous = tmp_path / 'rdc_tool-0.0.0.dist-info'
+    _write(previous / 'INSTALLER', 'rdc-tool-runtime\n')
+    write_distribution_metadata(root, tmp_path)
+    assert not previous.exists()
+    assert len(list(tmp_path.glob('rdc_tool-*.dist-info'))) == 1
+    _write(previous / 'INSTALLER', 'external-installer\n')
+    with pytest.raises(RuntimeError, match='non-generated'):
+        write_distribution_metadata(root, tmp_path)
+    assert previous.exists()
 
 def test_package_runtime_rejects_site_packages_source_inside_output_tree(tmp_path: Path, monkeypatch) -> None:
     tools_root = tmp_path / "tools"

@@ -4,7 +4,7 @@ RenderDoc `.rdc` replay CLI for agents and humans.
 
 **Platform:** Windows x64 local replay + Android remote replay. **Current baseline:** RenderDoc 1.45.
 
-Download [rdc-tool-1.0.0-windows-x64.zip](https://github.com/haolange/RDC-Tool/releases/download/v1.0.0/rdc-tool-1.0.0-windows-x64.zip), extract it, run `install.cmd`, open a new terminal, then run:
+Download the Windows x64 zip from [Releases](https://github.com/haolange/RDC-Tool/releases), extract it, run `install.cmd`, open a new terminal, then run:
 
 ```bat
 rdc-tool --json doctor
@@ -15,6 +15,8 @@ Source checkouts require Git LFS and `git lfs pull`. `binaries/windows` and `bin
 **License:** [Apache-2.0](LICENSE). See [installation](docs/install.md), [stability](docs/stability.md), and the [session model](docs/session-model.md).
 
 ## Entry Points
+
+This source prepares the **1.0.1 candidate**, including the corrected LICENSE in the archive itself. It is not yet a published release. For RDC-Agent, select the extracted `rdc-tool` folder in Settings → Tools; standalone installation and PATH changes are optional.
 
 ```bat
 rdc-tool --version

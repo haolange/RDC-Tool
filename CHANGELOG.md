@@ -2,6 +2,21 @@
 
 ## 待发布 `Unreleased`
 
+## 1.0.1 — 2026-09-20
+
+- 恢复完整 Apache-2.0 LICENSE 并收入新 zip，不修改 v1.0.0 tag 或旧资产。
+- 核对发行版本、CHANGELOG、manifest、SBOM、license inventory 与 checksum；包内 LICENSE 必须与当前源码逐字节一致。
+- 打包使用独立暂存目录，成功或失败均释放；Agent 可直接选择解压目录。
+- 发行验证使用隔离运行目录，成功、失败或取消时先释放 context 再停止自有 daemon；清理失败使门禁失败并保留恢复信息，不吞掉占用错误。
+
+## 1.0.0
+
+### Breaking
+
+- Breaking: 产品和公共命令统一为 `rdc-tool`，旧 `rdx` / `rdx-tools` 入口不提供转发或兼容别名。嵌入宿主绑定同安装捆绑 Python 与 `cli/run_cli.py`。
+
+### 首个 GA baseline
+
 - 发布口径锁定为 1.0.0 首个 GA baseline；pre-GA 的 owner/lease/baton/handoff 与 runtime materialization 实验不进入 1.0 公共契约。
 - 收敛 CLI context 模型：`--daemon-context` 仅表示隔离 runtime namespace，不承载业务编排或任务交接语义。
 - 移除 worker runtime materialization/cache 设计，worker 直接使用 packaged runtime binaries 与 `pymodules`。

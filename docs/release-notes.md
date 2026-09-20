@@ -1,6 +1,14 @@
 ﻿# Release Notes
 
-## Operation interface convergence
+## 1.0.1 — 2026-09-20
+
+The following sections describe the 1.0.0 baseline. Version 1.0.1 includes the complete Apache-2.0 text as the archive root LICENSE and supersedes the damaged license asset in the v1.0.0 zip. The old tag and original asset remain unchanged. Package qualification verifies actual license bytes against source, version metadata, manifest and SHA256SUMS; staging is released on success or failure. Runtime operation contracts are unchanged.
+
+For RDC-Agent, extract the Windows x64 zip and select its `rdc-tool` folder in Settings → Tools, then verify and apply. `install.cmd` remains the optional standalone CLI installation entry.
+
+Release verification owns an isolated runtime directory. Success, failure and cancellation clear contexts before stopping their daemons; cleanup errors fail qualification and retain recovery state instead of silently ignoring locked files. Caller runtime state is not reused.
+
+## 1.0.0 — Operation interface convergence
 
 - Removed redundant projections, workflow/report wrappers and generic file utilities. The subsequent 73-operation review identified 18 necessary capability gaps; restoration adds four real operations and expands existing queries. The current set is derived from definitions, with no old-name aliases or forwarding handlers.
 - Moved operation names, schemas, prerequisites, scope, effects, evidence kinds, and path inputs into one code-owned definition set. Catalog, discovery, and reference output carry a deterministic content fingerprint.

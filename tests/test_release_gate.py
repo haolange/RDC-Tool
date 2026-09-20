@@ -7,6 +7,24 @@ from pathlib import Path
 from scripts import release_gate
 
 
+def test_cleanup_failure_cannot_publish_passing_report(monkeypatch, tmp_path: Path) -> None:
+    from contextlib import contextmanager
+
+    @contextmanager
+    def broken_cleanup(root):
+        yield
+        raise RuntimeError("daemon stop timed out")
+
+    report = tmp_path / "report.md"
+    monkeypatch.setattr(release_gate, "isolated_release_runtime", broken_cleanup)
+    monkeypatch.setattr(release_gate, "_run_gate", lambda argv: ([("source", True, "ok")], report))
+    assert release_gate.main([]) == 1
+    text = report.read_text(encoding="utf-8")
+    assert "FAIL `runtime:cleanup`" in text
+    assert "Overall: FAIL" in text
+    assert "daemon stop timed out" in text
+
+
 def _prepare_root(root: Path) -> None:
     for rel in release_gate.REQUIRED_DIRS:
         (root / rel).mkdir(parents=True, exist_ok=True)
@@ -14,6 +32,7 @@ def _prepare_root(root: Path) -> None:
         path = root / rel
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("ok\n", encoding="utf-8")
+    (root / 'CHANGELOG.md').write_text(f'## {release_gate.release_packager.TOOL_VERSION}\n', encoding='utf-8')
 
 
 def _write_smoke_log(root: Path, *, passed: bool = True) -> None:

@@ -23,6 +23,7 @@ from rdc_tool.runtime_catalog import catalog_payload
 from scripts import package_release as release_packager
 from scripts._shared import run_subprocess, tools_root, write_text
 from scripts.generate_tool_reference import generate_tool_reference
+from scripts.release_runtime import isolated_release_runtime
 
 
 REQUIRED_DIRS = [
@@ -517,7 +518,7 @@ def _check_package_matches_source(root: Path, package_path: Path) -> tuple[bool,
     return True, f"source manifest matched {len(expected)} files"
 
 
-def main(argv: list[str] | None = None) -> int:
+def _run_gate(argv: list[str] | None = None) -> tuple[list[tuple[str, bool, str]], Path]:
     parser = argparse.ArgumentParser(description="Run release gate checks")
     parser.add_argument("--report", default="intermediate/logs/release_gate_report.md")
     parser.add_argument(
@@ -539,6 +540,9 @@ def main(argv: list[str] | None = None) -> int:
 
     root = _tools_root()
     results: list[tuple[str, bool, str]] = []
+    changelog = (root / 'CHANGELOG.md').read_text(encoding='utf-8-sig')
+    has_release = f'## {release_packager.TOOL_VERSION}' in changelog
+    results.append(('docs:release-changelog', has_release, '' if has_release else 'CHANGELOG missing current version'))
 
     for rel in REQUIRED_DIRS:
         p = root / rel
@@ -656,9 +660,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     results.append(("release:package", ok_package, package_detail))
 
-    ok_all = all(item[1] for item in results)
-
     report_path = (root / args.report).resolve()
+    return results, report_path
+
+
+def _write_report(results: list[tuple[str, bool, str]], report_path: Path) -> int:
+    ok_all = all(item[1] for item in results)
     lines = ["# Release Gate Report", ""]
     for name, ok, detail in results:
         lines.append(f"- {'PASS' if ok else 'FAIL'} `{name}`")
@@ -671,6 +678,22 @@ def main(argv: list[str] | None = None) -> int:
     print(f"[gate] report: {report_path}")
     print(f"[gate] overall: {'PASS' if ok_all else 'FAIL'}")
     return 0 if ok_all else 1
+
+
+def main(argv: list[str] | None = None) -> int:
+    checked = None
+    try:
+        with isolated_release_runtime(_tools_root()):
+            checked = _run_gate(argv)
+    except Exception as exc:
+        if checked is None:
+            raise
+        results, report_path = checked
+        results.append(("runtime:cleanup", False, str(exc)))
+        return _write_report(results, report_path)
+    results, report_path = checked
+    results.append(("runtime:cleanup", True, "owned contexts cleared, daemons stopped, temporary state removed"))
+    return _write_report(results, report_path)
 
 
 if __name__ == "__main__":

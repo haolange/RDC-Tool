@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import tomllib
 import json
 import os
 import shutil
@@ -18,6 +20,8 @@ if str(SCRIPT_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPT_ROOT))
 
 from scripts._shared import extract_json_payload
+from scripts.release_runtime import isolated_release_runtime
+from rdc_tool import __version__ as TOOL_VERSION
 
 
 PUBLIC_COMMAND = "rdc-tool"
@@ -151,6 +155,50 @@ def _verify_release_manifest(root: Path) -> None:
         raise RuntimeError(f"release manifest exposes .rdc fixtures: {leaked_rdc[:5]}")
 
 
+def _verify_release_identity(root: Path, source: Path = SCRIPT_ROOT) -> None:
+    if (root / "LICENSE").read_bytes() != (source / "LICENSE").read_bytes():
+        raise RuntimeError("LICENSE bytes do not match release source")
+    for name in ("RELEASE_MANIFEST.json", "SBOM.json"):
+        payload = json.loads((root / name).read_text(encoding="utf-8"))
+        if payload.get("version") != TOOL_VERSION:
+            raise RuntimeError(f"{name} version does not match release source")
+    inventory = json.loads((root / "LICENSE_INVENTORY.json").read_text(encoding="utf-8"))
+    rows = [row for row in inventory if row.get("name") == "rdc-tool"]
+    if len(rows) != 1 or rows[0].get("version") != TOOL_VERSION:
+        raise RuntimeError("license inventory version does not match release source")
+    project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    if project["project"]["version"] != TOOL_VERSION:
+        raise RuntimeError("pyproject version does not match release source")
+    metadata = list((root / "binaries/windows/x64/python/Lib/site-packages").glob("rdc_tool-*.dist-info/METADATA"))
+    if len(metadata) != 1 or f"Version: {TOOL_VERSION}\n" not in metadata[0].read_text(encoding="utf-8"):
+        raise RuntimeError("bundled distribution version does not match release source")
+    sbom = json.loads((root / "SBOM.json").read_text(encoding="utf-8"))
+    components = [row for row in sbom.get("components", []) if row.get("name") == "rdc-tool"]
+    if len(components) != 1 or components[0].get("version") != TOOL_VERSION:
+        raise RuntimeError("SBOM component version does not match release source")
+    if f"## {TOOL_VERSION}" not in (root / "CHANGELOG.md").read_text(encoding="utf-8-sig"):
+        raise RuntimeError("CHANGELOG missing release version")
+    manifest = json.loads((root / "RELEASE_MANIFEST.json").read_text(encoding="utf-8"))
+    for item in manifest["files"]:
+        file = (root / item["path"]).resolve()
+        if not file.is_relative_to(root.resolve()) or not file.is_file():
+            raise RuntimeError("manifest path is missing or outside package")
+        if file.stat().st_size != item["size"] or _sha256(file) != item["sha256"]:
+            raise RuntimeError(f"package bytes do not match manifest: {item['path']}")
+
+
+def _sha256(file: Path) -> str:
+    with file.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def _verify_archive_checksum(zip_path: Path) -> None:
+    rows = (zip_path.parent / "SHA256SUMS").read_text(encoding="utf-8").splitlines()
+    expected = [line.split()[0] for line in rows if len(line.split()) == 2 and line.split()[1] == zip_path.name]
+    if len(expected) != 1 or expected[0] != _sha256(zip_path):
+        raise RuntimeError("release archive checksum mismatch")
+
+
 def _verify_license_inventory(root: Path) -> None:
     inventory_path = root / "LICENSE_INVENTORY.json"
     sbom_path = root / "SBOM.json"
@@ -201,6 +249,8 @@ def _verify_version_payload(root: Path) -> None:
         raise RuntimeError(f"version --json failed: exit={code}\n{output}")
     if data.get("public_commands") != EXPECTED_PUBLIC_COMMANDS:
         raise RuntimeError(f"version public_commands mismatch: {data.get('public_commands')!r}")
+    if data.get("tool_version") != TOOL_VERSION:
+        raise RuntimeError("runtime version does not match release source")
     entrypoints = data.get("entrypoints")
     if not isinstance(entrypoints, dict) or "windows_cmd" not in entrypoints or "posix_shell" not in entrypoints or "python_cli" not in entrypoints:
         raise RuntimeError(f"version entrypoints missing physical launchers: {json.dumps(data)[:500]}")
@@ -310,6 +360,7 @@ def main(argv: list[str] | None = None) -> int:
 
     temp_dir = Path(tempfile.mkdtemp(prefix="rdc-tool package verify "))
     try:
+        _verify_archive_checksum(zip_path)
         _verify_no_pre_ga_payload(zip_path)
         _verify_no_public_mcp_surface(zip_path)
         with zipfile.ZipFile(zip_path, "r") as zf:
@@ -317,16 +368,18 @@ def main(argv: list[str] | None = None) -> int:
         root = _find_package_root(temp_dir)
         _verify_release_manifest(root)
         _verify_license_inventory(root)
-        _verify_doctor(root)
-        _verify_physical_launcher_file(root)
-        _verify_version_payload(root)
-        _verify_tools_catalog(root)
-        _verify_cli_contract(root)
+        _verify_release_identity(root)
+        with isolated_release_runtime(root):
+            _verify_doctor(root)
+            _verify_physical_launcher_file(root)
+            _verify_version_payload(root)
+            _verify_tools_catalog(root)
+            _verify_cli_contract(root)
     except Exception as exc:  # noqa: BLE001
         print(f"[verify] {exc}")
         return 1
     finally:
-        shutil.rmtree(temp_dir, ignore_errors=True)
+        shutil.rmtree(temp_dir)
 
     print(f"[verify] PASS: {zip_path}")
     return 0

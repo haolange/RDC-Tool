@@ -1,6 +1,16 @@
 ﻿# Tool convergence execution ledger
 
-Current approved scope: Runtime/host final closeout C01–C07 at the end of this ledger. Earlier R/H/T tables, budgets, launcher records and capability fingerprints are historical snapshots; they do not override current facts or authorize new calls.
+Current approved scope: first-use integration and 1.0.1 release preparation, coordinated by the adjacent RDC-Agent `docs/workflows/first-use-and-release-readiness.md` T4–T6. Earlier C/R/H/T tables and receipts are historical snapshots; current contracts are [public-contract.md](public-contract.md) and [install.md](install.md). Generated .qoder wiki content is not SSOT.
+
+2026-09-20追加发行授权：Tools 1.0.1正式发布，Agent 0.6.0-rc.1未签名预发布；允许main提交、非强制推送与新tag/Release，不覆盖v1.0.0。Tools发行回归37项及2个subtests、markdown/identity通过；最终zip完整验证通过，SHA256 `e5cd8df1237ad95ecaf64afd911107c5298d08898492924edefb32efdf958357`。提交/上传状态由相邻Agent任务账本P1–P3追踪。下文“不提交或发布”是历史阶段边界。
+
+2026-09-20 Agent退出补验已完成：现有打包窗口与上手指南目视正常，Alt+F4正常退出；主进程、子进程与canonical lock均释放，隔离配置已删除。下表先前单列的Agent原生容器/退出未验项已补齐，跨库计划T1–T6通过；不提交或发布。
+
+| Task | 状态 | 范围与验证 |
+|---|---|---|
+| T4 发行修复 | 通过 | CHANGELOG/version/license/staging/dist-info升级与验证脚本生命周期完成；34项不同受影响测试通过；隔离runtime的真实成功、异常和取消清理均通过，cleanup失败不得写PASS |
+| T5 候选验证 | 通过 | dist/candidate/rdc-tool-1.0.1-windows-x64.zip；SHA256 9d3a653b0fcfc78ba97324cf5e452651e8e90f7f445b19981540a24d9509b254；更新zip真实CLI与门禁通过，3130文件匹配源码。未改运行时，沿用Agent设置1.0.1/128操作与Vulkan EID21打开关闭证据 |
+| T6 收口 | 通过 | 源码门禁记录intermediate/logs/first-use-release-cleanup.md；context释放、daemon停止、runtime/staging/解压/测试临时目录清理完成；无Python残留，canonical lock不存在。保留一套候选，不提交或发布；Agent原生容器/正常退出仍由跨库计划单列，Browser界面验收已通过 |
 
 Original approved scope: Tools 196 → 124, RDC-Agent fixed integration and capability policy,
 three specialist manuals, real configuration upgrade, required validation and cleanup.

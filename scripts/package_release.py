@@ -9,6 +9,7 @@ import json
 import os
 import shutil
 import sys
+import tempfile
 import zipfile
 from pathlib import Path
 
@@ -17,7 +18,6 @@ if str(SCRIPT_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPT_ROOT))
 
 from rdc_tool import __version__ as TOOL_VERSION
-from rdc_tool.runtime_paths import intermediate_root
 from scripts._shared import tools_root, write_text
 
 
@@ -124,7 +124,7 @@ def _license_inventory(staging_root: Path) -> list[dict[str, str]]:
                 version = line[9:].strip()
             elif line.startswith("License: "):
                 license_name = line[9:].strip()
-        if name:
+        if name and name != PACKAGE_PREFIX:
             rows.append(
                 {
                     "name": name,
@@ -160,9 +160,7 @@ def _write_release_metadata(staging_root: Path, files: list[dict[str, object]]) 
 
 
 def _zip_dir(staging_root: Path, zip_path: Path) -> None:
-    if zip_path.exists():
-        zip_path.unlink()
-    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
+    with zipfile.ZipFile(zip_path, "x", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
         for path in sorted(staging_root.rglob("*")):
             if path.is_file():
                 zf.write(path, arcname=f"{PACKAGE_PREFIX}/{path.relative_to(staging_root).as_posix()}")
@@ -180,19 +178,21 @@ def main(argv: list[str] | None = None) -> int:
 
     root = _tools_root().resolve()
     out_dir = (root / str(args.out_dir)).resolve()
-    staging_parent = intermediate_root() / "release"
-    staging_root = staging_parent / PACKAGE_PREFIX
-    if staging_root.exists():
-        shutil.rmtree(staging_root)
-    staging_root.mkdir(parents=True, exist_ok=True)
     out_dir.mkdir(parents=True, exist_ok=True)
-
-    files = _copy_release_tree(root, staging_root)
-    _write_release_metadata(staging_root, files)
-
     package_name = f"{PACKAGE_PREFIX}-{TOOL_VERSION}-{PACKAGE_PLATFORM}.zip"
     package_path = out_dir / package_name
-    _zip_dir(staging_root, package_path)
+    if package_path.exists():
+        raise FileExistsError(f"Refusing to overwrite an existing release candidate: {package_path}")
+    with tempfile.TemporaryDirectory(prefix="rdc-tool-release-") as staging:
+        staging_root = Path(staging) / PACKAGE_PREFIX
+        staging_root.mkdir()
+        files = _copy_release_tree(root, staging_root)
+        _write_release_metadata(staging_root, files)
+        try:
+            _zip_dir(staging_root, package_path)
+        except BaseException:
+            package_path.unlink(missing_ok=True)
+            raise
 
     sha = _sha256(package_path)
     checksum_path = out_dir / "SHA256SUMS"
