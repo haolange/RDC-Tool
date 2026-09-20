@@ -286,3 +286,11 @@ Packaging failure resolved during T6: electron-builder 26.8.1 omitted pnpm dedup
 Pre-publication correction: the final Markdown check caught a missing UTF-8 BOM in tool-interface-upgrade.md; Actions independently reported the same failure. Corrected the source and candidate before publication. Only that document and RELEASE_MANIFEST.json changed; all runtime files are byte-identical and installed/archive hashes were rechecked. No replay or full functional suite was rerun for this encoding-only correction.
 
 Publication evidence: [Release v1.0.0](https://github.com/haolange/RDC-Tool/releases/tag/v1.0.0), [release-commit Windows CI](https://github.com/haolange/RDC-Tool/actions/runs/35498524790), [Issue response](https://github.com/haolange/RDC-Tool/issues/1#issuecomment-5748580795). Remote CI runs 9 marked contract/unit tests plus generators, identity, Markdown and no-capture doctor; the complete local regression evidence above is separate. License identification remains NOASSERTION after publication; no repeated license-text mutation was attempted.
+
+## License text correction (2026-09-20)
+
+| Task | State | Evidence |
+|---|---|---|
+| L1 Diagnose and restore standard text | 待验证 | Compared with Apache official LICENSE-2.0.txt: previous text altered definitions and clauses, not merely whitespace. Agent already had standard clauses and was recognized as Apache-2.0; only its copyright placeholder is filled. Restore official body with Copyright 2026 CGBull; earlier classification as an external-only issue was incorrect |
+| L2 Remote recognition and distribution notice | 待执行 | Push correction, query both License APIs, supplement v1.0.0 without replacing published zip/tag |
+| L3 Handoff and prompt | 待执行 | Update desktop handoff and continuation prompt after remote verification |
