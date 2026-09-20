@@ -26,7 +26,7 @@ def _write_smoke_log(root: Path, *, passed: bool = True) -> None:
 def _mock_release_gate_basics(monkeypatch, root: Path) -> None:  # type: ignore[no-untyped-def]
     monkeypatch.setattr(release_gate, "_tools_root", lambda: root)
     monkeypatch.setattr(release_gate, "_run", lambda cmd, cwd, **kwargs: (True, "ok"))
-    monkeypatch.setattr(release_gate, "_run_public_command", lambda args, cwd: (True, "usage: rdx"))
+    monkeypatch.setattr(release_gate, "_run_public_command", lambda args, cwd: (True, "usage: rdc-tool"))
     monkeypatch.setattr(release_gate, "_run_windows_launcher_file", lambda args, cwd: (True, "ok"))
     monkeypatch.setattr(
         release_gate,
@@ -245,7 +245,7 @@ def test_release_gate_requires_release_package_when_flagged(monkeypatch, tmp_pat
 
 
 def test_source_only_gate_does_not_auto_select_existing_dist_package(tmp_path: Path) -> None:
-    stale_package = tmp_path / "dist" / "rdx-tools-0.1.0-windows-x64.zip"
+    stale_package = tmp_path / "dist" / "rdc-tool-0.1.0-windows-x64.zip"
     stale_package.parent.mkdir(parents=True)
     stale_package.write_bytes(b"stale")
 
@@ -256,7 +256,7 @@ def test_source_only_gate_does_not_auto_select_existing_dist_package(tmp_path: P
 
 
 def test_explicit_release_package_is_still_verified(tmp_path: Path) -> None:
-    package = tmp_path / "dist" / "rdx-tools-1.0.0-windows-x64.zip"
+    package = tmp_path / "dist" / "rdc-tool-1.0.0-windows-x64.zip"
     package.parent.mkdir(parents=True)
     package.write_bytes(b"zip")
 
@@ -273,10 +273,10 @@ def test_explicit_release_package_is_still_verified(tmp_path: Path) -> None:
 def test_release_gate_verifies_release_package_when_present(monkeypatch, tmp_path: Path) -> None:
     _prepare_root(tmp_path)
     _write_smoke_log(tmp_path)
-    package = tmp_path / "dist" / "rdx-tools-1.0.0-windows-x64.zip"
+    package = tmp_path / "dist" / "rdc-tool-1.0.0-windows-x64.zip"
     package.parent.mkdir(parents=True, exist_ok=True)
     package.write_bytes(b"zip")
-    (package.parent / "SHA256SUMS").write_text("abc  rdx-tools-1.0.0-windows-x64.zip\n", encoding="utf-8")
+    (package.parent / "SHA256SUMS").write_text("abc  rdc-tool-1.0.0-windows-x64.zip\n", encoding="utf-8")
 
     _mock_release_gate_basics(monkeypatch, tmp_path)
     monkeypatch.setattr(release_gate, "_rg_no_match", lambda pattern, cwd: (True, ""))
@@ -302,28 +302,28 @@ def test_release_gate_verifies_release_package_when_present(monkeypatch, tmp_pat
 
 
 def test_release_gate_rejects_stale_release_package_manifest(tmp_path: Path) -> None:
-    source = tmp_path / "bin" / "rdx.cmd"
+    source = tmp_path / "bin" / "rdc-tool.cmd"
     source.parent.mkdir(parents=True, exist_ok=True)
     source.write_text("new\n", encoding="utf-8")
-    package = tmp_path / "dist" / "rdx-tools-1.0.0-windows-x64.zip"
+    package = tmp_path / "dist" / "rdc-tool-1.0.0-windows-x64.zip"
     package.parent.mkdir(parents=True, exist_ok=True)
     stale_manifest = {
-        "name": "rdx-tools",
+        "name": "rdc-tool",
         "version": "1.0.0",
         "platform": "windows-x64",
-        "public_commands": ["rdx"],
-        "entrypoints": ["bin/rdx.cmd"],
+        "public_commands": ["rdc-tool"],
+        "entrypoints": ["bin/rdc-tool.cmd"],
         "file_count": 1,
         "files": [
             {
-                "path": "bin/rdx.cmd",
+                "path": "bin/rdc-tool.cmd",
                 "size": 4,
                 "sha256": "0" * 64,
             }
         ],
     }
     with zipfile.ZipFile(package, "w") as archive:
-        archive.writestr("rdx-tools/RELEASE_MANIFEST.json", json.dumps(stale_manifest))
+        archive.writestr("rdc-tool/RELEASE_MANIFEST.json", json.dumps(stale_manifest))
 
     ok, detail = release_gate._check_package_matches_source(tmp_path, package)
 
@@ -332,23 +332,23 @@ def test_release_gate_rejects_stale_release_package_manifest(tmp_path: Path) -> 
 
 
 def test_release_gate_accepts_zero_byte_files_in_release_manifest(tmp_path: Path) -> None:
-    source = tmp_path / "bin" / "rdx.cmd"
+    source = tmp_path / "bin" / "rdc-tool.cmd"
     source.parent.mkdir(parents=True, exist_ok=True)
     source.write_bytes(b"")
-    package = tmp_path / "dist" / "rdx-tools-1.0.0-windows-x64.zip"
+    package = tmp_path / "dist" / "rdc-tool-1.0.0-windows-x64.zip"
     package.parent.mkdir(parents=True, exist_ok=True)
     source_sha = release_gate._sha256(source)
     manifest = {
-        "name": "rdx-tools",
+        "name": "rdc-tool",
         "version": "1.0.0",
         "platform": "windows-x64",
-        "public_commands": ["rdx"],
-        "entrypoints": ["bin/rdx.cmd"],
+        "public_commands": ["rdc-tool"],
+        "entrypoints": ["bin/rdc-tool.cmd"],
         "file_count": 1,
-        "files": [{"path": "bin/rdx.cmd", "size": 0, "sha256": source_sha}],
+        "files": [{"path": "bin/rdc-tool.cmd", "size": 0, "sha256": source_sha}],
     }
     with zipfile.ZipFile(package, "w") as archive:
-        archive.writestr("rdx-tools/RELEASE_MANIFEST.json", json.dumps(manifest))
+        archive.writestr("rdc-tool/RELEASE_MANIFEST.json", json.dumps(manifest))
 
     ok, detail = release_gate._check_package_matches_source(tmp_path, package)
 

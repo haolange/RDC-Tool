@@ -6,12 +6,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from rdx import server
-from rdx.core.errors import map_exception
-from rdx.core.session_manager import SessionError
-from rdx.context_snapshot import clear_context_snapshot
-from rdx.models import PatchResult
-from rdx.runtime_state import clear_context_state, save_context_state
+from rdc_tool import server
+from rdc_tool.core.errors import map_exception
+from rdc_tool.core.session_manager import SessionError
+from rdc_tool.context_snapshot import clear_context_snapshot
+from rdc_tool.models import PatchResult
+from rdc_tool.runtime_state import clear_context_state, save_context_state
 
 
 class _FakeRecoveryController:
@@ -240,7 +240,7 @@ def test_tool_discovery_default_priority_and_navigation_projection_hints() -> No
     assert listed["ok"] is True
     tools = listed["data"]["tools"]
     ordered_names = [tool["name"] for tool in tools]
-    from rdx.operation_definitions import OPERATIONS
+    from rdc_tool.operation_definitions import OPERATIONS
     assert len(ordered_names) == len(set(ordered_names)) == len(OPERATIONS)
     assert set(ordered_names) == {item["name"] for item in OPERATIONS}
     assert "rd.macro.find_state_change_point" in ordered_names

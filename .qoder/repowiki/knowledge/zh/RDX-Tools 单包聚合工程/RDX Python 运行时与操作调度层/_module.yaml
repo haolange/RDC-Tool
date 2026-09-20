@@ -1,8 +1,8 @@
 schema_version: 1
-module_path: rdx_runtime
-title: RDX Python 运行时与操作调度层
+module_path: rdc_tool
+title: RDC Python 运行时与操作调度层
 scope:
-    - rdx/
+    - rdc_tool/
 source_files: []
 depends_on: []
 related_to:

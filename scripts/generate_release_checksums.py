@@ -12,7 +12,7 @@ SCRIPT_ROOT = Path(__file__).resolve().parents[1]
 if str(SCRIPT_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPT_ROOT))
 
-from rdx.runtime_paths import logs_dir
+from rdc_tool.runtime_paths import logs_dir
 
 
 def _sha256(path: Path) -> str:

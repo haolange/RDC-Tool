@@ -1,6 +1,6 @@
 schema_version: 1
 module_path: scripts_and_packaging
-title: rdx-tools 发布与冒烟测试脚本集
+title: rdc-tools 发布与冒烟测试脚本集
 scope:
     - scripts/
 source_files: []

@@ -23,14 +23,14 @@ def test_package_release_builds_self_contained_zip(tmp_path: Path, monkeypatch) 
         "THIRD_PARTY_NOTICES.md",
         "README.md",
         "pyproject.toml",
-        "bin/rdx.cmd",
+        "bin/rdc-tool.cmd",
         "install.cmd",
-        "bin/rdx",
+        "bin/rdc-tool",
         "cli/run_cli.py",
         "docs/quickstart.md",
         "policy/README.md",
-        "rdx/__init__.py",
-        "scripts/rdx_install.ps1",
+        "rdc_tool/__init__.py",
+        "scripts/rdc_tool_install.ps1",
         "scripts/smoke_cli.sh",
         "scripts/verify_release_package.py",
         "spec/tool_catalog.json",
@@ -46,31 +46,31 @@ def test_package_release_builds_self_contained_zip(tmp_path: Path, monkeypatch) 
     rc = package_release.main(["--out-dir", "dist"])
 
     assert rc == 0
-    package = next((root / "dist").glob("rdx-tools-*-windows-x64.zip"))
+    package = next((root / "dist").glob("rdc-tool-*-windows-x64.zip"))
     assert (root / "dist" / "SHA256SUMS").is_file()
     with zipfile.ZipFile(package) as zf:
         names = set(zf.namelist())
-        assert "rdx-tools/RELEASE_MANIFEST.json" in names
-        assert "rdx-tools/SBOM.json" in names
-        assert "rdx-tools/LICENSE_INVENTORY.json" in names
-        assert "rdx-tools/pyproject.toml" in names
-        assert "rdx-tools/scripts/rdx_install.ps1" in names
-        assert "rdx-tools/THIRD_PARTY_NOTICES.md" in names
-        assert "rdx-tools/uv.lock" not in names
-        assert not any(name.startswith("rdx-tools/tests/") for name in names)
+        assert "rdc-tool/RELEASE_MANIFEST.json" in names
+        assert "rdc-tool/SBOM.json" in names
+        assert "rdc-tool/LICENSE_INVENTORY.json" in names
+        assert "rdc-tool/pyproject.toml" in names
+        assert "rdc-tool/scripts/rdc_tool_install.ps1" in names
+        assert "rdc-tool/THIRD_PARTY_NOTICES.md" in names
+        assert "rdc-tool/uv.lock" not in names
+        assert not any(name.startswith("rdc-tool/tests/") for name in names)
         assert not any(name.lower().endswith(".rdc") for name in names)
-        assert "rdx-tools/intermediate/logs/secret.log" not in names
-        manifest = json.loads(zf.read("rdx-tools/RELEASE_MANIFEST.json").decode("utf-8"))
-        license_inventory = json.loads(zf.read("rdx-tools/LICENSE_INVENTORY.json").decode("utf-8"))
-        sbom = json.loads(zf.read("rdx-tools/SBOM.json").decode("utf-8"))
-    project_license = next(row for row in license_inventory if row["name"] == "rdx-tools")
-    project_component = next(row for row in sbom["components"] if row["name"] == "rdx-tools")
+        assert "rdc-tool/intermediate/logs/secret.log" not in names
+        manifest = json.loads(zf.read("rdc-tool/RELEASE_MANIFEST.json").decode("utf-8"))
+        license_inventory = json.loads(zf.read("rdc-tool/LICENSE_INVENTORY.json").decode("utf-8"))
+        sbom = json.loads(zf.read("rdc-tool/SBOM.json").decode("utf-8"))
+    project_license = next(row for row in license_inventory if row["name"] == "rdc-tool")
+    project_component = next(row for row in sbom["components"] if row["name"] == "rdc-tool")
     assert project_license["license"] == "Apache-2.0"
     assert project_license["path"] == "LICENSE"
     assert project_component["license"] == "Apache-2.0"
     assert manifest["platform"] == "windows-x64"
-    assert manifest["public_commands"] == ["rdx"]
-    assert sorted(manifest["entrypoints"]) == ["bin/rdx", "bin/rdx.cmd", "cli/run_cli.py", "install.cmd"]
+    assert manifest["public_commands"] == ["rdc-tool"]
+    assert sorted(manifest["entrypoints"]) == ["bin/rdc-tool", "bin/rdc-tool.cmd", "cli/run_cli.py", "install.cmd"]
     manifest_paths = {entry["path"] for entry in manifest["files"]}
     assert "pyproject.toml" in manifest_paths
     assert "uv.lock" not in manifest_paths
@@ -79,18 +79,18 @@ def test_package_release_builds_self_contained_zip(tmp_path: Path, monkeypatch) 
 
 
 def test_verify_release_package_accepts_manifest_public_command_split(tmp_path: Path) -> None:
-    root = tmp_path / "rdx-tools"
-    for rel in ("bin/rdx.cmd", "bin/rdx", "cli/run_cli.py", "install.cmd"):
+    root = tmp_path / "rdc-tool"
+    for rel in ("bin/rdc-tool.cmd", "bin/rdc-tool", "cli/run_cli.py", "install.cmd"):
         _write(root / rel)
     manifest = {
-        "name": "rdx-tools",
+        "name": "rdc-tool",
         "version": "1.0.0",
         "platform": "windows-x64",
-        "public_commands": ["rdx"],
-        "entrypoints": ["bin/rdx.cmd", "bin/rdx", "cli/run_cli.py", "install.cmd"],
+        "public_commands": ["rdc-tool"],
+        "entrypoints": ["bin/rdc-tool.cmd", "bin/rdc-tool", "cli/run_cli.py", "install.cmd"],
         "files": [
-            {"path": "bin/rdx.cmd", "size": 3, "sha256": "0" * 64},
-            {"path": "bin/rdx", "size": 3, "sha256": "0" * 64},
+            {"path": "bin/rdc-tool.cmd", "size": 3, "sha256": "0" * 64},
+            {"path": "bin/rdc-tool", "size": 3, "sha256": "0" * 64},
             {"path": "cli/run_cli.py", "size": 3, "sha256": "0" * 64},
             {"path": "install.cmd", "size": 3, "sha256": "0" * 64},
         ],
@@ -101,17 +101,17 @@ def test_verify_release_package_accepts_manifest_public_command_split(tmp_path: 
 
 
 def test_verify_release_package_rejects_manifest_without_public_command(tmp_path: Path) -> None:
-    root = tmp_path / "rdx-tools"
-    for rel in ("bin/rdx.cmd", "bin/rdx", "cli/run_cli.py", "install.cmd"):
+    root = tmp_path / "rdc-tool"
+    for rel in ("bin/rdc-tool.cmd", "bin/rdc-tool", "cli/run_cli.py", "install.cmd"):
         _write(root / rel)
     manifest = {
-        "name": "rdx-tools",
+        "name": "rdc-tool",
         "version": "1.0.0",
         "platform": "windows-x64",
-        "entrypoints": ["bin/rdx.cmd", "bin/rdx", "cli/run_cli.py", "install.cmd"],
+        "entrypoints": ["bin/rdc-tool.cmd", "bin/rdc-tool", "cli/run_cli.py", "install.cmd"],
         "files": [
-            {"path": "bin/rdx.cmd", "size": 3, "sha256": "0" * 64},
-            {"path": "bin/rdx", "size": 3, "sha256": "0" * 64},
+            {"path": "bin/rdc-tool.cmd", "size": 3, "sha256": "0" * 64},
+            {"path": "bin/rdc-tool", "size": 3, "sha256": "0" * 64},
             {"path": "cli/run_cli.py", "size": 3, "sha256": "0" * 64},
             {"path": "install.cmd", "size": 3, "sha256": "0" * 64},
         ],
@@ -123,8 +123,8 @@ def test_verify_release_package_rejects_manifest_without_public_command(tmp_path
 
 
 def test_verify_release_package_rejects_pre_ga_payload_path(tmp_path: Path) -> None:
-    package = tmp_path / "rdx-tools-1.0.0-windows-x64.zip"
-    pre_ga_path = "rdx-tools/rdx/" + "runtime_" + "materializer.py"
+    package = tmp_path / "rdc-tool-1.0.0-windows-x64.zip"
+    pre_ga_path = "rdc-tool/rdc_tool/" + "runtime_" + "materializer.py"
     with zipfile.ZipFile(package, "w") as archive:
         archive.writestr(pre_ga_path, "pre-ga\n")
 
@@ -133,28 +133,28 @@ def test_verify_release_package_rejects_pre_ga_payload_path(tmp_path: Path) -> N
 
 
 def test_verify_release_package_rejects_pre_ga_payload_marker(tmp_path: Path) -> None:
-    package = tmp_path / "rdx-tools-1.0.0-windows-x64.zip"
+    package = tmp_path / "rdc-tool-1.0.0-windows-x64.zip"
     pre_ga_marker = "worker_" + "materialize"
     with zipfile.ZipFile(package, "w") as archive:
-        archive.writestr("rdx-tools/binaries/windows/x64/manifest.runtime.json", '{"flag":"' + pre_ga_marker + '"}')
+        archive.writestr("rdc-tool/binaries/windows/x64/manifest.runtime.json", '{"flag":"' + pre_ga_marker + '"}')
 
     with pytest.raises(RuntimeError, match="pre-GA marker"):
         verify_release_package._verify_no_pre_ga_payload(package)
 
 
 def test_verify_release_package_rejects_manifest_with_rdc_fixture(tmp_path: Path) -> None:
-    root = tmp_path / "rdx-tools"
-    for rel in ("bin/rdx.cmd", "bin/rdx", "cli/run_cli.py", "install.cmd", "tests/fixtures/sample.rdc"):
+    root = tmp_path / "rdc-tool"
+    for rel in ("bin/rdc-tool.cmd", "bin/rdc-tool", "cli/run_cli.py", "install.cmd", "tests/fixtures/sample.rdc"):
         _write(root / rel)
     manifest = {
-        "name": "rdx-tools",
+        "name": "rdc-tool",
         "version": "1.0.0",
         "platform": "windows-x64",
-        "public_commands": ["rdx"],
-        "entrypoints": ["bin/rdx.cmd", "bin/rdx", "cli/run_cli.py", "install.cmd"],
+        "public_commands": ["rdc-tool"],
+        "entrypoints": ["bin/rdc-tool.cmd", "bin/rdc-tool", "cli/run_cli.py", "install.cmd"],
         "files": [
-            {"path": "bin/rdx.cmd", "size": 3, "sha256": "0" * 64},
-            {"path": "bin/rdx", "size": 3, "sha256": "0" * 64},
+            {"path": "bin/rdc-tool.cmd", "size": 3, "sha256": "0" * 64},
+            {"path": "bin/rdc-tool", "size": 3, "sha256": "0" * 64},
             {"path": "cli/run_cli.py", "size": 3, "sha256": "0" * 64},
             {"path": "install.cmd", "size": 3, "sha256": "0" * 64},
             {"path": "tests/fixtures/sample.rdc", "size": 3, "sha256": "0" * 64},
@@ -167,12 +167,12 @@ def test_verify_release_package_rejects_manifest_with_rdc_fixture(tmp_path: Path
 
 
 def test_verify_release_package_checks_license_inventory_and_sbom(tmp_path: Path) -> None:
-    root = tmp_path / "rdx-tools"
-    _write(root / "LICENSE_INVENTORY.json", json.dumps([{"name": "rdx-tools", "version": "1.0.0", "license": "Apache-2.0", "path": "LICENSE"}]))
-    _write(root / "SBOM.json", json.dumps({"components": [{"name": "rdx-tools", "version": "1.0.0", "license": "Apache-2.0", "path": "LICENSE"}]}))
+    root = tmp_path / "rdc-tool"
+    _write(root / "LICENSE_INVENTORY.json", json.dumps([{"name": "rdc-tool", "version": "1.0.0", "license": "Apache-2.0", "path": "LICENSE"}]))
+    _write(root / "SBOM.json", json.dumps({"components": [{"name": "rdc-tool", "version": "1.0.0", "license": "Apache-2.0", "path": "LICENSE"}]}))
 
     verify_release_package._verify_license_inventory(root)
 
-    _write(root / "LICENSE_INVENTORY.json", json.dumps([{"name": "rdx-tools", "version": "1.0.0", "license": "MIT", "path": "LICENSE"}]))
+    _write(root / "LICENSE_INVENTORY.json", json.dumps([{"name": "rdc-tool", "version": "1.0.0", "license": "MIT", "path": "LICENSE"}]))
     with pytest.raises(RuntimeError, match="license inventory mismatch"):
         verify_release_package._verify_license_inventory(root)

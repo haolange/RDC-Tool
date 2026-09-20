@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from rdx import server
+from rdc_tool import server
 
 
 class _FakeTrace:

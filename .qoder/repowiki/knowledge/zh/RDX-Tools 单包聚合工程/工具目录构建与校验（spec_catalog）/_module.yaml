@@ -7,4 +7,4 @@ source_files: []
 depends_on: []
 related_to:
     - path: docs
-    - path: rdx_runtime
+    - path: rdc_tool

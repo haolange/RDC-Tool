@@ -1,6 +1,6 @@
 ﻿from __future__ import annotations
 
-from rdx.runtime_requirements import REQUIRED_DEPENDENCIES, should_bundle_site_package
+from rdc_tool.runtime_requirements import REQUIRED_DEPENDENCIES, should_bundle_site_package
 
 
 def test_required_dependencies_no_longer_include_pyarrow() -> None:

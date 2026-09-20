@@ -2,13 +2,13 @@
 
 <cite>
 **本文引用的文件**
-- [rdx/handlers/shader.py](file://rdx/handlers/shader.py)
-- [rdx/handlers/debug.py](file://rdx/handlers/debug.py)
-- [rdx/server_runtime.py](file://rdx/server_runtime.py)
-- [rdx/core/debug_service.py](file://rdx/core/debug_service.py)
-- [rdx/core/patch_engine.py](file://rdx/core/patch_engine.py)
+- [rdc_tool/handlers/shader.py](file://rdc_tool/handlers/shader.py)
+- [rdc_tool/handlers/debug.py](file://rdc_tool/handlers/debug.py)
+- [rdc_tool/server_runtime.py](file://rdc_tool/server_runtime.py)
+- [rdc_tool/core/debug_service.py](file://rdc_tool/core/debug_service.py)
+- [rdc_tool/core/patch_engine.py](file://rdc_tool/core/patch_engine.py)
 - [tests/test_shader_replace_contracts.py](file://tests/test_shader_replace_contracts.py)
-- [docs/rdx-native-agent-playbook.md](file://docs/rdx-native-agent-playbook.md)
+- [docs/rdc-native-agent-playbook.md](file://docs/rdc-native-agent-playbook.md)
 </cite>
 
 ## 目录
@@ -52,18 +52,18 @@ F --> H
 ```
 
 图表来源
-- [rdx/handlers/shader.py:8-9](file://rdx/handlers/shader.py#L8-L9)
-- [rdx/handlers/debug.py:8-9](file://rdx/handlers/debug.py#L8-L9)
-- [rdx/server_runtime.py:9518-10897](file://rdx/server_runtime.py#L9518-L10897)
-- [rdx/server_runtime.py:10900-11037](file://rdx/server_runtime.py#L10900-L11037)
-- [rdx/core/debug_service.py:43-267](file://rdx/core/debug_service.py#L43-L267)
-- [rdx/core/patch_engine.py:175-300](file://rdx/core/patch_engine.py#L175-L300)
+- [rdc_tool/handlers/shader.py:8-9](file://rdc_tool/handlers/shader.py#L8-L9)
+- [rdc_tool/handlers/debug.py:8-9](file://rdc_tool/handlers/debug.py#L8-L9)
+- [rdc_tool/server_runtime.py:9518-10897](file://rdc_tool/server_runtime.py#L9518-L10897)
+- [rdc_tool/server_runtime.py:10900-11037](file://rdc_tool/server_runtime.py#L10900-L11037)
+- [rdc_tool/core/debug_service.py:43-267](file://rdc_tool/core/debug_service.py#L43-L267)
+- [rdc_tool/core/patch_engine.py:175-300](file://rdc_tool/core/patch_engine.py#L175-L300)
 
 章节来源
-- [rdx/handlers/shader.py:1-11](file://rdx/handlers/shader.py#L1-L11)
-- [rdx/handlers/debug.py:1-11](file://rdx/handlers/debug.py#L1-L11)
-- [rdx/server_runtime.py:9518-10897](file://rdx/server_runtime.py#L9518-L10897)
-- [rdx/server_runtime.py:10900-11037](file://rdx/server_runtime.py#L10900-L11037)
+- [rdc_tool/handlers/shader.py:1-11](file://rdc_tool/handlers/shader.py#L1-L11)
+- [rdc_tool/handlers/debug.py:1-11](file://rdc_tool/handlers/debug.py#L1-L11)
+- [rdc_tool/server_runtime.py:9518-10897](file://rdc_tool/server_runtime.py#L9518-L10897)
+- [rdc_tool/server_runtime.py:10900-11037](file://rdc_tool/server_runtime.py#L10900-L11037)
 
 ## 核心组件
 - 调试处理器路由
@@ -77,10 +77,10 @@ F --> H
   - server_runtime：会话与控制器管理、目标纹理配置、像素历史聚合、断点与步进循环、变量与调用栈读取、资源释放。
 
 章节来源
-- [rdx/server_runtime.py:9518-10897](file://rdx/server_runtime.py#L9518-L10897)
-- [rdx/server_runtime.py:10900-11037](file://rdx/server_runtime.py#L10900-L11037)
-- [rdx/core/debug_service.py:43-267](file://rdx/core/debug_service.py#L43-L267)
-- [rdx/core/patch_engine.py:175-300](file://rdx/core/patch_engine.py#L175-L300)
+- [rdc_tool/server_runtime.py:9518-10897](file://rdc_tool/server_runtime.py#L9518-L10897)
+- [rdc_tool/server_runtime.py:10900-11037](file://rdc_tool/server_runtime.py#L10900-L11037)
+- [rdc_tool/core/debug_service.py:43-267](file://rdc_tool/core/debug_service.py#L43-L267)
+- [rdc_tool/core/patch_engine.py:175-300](file://rdc_tool/core/patch_engine.py#L175-L300)
 
 ## 架构总览
 下图展示从用户发起调试到渲染驱动执行的端到端流程，包括断点设置、步进、变量读取与调用栈获取。
@@ -107,12 +107,12 @@ SR-->>U : "返回步骤状态/变量/调用栈"
 ```
 
 图表来源
-- [rdx/handlers/shader.py:8-9](file://rdx/handlers/shader.py#L8-L9)
-- [rdx/handlers/debug.py:8-9](file://rdx/handlers/debug.py#L8-L9)
-- [rdx/server_runtime.py:9518-10897](file://rdx/server_runtime.py#L9518-L10897)
-- [rdx/server_runtime.py:10900-11037](file://rdx/server_runtime.py#L10900-L11037)
-- [rdx/core/debug_service.py:122-267](file://rdx/core/debug_service.py#L122-L267)
-- [rdx/core/patch_engine.py:196-300](file://rdx/core/patch_engine.py#L196-L300)
+- [rdc_tool/handlers/shader.py:8-9](file://rdc_tool/handlers/shader.py#L8-L9)
+- [rdc_tool/handlers/debug.py:8-9](file://rdc_tool/handlers/debug.py#L8-L9)
+- [rdc_tool/server_runtime.py:9518-10897](file://rdc_tool/server_runtime.py#L9518-L10897)
+- [rdc_tool/server_runtime.py:10900-11037](file://rdc_tool/server_runtime.py#L10900-L11037)
+- [rdc_tool/core/debug_service.py:122-267](file://rdc_tool/core/debug_service.py#L122-L267)
+- [rdc_tool/core/patch_engine.py:196-300](file://rdc_tool/core/patch_engine.py#L196-L300)
 
 ## 详细组件分析
 
@@ -141,12 +141,12 @@ Timeout --> End
 ```
 
 图表来源
-- [rdx/server_runtime.py:10915-10975](file://rdx/server_runtime.py#L10915-L10975)
-- [rdx/server_runtime.py:10976-10982](file://rdx/server_runtime.py#L10976-L10982)
-- [rdx/server_runtime.py:11028-11035](file://rdx/server_runtime.py#L11028-L11035)
+- [rdc_tool/server_runtime.py:10915-10975](file://rdc_tool/server_runtime.py#L10915-L10975)
+- [rdc_tool/server_runtime.py:10976-10982](file://rdc_tool/server_runtime.py#L10976-L10982)
+- [rdc_tool/server_runtime.py:11028-11035](file://rdc_tool/server_runtime.py#L11028-L11035)
 
 章节来源
-- [rdx/server_runtime.py:10900-11037](file://rdx/server_runtime.py#L10900-L11037)
+- [rdc_tool/server_runtime.py:10900-11037](file://rdc_tool/server_runtime.py#L10900-L11037)
 
 ### 变量检查功能
 - 变量提取
@@ -173,12 +173,12 @@ DebugService <.. ServerRuntime : "被调用以采集trace"
 ```
 
 图表来源
-- [rdx/core/debug_service.py:493-562](file://rdx/core/debug_service.py#L493-L562)
-- [rdx/server_runtime.py:10983-10995](file://rdx/server_runtime.py#L10983-L10995)
+- [rdc_tool/core/debug_service.py:493-562](file://rdc_tool/core/debug_service.py#L493-L562)
+- [rdc_tool/server_runtime.py:10983-10995](file://rdc_tool/server_runtime.py#L10983-L10995)
 
 章节来源
-- [rdx/core/debug_service.py:493-562](file://rdx/core/debug_service.py#L493-L562)
-- [rdx/server_runtime.py:10983-10995](file://rdx/server_runtime.py#L10983-L10995)
+- [rdc_tool/core/debug_service.py:493-562](file://rdc_tool/core/debug_service.py#L493-L562)
+- [rdc_tool/server_runtime.py:10983-10995](file://rdc_tool/server_runtime.py#L10983-L10995)
 
 ### 调用栈分析能力
 - 调用栈读取
@@ -200,10 +200,10 @@ SR-->>U : "callstack"
 ```
 
 图表来源
-- [rdx/server_runtime.py:11013-11027](file://rdx/server_runtime.py#L11013-L11027)
+- [rdc_tool/server_runtime.py:11013-11027](file://rdc_tool/server_runtime.py#L11013-L11027)
 
 章节来源
-- [rdx/server_runtime.py:11013-11027](file://rdx/server_runtime.py#L11013-L11027)
+- [rdc_tool/server_runtime.py:11013-11027](file://rdc_tool/server_runtime.py#L11013-L11027)
 
 ### SPIR-V工具链集成与调试信息解析
 - 反汇编与编辑计划
@@ -232,13 +232,13 @@ F --> |否| L["仅返回disassembly与edit_plan"]
 ```
 
 图表来源
-- [rdx/server_runtime.py:10850-10897](file://rdx/server_runtime.py#L10850-L10897)
-- [rdx/core/patch_engine.py:196-300](file://rdx/core/patch_engine.py#L196-L300)
+- [rdc_tool/server_runtime.py:10850-10897](file://rdc_tool/server_runtime.py#L10850-L10897)
+- [rdc_tool/core/patch_engine.py:196-300](file://rdc_tool/core/patch_engine.py#L196-L300)
 - [tests/test_shader_replace_contracts.py:1551-1582](file://tests/test_shader_replace_contracts.py#L1551-L1582)
 
 章节来源
-- [rdx/server_runtime.py:10850-10897](file://rdx/server_runtime.py#L10850-L10897)
-- [rdx/core/patch_engine.py:196-300](file://rdx/core/patch_engine.py#L196-L300)
+- [rdc_tool/server_runtime.py:10850-10897](file://rdc_tool/server_runtime.py#L10850-L10897)
+- [rdc_tool/core/patch_engine.py:196-300](file://rdc_tool/core/patch_engine.py#L196-L300)
 - [tests/test_shader_replace_contracts.py:1551-1582](file://tests/test_shader_replace_contracts.py#L1551-L1582)
 
 ### 着色器级别调试与优化实践示例
@@ -252,7 +252,7 @@ F --> |否| L["仅返回disassembly与edit_plan"]
   - 像素值与历史查询、着色器源码/反汇编/常量查看、截图导出等，详见使用手册。
 
 章节来源
-- [docs/rdx-native-agent-playbook.md:98-115](file://docs/rdx-native-agent-playbook.md#L98-L115)
+- [docs/rdc-native-agent-playbook.md:98-115](file://docs/rdc-native-agent-playbook.md#L98-L115)
 - [tests/test_shader_replace_contracts.py:276-304](file://tests/test_shader_replace_contracts.py#L276-L304)
 - [tests/test_shader_replace_contracts.py:571-628](file://tests/test_shader_replace_contracts.py#L571-L628)
 
@@ -277,16 +277,16 @@ P --> RD
 ```
 
 图表来源
-- [rdx/handlers/shader.py:8-9](file://rdx/handlers/shader.py#L8-L9)
-- [rdx/handlers/debug.py:8-9](file://rdx/handlers/debug.py#L8-L9)
-- [rdx/server_runtime.py:9518-10897](file://rdx/server_runtime.py#L9518-L10897)
-- [rdx/server_runtime.py:10900-11037](file://rdx/server_runtime.py#L10900-L11037)
-- [rdx/core/debug_service.py:573-595](file://rdx/core/debug_service.py#L573-L595)
-- [rdx/core/patch_engine.py:50-60](file://rdx/core/patch_engine.py#L50-L60)
+- [rdc_tool/handlers/shader.py:8-9](file://rdc_tool/handlers/shader.py#L8-L9)
+- [rdc_tool/handlers/debug.py:8-9](file://rdc_tool/handlers/debug.py#L8-L9)
+- [rdc_tool/server_runtime.py:9518-10897](file://rdc_tool/server_runtime.py#L9518-L10897)
+- [rdc_tool/server_runtime.py:10900-11037](file://rdc_tool/server_runtime.py#L10900-L11037)
+- [rdc_tool/core/debug_service.py:573-595](file://rdc_tool/core/debug_service.py#L573-L595)
+- [rdc_tool/core/patch_engine.py:50-60](file://rdc_tool/core/patch_engine.py#L50-L60)
 
 章节来源
-- [rdx/core/debug_service.py:573-595](file://rdx/core/debug_service.py#L573-L595)
-- [rdx/core/patch_engine.py:50-60](file://rdx/core/patch_engine.py#L50-L60)
+- [rdc_tool/core/debug_service.py:573-595](file://rdc_tool/core/debug_service.py#L573-L595)
+- [rdc_tool/core/patch_engine.py:50-60](file://rdc_tool/core/patch_engine.py#L50-L60)
 
 ## 性能考虑
 - 步进与超时
@@ -316,7 +316,7 @@ P --> RD
 章节来源
 - [tests/test_shader_replace_contracts.py:1420-1464](file://tests/test_shader_replace_contracts.py#L1420-L1464)
 - [tests/test_shader_replace_contracts.py:1551-1582](file://tests/test_shader_replace_contracts.py#L1551-L1582)
-- [rdx/core/debug_service.py:212-252](file://rdx/core/debug_service.py#L212-L252)
+- [rdc_tool/core/debug_service.py:212-252](file://rdc_tool/core/debug_service.py#L212-L252)
 
 ## 结论
 该着色器调试处理器以 RenderDoc 为核心，提供了完整的断点管理、变量检查、调用栈分析与源级修改能力。通过 SPIR-V 工具链集成与结构化错误反馈，开发者可以在回放环境中高效定位着色器问题并进行针对性优化。建议在复杂场景中结合像素历史、断点与变量快照，形成“观察—假设—验证—修复”的闭环流程。

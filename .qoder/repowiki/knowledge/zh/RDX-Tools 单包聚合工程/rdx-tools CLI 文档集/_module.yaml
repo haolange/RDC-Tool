@@ -1,6 +1,6 @@
 schema_version: 1
 module_path: docs
-title: rdx-tools CLI 文档集
+title: rdc-tools CLI 文档集
 scope:
     - docs/
 source_files: []

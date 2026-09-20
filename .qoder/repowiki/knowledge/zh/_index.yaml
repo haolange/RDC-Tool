@@ -6,8 +6,8 @@ nodes_managed: true
 exported_at: "2026-09-19T14:48:53Z"
 modules:
     "":
-        dir_name: RDX-Tools 单包聚合工程
-        title: RDX-Tools 单包聚合工程
+        dir_name: RDC-Tool 单包聚合工程
+        title: RDC-Tool 单包聚合工程
         scope:
             - README.md
             - THIRD_PARTY_NOTICES.md
@@ -15,22 +15,22 @@ modules:
             - pyproject.toml
             - .gitignore
             - .gitattributes
-            - rdx.bat
+            - bin/rdc-tool.cmd
             - CHANGELOG.md
             - LICENSE
         source_files: []
         children:
             - docs
             - platform_binaries
-            - rdx_runtime
+            - rdc_tool
             - scripts_and_packaging
             - spec_catalog
             - tests
         depends_on: []
         related_to: []
     docs:
-        dir_name: rdx-tools CLI 文档集
-        title: rdx-tools CLI 文档集
+        dir_name: rdc-tools CLI 文档集
+        title: rdc-tools CLI 文档集
         scope:
             - docs/
         source_files: []
@@ -49,11 +49,11 @@ modules:
         depends_on: []
         related_to:
             - path: scripts_and_packaging
-    rdx_runtime:
-        dir_name: RDX Python 运行时与操作调度层
-        title: RDX Python 运行时与操作调度层
+    rdc_tool:
+        dir_name: RDC Python 运行时与操作调度层
+        title: RDC Python 运行时与操作调度层
         scope:
-            - rdx/
+            - rdc_tool/
         source_files: []
         children: []
         depends_on: []
@@ -61,8 +61,8 @@ modules:
             - path: spec_catalog
             - path: tests
     scripts_and_packaging:
-        dir_name: rdx-tools 发布与冒烟测试脚本集
-        title: rdx-tools 发布与冒烟测试脚本集
+        dir_name: rdc-tools 发布与冒烟测试脚本集
+        title: rdc-tools 发布与冒烟测试脚本集
         scope:
             - scripts/
         source_files: []
@@ -81,14 +81,14 @@ modules:
         depends_on: []
         related_to:
             - path: docs
-            - path: rdx_runtime
+            - path: rdc_tool
     tests:
-        dir_name: RDX CLI_运行时_重放_预览集成测试套件
-        title: RDX CLI/运行时/重放/预览集成测试套件
+        dir_name: rdc-tool CLI_运行时_重放_预览集成测试套件
+        title: rdc-tool CLI/运行时/重放/预览集成测试套件
         scope:
             - tests/
         source_files: []
         children: []
         depends_on: []
         related_to:
-            - path: rdx_runtime
+            - path: rdc_tool

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Safe cleanup helper for rdx-tools temporary files."""
+"""Safe cleanup helper for rdc-tool temporary files."""
 
 from __future__ import annotations
 
@@ -14,8 +14,8 @@ if str(SCRIPT_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPT_ROOT))
 
 from scripts._shared import tools_root
-from rdx.daemon.client import _is_process_running
-from rdx.runtime_paths import worker_state_dir
+from rdc_tool.daemon.client import _is_process_running
+from rdc_tool.runtime_paths import worker_state_dir
 
 
 TARGET_NAMES = {".venv", ".pytest_cache", "__pycache__"}
@@ -73,7 +73,7 @@ def _collect_worker_targets(root: Path) -> list[Path]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Clean temporary files inside rdx-tools")
+    parser = argparse.ArgumentParser(description="Clean temporary files inside rdc-tool")
     parser.add_argument("--apply", action="store_true", help="Delete after printing candidate list")
     args = parser.parse_args(argv)
 

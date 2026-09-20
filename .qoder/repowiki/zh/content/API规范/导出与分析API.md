@@ -2,17 +2,17 @@
 
 <cite>
 **本文引用的文件**
-- [rdx/handlers/export.py](file://rdx/handlers/export.py)
-- [rdx/handlers/texture.py](file://rdx/handlers/texture.py)
-- [rdx/handlers/mesh.py](file://rdx/handlers/mesh.py)
-- [rdx/handlers/perf.py](file://rdx/handlers/perf.py)
-- [rdx/core/render_service.py](file://rdx/core/render_service.py)
-- [rdx/core/perf_service.py](file://rdx/core/perf_service.py)
-- [rdx/utils/image_utils.py](file://rdx/utils/image_utils.py)
-- [rdx/models.py](file://rdx/models.py)
-- [rdx/server_runtime.py](file://rdx/server_runtime.py)
-- [rdx/cli.py](file://rdx/cli.py)
-- [rdx/operation_definitions.py](file://rdx/operation_definitions.py)
+- [rdc_tool/handlers/export.py](file://rdc_tool/handlers/export.py)
+- [rdc_tool/handlers/texture.py](file://rdc_tool/handlers/texture.py)
+- [rdc_tool/handlers/mesh.py](file://rdc_tool/handlers/mesh.py)
+- [rdc_tool/handlers/perf.py](file://rdc_tool/handlers/perf.py)
+- [rdc_tool/core/render_service.py](file://rdc_tool/core/render_service.py)
+- [rdc_tool/core/perf_service.py](file://rdc_tool/core/perf_service.py)
+- [rdc_tool/utils/image_utils.py](file://rdc_tool/utils/image_utils.py)
+- [rdc_tool/models.py](file://rdc_tool/models.py)
+- [rdc_tool/server_runtime.py](file://rdc_tool/server_runtime.py)
+- [rdc_tool/cli.py](file://rdc_tool/cli.py)
+- [rdc_tool/operation_definitions.py](file://rdc_tool/operation_definitions.py)
 </cite>
 
 ## 目录
@@ -45,7 +45,7 @@
 
 ```mermaid
 graph TB
-CLI["命令行接口<br/>rdx/cli.py"] --> Handlers["处理器层<br/>export/texture/mesh/perf"]
+CLI["命令行接口<br/>rdc_tool/cli.py"] --> Handlers["处理器层<br/>export/texture/mesh/perf"]
 Handlers --> Runtime["运行时调度<br/>server_runtime.py"]
 Runtime --> RenderSvc["渲染服务<br/>render_service.py"]
 Runtime --> PerfSvc["性能服务<br/>perf_service.py"]
@@ -55,24 +55,24 @@ PerfSvc --> Models
 ```
 
 **图表来源**
-- [rdx/cli.py:1538-1555](file://rdx/cli.py#L1538-L1555)
-- [rdx/handlers/export.py:8-9](file://rdx/handlers/export.py#L8-L9)
-- [rdx/handlers/texture.py:8-9](file://rdx/handlers/texture.py#L8-L9)
-- [rdx/handlers/mesh.py:8-9](file://rdx/handlers/mesh.py#L8-L9)
-- [rdx/handlers/perf.py:8-9](file://rdx/handlers/perf.py#L8-L9)
-- [rdx/server_runtime.py:230-238](file://rdx/server_runtime.py#L230-L238)
-- [rdx/core/render_service.py:346-521](file://rdx/core/render_service.py#L346-L521)
-- [rdx/core/perf_service.py:212-487](file://rdx/core/perf_service.py#L212-L487)
-- [rdx/utils/image_utils.py:21-478](file://rdx/utils/image_utils.py#L21-L478)
-- [rdx/models.py:103-122](file://rdx/models.py#L103-L122)
+- [rdc_tool/cli.py:1538-1555](file://rdc_tool/cli.py#L1538-L1555)
+- [rdc_tool/handlers/export.py:8-9](file://rdc_tool/handlers/export.py#L8-L9)
+- [rdc_tool/handlers/texture.py:8-9](file://rdc_tool/handlers/texture.py#L8-L9)
+- [rdc_tool/handlers/mesh.py:8-9](file://rdc_tool/handlers/mesh.py#L8-L9)
+- [rdc_tool/handlers/perf.py:8-9](file://rdc_tool/handlers/perf.py#L8-L9)
+- [rdc_tool/server_runtime.py:230-238](file://rdc_tool/server_runtime.py#L230-L238)
+- [rdc_tool/core/render_service.py:346-521](file://rdc_tool/core/render_service.py#L346-L521)
+- [rdc_tool/core/perf_service.py:212-487](file://rdc_tool/core/perf_service.py#L212-L487)
+- [rdc_tool/utils/image_utils.py:21-478](file://rdc_tool/utils/image_utils.py#L21-L478)
+- [rdc_tool/models.py:103-122](file://rdc_tool/models.py#L103-L122)
 
 **章节来源**
-- [rdx/cli.py:1538-1555](file://rdx/cli.py#L1538-L1555)
-- [rdx/handlers/export.py:8-9](file://rdx/handlers/export.py#L8-L9)
-- [rdx/handlers/texture.py:8-9](file://rdx/handlers/texture.py#L8-L9)
-- [rdx/handlers/mesh.py:8-9](file://rdx/handlers/mesh.py#L8-L9)
-- [rdx/handlers/perf.py:8-9](file://rdx/handlers/perf.py#L8-L9)
-- [rdx/server_runtime.py:230-238](file://rdx/server_runtime.py#L230-L238)
+- [rdc_tool/cli.py:1538-1555](file://rdc_tool/cli.py#L1538-L1555)
+- [rdc_tool/handlers/export.py:8-9](file://rdc_tool/handlers/export.py#L8-L9)
+- [rdc_tool/handlers/texture.py:8-9](file://rdc_tool/handlers/texture.py#L8-L9)
+- [rdc_tool/handlers/mesh.py:8-9](file://rdc_tool/handlers/mesh.py#L8-L9)
+- [rdc_tool/handlers/perf.py:8-9](file://rdc_tool/handlers/perf.py#L8-L9)
+- [rdc_tool/server_runtime.py:230-238](file://rdc_tool/server_runtime.py#L230-L238)
 
 ## 核心组件
 - 渲染服务（RenderService）：负责事件级截图、纹理保存、像素读取、纹理统计等。
@@ -83,12 +83,12 @@ PerfSvc --> Models
 - 命令行（cli）：暴露导出命令（screenshot、texture、buffer、mesh）与像素检查命令。
 
 **章节来源**
-- [rdx/core/render_service.py:346-521](file://rdx/core/render_service.py#L346-L521)
-- [rdx/core/perf_service.py:212-487](file://rdx/core/perf_service.py#L212-L487)
-- [rdx/utils/image_utils.py:80-220](file://rdx/utils/image_utils.py#L80-L220)
-- [rdx/models.py:103-122](file://rdx/models.py#L103-L122)
-- [rdx/server_runtime.py:230-238](file://rdx/server_runtime.py#L230-L238)
-- [rdx/cli.py:1538-1555](file://rdx/cli.py#L1538-L1555)
+- [rdc_tool/core/render_service.py:346-521](file://rdc_tool/core/render_service.py#L346-L521)
+- [rdc_tool/core/perf_service.py:212-487](file://rdc_tool/core/perf_service.py#L212-L487)
+- [rdc_tool/utils/image_utils.py:80-220](file://rdc_tool/utils/image_utils.py#L80-L220)
+- [rdc_tool/models.py:103-122](file://rdc_tool/models.py#L103-L122)
+- [rdc_tool/server_runtime.py:230-238](file://rdc_tool/server_runtime.py#L230-L238)
+- [rdc_tool/cli.py:1538-1555](file://rdc_tool/cli.py#L1538-L1555)
 
 ## 架构总览
 导出与分析API的调用路径如下：
@@ -119,12 +119,12 @@ Handler-->>CLI : 输出文件或JSON
 ```
 
 **图表来源**
-- [rdx/cli.py:1538-1555](file://rdx/cli.py#L1538-L1555)
-- [rdx/handlers/export.py:8-9](file://rdx/handlers/export.py#L8-L9)
-- [rdx/server_runtime.py:230-238](file://rdx/server_runtime.py#L230-L238)
-- [rdx/core/render_service.py:357-521](file://rdx/core/render_service.py#L357-L521)
-- [rdx/core/render_service.py:523-646](file://rdx/core/render_service.py#L523-L646)
-- [rdx/core/render_service.py:658-794](file://rdx/core/render_service.py#L658-L794)
+- [rdc_tool/cli.py:1538-1555](file://rdc_tool/cli.py#L1538-L1555)
+- [rdc_tool/handlers/export.py:8-9](file://rdc_tool/handlers/export.py#L8-L9)
+- [rdc_tool/server_runtime.py:230-238](file://rdc_tool/server_runtime.py#L230-L238)
+- [rdc_tool/core/render_service.py:357-521](file://rdc_tool/core/render_service.py#L357-L521)
+- [rdc_tool/core/render_service.py:523-646](file://rdc_tool/core/render_service.py#L523-L646)
+- [rdc_tool/core/render_service.py:658-794](file://rdc_tool/core/render_service.py#L658-L794)
 
 ## 详细组件分析
 
@@ -159,14 +159,14 @@ Fallback --> End
 ```
 
 **图表来源**
-- [rdx/core/render_service.py:357-521](file://rdx/core/render_service.py#L357-L521)
-- [rdx/core/render_service.py:278-338](file://rdx/core/render_service.py#L278-L338)
-- [rdx/core/render_service.py:658-794](file://rdx/core/render_service.py#L658-L794)
+- [rdc_tool/core/render_service.py:357-521](file://rdc_tool/core/render_service.py#L357-L521)
+- [rdc_tool/core/render_service.py:278-338](file://rdc_tool/core/render_service.py#L278-L338)
+- [rdc_tool/core/render_service.py:658-794](file://rdc_tool/core/render_service.py#L658-L794)
 
 **章节来源**
-- [rdx/core/render_service.py:357-521](file://rdx/core/render_service.py#L357-L521)
-- [rdx/core/render_service.py:278-338](file://rdx/core/render_service.py#L278-L338)
-- [rdx/core/render_service.py:658-794](file://rdx/core/render_service.py#L658-L794)
+- [rdc_tool/core/render_service.py:357-521](file://rdc_tool/core/render_service.py#L357-L521)
+- [rdc_tool/core/render_service.py:278-338](file://rdc_tool/core/render_service.py#L278-L338)
+- [rdc_tool/core/render_service.py:658-794](file://rdc_tool/core/render_service.py#L658-L794)
 
 ### 纹理导出（纹理资源保存与读取）
 - 功能要点
@@ -202,12 +202,12 @@ end
 ```
 
 **图表来源**
-- [rdx/core/render_service.py:523-646](file://rdx/core/render_service.py#L523-L646)
-- [rdx/core/render_service.py:143-158](file://rdx/core/render_service.py#L143-L158)
+- [rdc_tool/core/render_service.py:523-646](file://rdc_tool/core/render_service.py#L523-L646)
+- [rdc_tool/core/render_service.py:143-158](file://rdc_tool/core/render_service.py#L143-L158)
 
 **章节来源**
-- [rdx/core/render_service.py:523-646](file://rdx/core/render_service.py#L523-L646)
-- [rdx/core/render_service.py:143-158](file://rdx/core/render_service.py#L143-L158)
+- [rdc_tool/core/render_service.py:523-646](file://rdc_tool/core/render_service.py#L523-L646)
+- [rdc_tool/core/render_service.py:143-158](file://rdc_tool/core/render_service.py#L143-L158)
 
 ### 网格数据导出（顶点与索引缓冲）
 - 功能要点
@@ -236,12 +236,12 @@ Save --> End(["结束"])
 ```
 
 **图表来源**
-- [rdx/operation_definitions.py:4-66](file://rdx/operation_definitions.py#L4-L66)
-- [rdx/operation_definitions.py:67-124](file://rdx/operation_definitions.py#L67-L124)
+- [rdc_tool/operation_definitions.py:4-66](file://rdc_tool/operation_definitions.py#L4-L66)
+- [rdc_tool/operation_definitions.py:67-124](file://rdc_tool/operation_definitions.py#L67-L124)
 
 **章节来源**
-- [rdx/operation_definitions.py:4-66](file://rdx/operation_definitions.py#L4-L66)
-- [rdx/operation_definitions.py:67-124](file://rdx/operation_definitions.py#L67-L124)
+- [rdc_tool/operation_definitions.py:4-66](file://rdc_tool/operation_definitions.py#L4-L66)
+- [rdc_tool/operation_definitions.py:67-124](file://rdc_tool/operation_definitions.py#L67-L124)
 
 ### 性能分析工具集成（帧率统计、GPU利用率、瓶颈识别）
 - 功能要点
@@ -276,16 +276,16 @@ Perf-->>Client : top-K热点事件
 ```
 
 **图表来源**
-- [rdx/core/perf_service.py:28-63](file://rdx/core/perf_service.py#L28-L63)
-- [rdx/core/perf_service.py:235-308](file://rdx/core/perf_service.py#L235-L308)
-- [rdx/core/perf_service.py:314-487](file://rdx/core/perf_service.py#L314-L487)
-- [rdx/core/perf_service.py:493-618](file://rdx/core/perf_service.py#L493-L618)
+- [rdc_tool/core/perf_service.py:28-63](file://rdc_tool/core/perf_service.py#L28-L63)
+- [rdc_tool/core/perf_service.py:235-308](file://rdc_tool/core/perf_service.py#L235-L308)
+- [rdc_tool/core/perf_service.py:314-487](file://rdc_tool/core/perf_service.py#L314-L487)
+- [rdc_tool/core/perf_service.py:493-618](file://rdc_tool/core/perf_service.py#L493-L618)
 
 **章节来源**
-- [rdx/core/perf_service.py:28-63](file://rdx/core/perf_service.py#L28-L63)
-- [rdx/core/perf_service.py:235-308](file://rdx/core/perf_service.py#L235-L308)
-- [rdx/core/perf_service.py:314-487](file://rdx/core/perf_service.py#L314-L487)
-- [rdx/core/perf_service.py:493-618](file://rdx/core/perf_service.py#L493-L618)
+- [rdc_tool/core/perf_service.py:28-63](file://rdc_tool/core/perf_service.py#L28-L63)
+- [rdc_tool/core/perf_service.py:235-308](file://rdc_tool/core/perf_service.py#L235-L308)
+- [rdc_tool/core/perf_service.py:314-487](file://rdc_tool/core/perf_service.py#L314-L487)
+- [rdc_tool/core/perf_service.py:493-618](file://rdc_tool/core/perf_service.py#L493-L618)
 
 ### 后处理工具链（数据验证、格式转换、批量处理）
 - 数据验证
@@ -312,16 +312,16 @@ Tonemap --> Out
 ```
 
 **图表来源**
-- [rdx/utils/image_utils.py:80-135](file://rdx/utils/image_utils.py#L80-L135)
-- [rdx/utils/image_utils.py:311-367](file://rdx/utils/image_utils.py#L311-L367)
-- [rdx/utils/image_utils.py:375-426](file://rdx/utils/image_utils.py#L375-L426)
-- [rdx/utils/image_utils.py:434-478](file://rdx/utils/image_utils.py#L434-L478)
+- [rdc_tool/utils/image_utils.py:80-135](file://rdc_tool/utils/image_utils.py#L80-L135)
+- [rdc_tool/utils/image_utils.py:311-367](file://rdc_tool/utils/image_utils.py#L311-L367)
+- [rdc_tool/utils/image_utils.py:375-426](file://rdc_tool/utils/image_utils.py#L375-L426)
+- [rdc_tool/utils/image_utils.py:434-478](file://rdc_tool/utils/image_utils.py#L434-L478)
 
 **章节来源**
-- [rdx/utils/image_utils.py:80-135](file://rdx/utils/image_utils.py#L80-L135)
-- [rdx/utils/image_utils.py:311-367](file://rdx/utils/image_utils.py#L311-L367)
-- [rdx/utils/image_utils.py:375-426](file://rdx/utils/image_utils.py#L375-L426)
-- [rdx/utils/image_utils.py:434-478](file://rdx/utils/image_utils.py#L434-L478)
+- [rdc_tool/utils/image_utils.py:80-135](file://rdc_tool/utils/image_utils.py#L80-L135)
+- [rdc_tool/utils/image_utils.py:311-367](file://rdc_tool/utils/image_utils.py#L311-L367)
+- [rdc_tool/utils/image_utils.py:375-426](file://rdc_tool/utils/image_utils.py#L375-L426)
+- [rdc_tool/utils/image_utils.py:434-478](file://rdc_tool/utils/image_utils.py#L434-L478)
 
 ## 依赖关系分析
 - 处理器与运行时
@@ -349,22 +349,22 @@ PS --> MD
 ```
 
 **图表来源**
-- [rdx/handlers/export.py:8-9](file://rdx/handlers/export.py#L8-L9)
-- [rdx/handlers/texture.py:8-9](file://rdx/handlers/texture.py#L8-L9)
-- [rdx/handlers/mesh.py:8-9](file://rdx/handlers/mesh.py#L8-L9)
-- [rdx/handlers/perf.py:8-9](file://rdx/handlers/perf.py#L8-L9)
-- [rdx/server_runtime.py:230-238](file://rdx/server_runtime.py#L230-L238)
-- [rdx/core/render_service.py:346-521](file://rdx/core/render_service.py#L346-L521)
-- [rdx/core/perf_service.py:212-487](file://rdx/core/perf_service.py#L212-L487)
-- [rdx/utils/image_utils.py:21-478](file://rdx/utils/image_utils.py#L21-L478)
-- [rdx/models.py:103-122](file://rdx/models.py#L103-L122)
+- [rdc_tool/handlers/export.py:8-9](file://rdc_tool/handlers/export.py#L8-L9)
+- [rdc_tool/handlers/texture.py:8-9](file://rdc_tool/handlers/texture.py#L8-L9)
+- [rdc_tool/handlers/mesh.py:8-9](file://rdc_tool/handlers/mesh.py#L8-L9)
+- [rdc_tool/handlers/perf.py:8-9](file://rdc_tool/handlers/perf.py#L8-L9)
+- [rdc_tool/server_runtime.py:230-238](file://rdc_tool/server_runtime.py#L230-L238)
+- [rdc_tool/core/render_service.py:346-521](file://rdc_tool/core/render_service.py#L346-L521)
+- [rdc_tool/core/perf_service.py:212-487](file://rdc_tool/core/perf_service.py#L212-L487)
+- [rdc_tool/utils/image_utils.py:21-478](file://rdc_tool/utils/image_utils.py#L21-L478)
+- [rdc_tool/models.py:103-122](file://rdc_tool/models.py#L103-L122)
 
 **章节来源**
-- [rdx/handlers/export.py:8-9](file://rdx/handlers/export.py#L8-L9)
-- [rdx/handlers/texture.py:8-9](file://rdx/handlers/texture.py#L8-L9)
-- [rdx/handlers/mesh.py:8-9](file://rdx/handlers/mesh.py#L8-L9)
-- [rdx/handlers/perf.py:8-9](file://rdx/handlers/perf.py#L8-L9)
-- [rdx/server_runtime.py:230-238](file://rdx/server_runtime.py#L230-L238)
+- [rdc_tool/handlers/export.py:8-9](file://rdc_tool/handlers/export.py#L8-L9)
+- [rdc_tool/handlers/texture.py:8-9](file://rdc_tool/handlers/texture.py#L8-L9)
+- [rdc_tool/handlers/mesh.py:8-9](file://rdc_tool/handlers/mesh.py#L8-L9)
+- [rdc_tool/handlers/perf.py:8-9](file://rdc_tool/handlers/perf.py#L8-L9)
+- [rdc_tool/server_runtime.py:230-238](file://rdc_tool/server_runtime.py#L230-L238)
 
 ## 性能考量
 - 异步与线程池
@@ -396,10 +396,10 @@ PS --> MD
   - 整数格式纹理需提供正确的value_type（float/uint/int）。
 
 **章节来源**
-- [rdx/core/render_service.py:523-646](file://rdx/core/render_service.py#L523-L646)
-- [rdx/core/render_service.py:801-873](file://rdx/core/render_service.py#L801-L873)
-- [rdx/core/perf_service.py:235-308](file://rdx/core/perf_service.py#L235-L308)
-- [rdx/core/perf_service.py:493-618](file://rdx/core/perf_service.py#L493-L618)
+- [rdc_tool/core/render_service.py:523-646](file://rdc_tool/core/render_service.py#L523-L646)
+- [rdc_tool/core/render_service.py:801-873](file://rdc_tool/core/render_service.py#L801-L873)
+- [rdc_tool/core/perf_service.py:235-308](file://rdc_tool/core/perf_service.py#L235-L308)
+- [rdc_tool/core/perf_service.py:493-618](file://rdc_tool/core/perf_service.py#L493-L618)
 
 ## 结论
 本导出与分析API围绕RenderDoc能力构建了完整的截图、纹理、网格与性能分析链路。通过服务化设计与工具链支持，用户可灵活导出多种格式的数据并进行后处理与验证。建议在大规模导出与采样时关注内存与带宽占用，并结合异常检测与热点分析优化渲染管线。
@@ -408,10 +408,10 @@ PS --> MD
 
 ## 附录
 - CLI导出命令参考
-  - 截图：rdx ... export screenshot --event-id <id> --out <path>
-  - 纹理：rdx ... export texture --resource-id <id> --out <path>
-  - 缓冲：rdx ... export buffer --resource-id <id> --out <path>
-  - 网格：rdx ... export mesh --event-id <id> --out <path>
+  - 截图：rdc ... export screenshot --event-id <id> --out <path>
+  - 纹理：rdc ... export texture --resource-id <id> --out <path>
+  - 缓冲：rdc ... export buffer --resource-id <id> --out <path>
+  - 网格：rdc ... export mesh --event-id <id> --out <path>
 - 常用参数
   - format：输出格式（png/jpg/bmp/dds/exr/hdr/raw/npz）
   - subresource：{mip, slice, sample}
@@ -421,6 +421,6 @@ PS --> MD
   - hdr_multiplier：HDR显示乘数
 
 **章节来源**
-- [rdx/cli.py:1538-1555](file://rdx/cli.py#L1538-L1555)
-- [rdx/core/render_service.py:357-521](file://rdx/core/render_service.py#L357-L521)
-- [rdx/core/render_service.py:658-794](file://rdx/core/render_service.py#L658-L794)
+- [rdc_tool/cli.py:1538-1555](file://rdc_tool/cli.py#L1538-L1555)
+- [rdc_tool/core/render_service.py:357-521](file://rdc_tool/core/render_service.py#L357-L521)
+- [rdc_tool/core/render_service.py:658-794](file://rdc_tool/core/render_service.py#L658-L794)

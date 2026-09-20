@@ -9,10 +9,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from rdx import server
-from rdx.core.session_manager import SessionManager, SessionState, _map_graphics_api
-from rdx.context_snapshot import clear_context_snapshot
-from rdx.models import BackendType
+from rdc_tool import server
+from rdc_tool.core.session_manager import SessionManager, SessionState, _map_graphics_api
+from rdc_tool.context_snapshot import clear_context_snapshot
+from rdc_tool.models import BackendType
 
 
 class DummyRemoteServer:
@@ -616,7 +616,7 @@ def test_export_mesh_writes_real_indexed_obj_and_rejects_unsupported_options(
     assert payload["vertex_count"] == 3
     assert payload["primitive_count"] == 1
     assert output_path.read_text(encoding="utf-8").splitlines() == [
-        "# RDX post-VS positions, event 17",
+        "# RDC-Tool post-VS positions, event 17",
         "v 0 0 0",
         "v 1 0 0",
         "v 0 1 0",
@@ -670,7 +670,7 @@ def test_buffer_base64_read_stays_in_memory_without_an_artifact(monkeypatch: pyt
 
 
 def test_capture_copy_reports_actual_native_progress(monkeypatch):
-    import rdx.core.session_manager as manager_module
+    import rdc_tool.core.session_manager as manager_module
     progress = []
     def copy(path, callback):
         callback(0.25)
@@ -808,7 +808,7 @@ def test_native_copy_failure_does_not_attempt_fallback_or_open(monkeypatch):
 @pytest.mark.parametrize("existing,verified,success", [(True, True, True), (False, True, True), (False, False, False)])
 def test_android_transfer_verifies_content_and_owns_only_new_paths(monkeypatch, tmp_path, existing, verified, success):
     import hashlib
-    import rdx.core.session_manager as module
+    import rdc_tool.core.session_manager as module
     capture=tmp_path / "tiny.rdc"
     capture.write_bytes(b"capture")
     digest=hashlib.sha256(b"capture").hexdigest()
@@ -839,7 +839,7 @@ def test_android_transfer_verifies_content_and_owns_only_new_paths(monkeypatch, 
 
 @pytest.mark.parametrize("error", ["device offline", "Permission denied", ""])
 def test_android_transfer_refuses_unverifiable_existing_path(monkeypatch, tmp_path, error):
-    import rdx.core.session_manager as module
+    import rdc_tool.core.session_manager as module
     capture = tmp_path / "tiny.rdc"
     capture.write_bytes(b"capture")
     commands = []
@@ -856,7 +856,7 @@ def test_android_transfer_refuses_unverifiable_existing_path(monkeypatch, tmp_pa
 
 
 def test_texture_save_keeps_native_readback_failure_message(monkeypatch):
-    from rdx.core import render_service
+    from rdc_tool.core import render_service
     monkeypatch.setattr(render_service, "_get_rd", lambda: SimpleNamespace(ResultCode=SimpleNamespace(Succeeded=0)))
     result = SimpleNamespace(code=29, Message=lambda: "Couldn't readback bytes for mip 2, slice 1, sample 0")
     ok, detail = render_service._save_texture_result(result)
@@ -866,7 +866,7 @@ def test_texture_save_keeps_native_readback_failure_message(monkeypatch):
 
 
 def test_android_failed_transfer_preserves_cleanup_failure(monkeypatch, tmp_path):
-    import rdx.core.session_manager as module
+    import rdc_tool.core.session_manager as module
     capture = tmp_path / "tiny.rdc"
     capture.write_bytes(b"capture")
     def run(argv, **kwargs):

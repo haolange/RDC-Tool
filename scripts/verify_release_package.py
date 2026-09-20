@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify a self-contained rdx-tools release zip in an extracted path."""
+"""Verify a self-contained rdc-tool release zip in an extracted path."""
 
 from __future__ import annotations
 
@@ -20,10 +20,10 @@ if str(SCRIPT_ROOT) not in sys.path:
 from scripts._shared import extract_json_payload
 
 
-PUBLIC_COMMAND = "rdx"
-WINDOWS_LAUNCHER_FILE = "bin/rdx.cmd"
+PUBLIC_COMMAND = "rdc-tool"
+WINDOWS_LAUNCHER_FILE = "bin/rdc-tool.cmd"
 EXPECTED_PUBLIC_COMMANDS = [PUBLIC_COMMAND]
-EXPECTED_ENTRYPOINTS = [WINDOWS_LAUNCHER_FILE, "bin/rdx", "cli/run_cli.py", "install.cmd"]
+EXPECTED_ENTRYPOINTS = [WINDOWS_LAUNCHER_FILE, "bin/rdc-tool", "cli/run_cli.py", "install.cmd"]
 REMOVED_CATALOG_TOOLS = {"rd.resource.rename", "rd.shader.save_binary"}
 MCP_DOC_MARKERS = (
     "mcp/run_mcp.py",
@@ -45,7 +45,7 @@ TEXT_SUFFIXES = {
     ".yml",
 }
 PRE_GA_PATH_MARKERS = (
-    "rdx/" + "runtime_" + "materializer.py",
+    "rdc_tool/" + "runtime_" + "materializer.py",
     "intermediate/runtime/" + "worker" + "-cache",
 )
 PRE_GA_TEXT_MARKERS = (
@@ -87,8 +87,8 @@ def _run(cmd: list[str], cwd: Path, *, timeout_s: int = 180, env: dict[str, str]
 
 def _public_env(root: Path) -> dict[str, str]:
     env = os.environ.copy()
-    env.pop("RDX_PYTHON", None)
-    env["RDX_TOOLS_ROOT"] = str(root)
+    env.pop("RDC_TOOL_PYTHON", None)
+    env["RDC_TOOL_ROOT"] = str(root)
     env["PATH"] = str(root / "bin") + os.pathsep + str(env.get("PATH") or "")
     pathext = str(env.get("PATHEXT") or "")
     if ".CMD" not in pathext.upper().split(";"):
@@ -102,8 +102,8 @@ def _run_public(root: Path, args: list[str], *, timeout_s: int = 180) -> tuple[i
 
 def _run_windows_launcher_file(root: Path, args: list[str], *, timeout_s: int = 180) -> tuple[int, str]:
     env = os.environ.copy()
-    env.pop("RDX_PYTHON", None)
-    env["RDX_TOOLS_ROOT"] = str(root)
+    env.pop("RDC_TOOL_PYTHON", None)
+    env["RDC_TOOL_ROOT"] = str(root)
     return _run([_cmd_exe(), "/c", str(root / WINDOWS_LAUNCHER_FILE), *args], root, timeout_s=timeout_s, env=env)
 
 
@@ -161,18 +161,18 @@ def _verify_license_inventory(root: Path) -> None:
     inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
     if not isinstance(inventory, list):
         raise RuntimeError("license inventory is not a list")
-    project_rows = [row for row in inventory if isinstance(row, dict) and row.get("name") == "rdx-tools"]
+    project_rows = [row for row in inventory if isinstance(row, dict) and row.get("name") == "rdc-tool"]
     if not project_rows:
-        raise RuntimeError("license inventory missing rdx-tools row")
+        raise RuntimeError("license inventory missing rdc-tool row")
     if project_rows[0].get("license") != "Apache-2.0" or project_rows[0].get("path") != "LICENSE":
-        raise RuntimeError(f"rdx-tools license inventory mismatch: {project_rows[0]!r}")
+        raise RuntimeError(f"rdc-tool license inventory mismatch: {project_rows[0]!r}")
     sbom = json.loads(sbom_path.read_text(encoding="utf-8"))
     components = sbom.get("components") if isinstance(sbom, dict) else None
     if not isinstance(components, list):
         raise RuntimeError("SBOM components field is missing or invalid")
-    sbom_rows = [row for row in components if isinstance(row, dict) and row.get("name") == "rdx-tools"]
+    sbom_rows = [row for row in components if isinstance(row, dict) and row.get("name") == "rdc-tool"]
     if not sbom_rows or sbom_rows[0].get("license") != "Apache-2.0":
-        raise RuntimeError("SBOM does not report Apache-2.0 for rdx-tools")
+        raise RuntimeError("SBOM does not report Apache-2.0 for rdc-tool")
 
 
 def _verify_doctor(root: Path) -> None:
@@ -180,7 +180,7 @@ def _verify_doctor(root: Path) -> None:
     payload = extract_json_payload(output)
     if code != 0 or not payload or payload.get("ok") is not True:
         raise RuntimeError(f"doctor failed: exit={code}\n{output}")
-    if payload.get("result_kind") != "rdx.doctor":
+    if payload.get("result_kind") != "rdc_tool.doctor":
         raise RuntimeError(f"doctor returned wrong result_kind: {json.dumps(payload)[:500]}")
 
 
@@ -189,7 +189,7 @@ def _verify_physical_launcher_file(root: Path) -> None:
     payload = extract_json_payload(output)
     if code != 0 or not payload or payload.get("ok") is not True:
         raise RuntimeError(f"windows launcher file doctor failed: exit={code}\n{output}")
-    if payload.get("result_kind") != "rdx.doctor":
+    if payload.get("result_kind") != "rdc_tool.doctor":
         raise RuntimeError(f"windows launcher file returned wrong result_kind: {json.dumps(payload)[:500]}")
 
 
@@ -237,7 +237,7 @@ def _verify_cli_contract(root: Path) -> None:
         (["context", "status", "--json"], "rd.session.get_context"),
         (["context", "list", "--json"], "rd.session.list_contexts"),
         (["--daemon-context", "package-contract", "context", "update", "--key", "notes", "--value", "package-verify", "--json"], "rd.session.update_context"),
-        (["--daemon-context", "package-contract", "context", "clear", "--json"], "rdx.context.clear"),
+        (["--daemon-context", "package-contract", "context", "clear", "--json"], "rdc_tool.context.clear"),
         (["vfs", "ls", "--path", "/", "--format", "tsv"], ""),
     ]
     for args, result_kind in checks:
@@ -282,7 +282,7 @@ def _verify_no_public_mcp_surface(zip_path: Path) -> None:
     with zipfile.ZipFile(zip_path, "r") as archive:
         for name in archive.namelist():
             normalized = name.replace("\\", "/")
-            rel = normalized.removeprefix("rdx-tools/")
+            rel = normalized.removeprefix("rdc-tool/")
             if rel == "mcp" or rel.startswith("mcp/"):
                 raise RuntimeError(f"package exposes MCP path: {normalized}")
             if not (rel == "README.md" or rel.startswith("docs/")):
@@ -299,7 +299,7 @@ def _verify_no_public_mcp_surface(zip_path: Path) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Verify an rdx-tools release package")
+    parser = argparse.ArgumentParser(description="Verify an rdc-tool release package")
     parser.add_argument("--zip", dest="zip_path", required=True, help="Release zip path")
     args = parser.parse_args(argv)
 
@@ -308,7 +308,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[verify] missing package: {zip_path}")
         return 2
 
-    temp_dir = Path(tempfile.mkdtemp(prefix="rdx package verify "))
+    temp_dir = Path(tempfile.mkdtemp(prefix="rdc-tool package verify "))
     try:
         _verify_no_pre_ga_payload(zip_path)
         _verify_no_public_mcp_surface(zip_path)

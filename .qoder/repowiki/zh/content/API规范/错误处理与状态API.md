@@ -2,14 +2,14 @@
 
 <cite>
 **本文引用的文件**
-- [rdx/core/contracts.py](file://rdx/core/contracts.py)
-- [rdx/core/errors.py](file://rdx/core/errors.py)
-- [rdx/server.py](file://rdx/server.py)
-- [rdx/server_runtime.py](file://rdx/server_runtime.py)
-- [rdx/operation_definitions.py](file://rdx/operation_definitions.py)
-- [rdx/models.py](file://rdx/models.py)
-- [rdx/daemon/client.py](file://rdx/daemon/client.py)
-- [rdx/daemon/server.py](file://rdx/daemon/server.py)
+- [rdc_tool/core/contracts.py](file://rdc_tool/core/contracts.py)
+- [rdc_tool/core/errors.py](file://rdc_tool/core/errors.py)
+- [rdc_tool/server.py](file://rdc_tool/server.py)
+- [rdc_tool/server_runtime.py](file://rdc_tool/server_runtime.py)
+- [rdc_tool/operation_definitions.py](file://rdc_tool/operation_definitions.py)
+- [rdc_tool/models.py](file://rdc_tool/models.py)
+- [rdc_tool/daemon/client.py](file://rdc_tool/daemon/client.py)
+- [rdc_tool/daemon/server.py](file://rdc_tool/daemon/server.py)
 - [tests/test_runtime_recovery_and_discovery.py](file://tests/test_runtime_recovery_and_discovery.py)
 </cite>
 
@@ -26,7 +26,7 @@
 10. [附录](#附录)
 
 ## 简介
-本文件聚焦于 RDX-Tool 的错误处理与状态 API 体系，目标是帮助开发者理解：
+本文件聚焦于 RDC-Tool 的错误处理与状态 API 体系，目标是帮助开发者理解：
 - 统一的错误码分类与标准响应格式（ok、error、artifacts、meta、projections）
 - 错误分类体系（客户端错误、服务端错误、网络/运行时错误）
 - 状态查询接口：rd.core.get_runtime_metrics、rd.core.get_operation_history、rd.core.get_logs
@@ -55,20 +55,20 @@ G --> H["daemon/server.py<br/>守护进程状态"]
 ```
 
 **图示来源**
-- [rdx/server.py:90-149](file://rdx/server.py#L90-L149)
-- [rdx/server_runtime.py:1-120](file://rdx/server_runtime.py#L1-L120)
-- [rdx/core/contracts.py:98-164](file://rdx/core/contracts.py#L98-L164)
-- [rdx/core/errors.py:9-119](file://rdx/core/errors.py#L9-L119)
-- [rdx/daemon/client.py:467-515](file://rdx/daemon/client.py#L467-L515)
-- [rdx/daemon/server.py:126-159](file://rdx/daemon/server.py#L126-L159)
+- [rdc_tool/server.py:90-149](file://rdc_tool/server.py#L90-L149)
+- [rdc_tool/server_runtime.py:1-120](file://rdc_tool/server_runtime.py#L1-L120)
+- [rdc_tool/core/contracts.py:98-164](file://rdc_tool/core/contracts.py#L98-L164)
+- [rdc_tool/core/errors.py:9-119](file://rdc_tool/core/errors.py#L9-L119)
+- [rdc_tool/daemon/client.py:467-515](file://rdc_tool/daemon/client.py#L467-L515)
+- [rdc_tool/daemon/server.py:126-159](file://rdc_tool/daemon/server.py#L126-L159)
 
 **章节来源**
-- [rdx/server.py:90-149](file://rdx/server.py#L90-L149)
-- [rdx/server_runtime.py:1-120](file://rdx/server_runtime.py#L1-L120)
-- [rdx/core/contracts.py:98-164](file://rdx/core/contracts.py#L98-L164)
-- [rdx/core/errors.py:9-119](file://rdx/core/errors.py#L9-L119)
-- [rdx/daemon/client.py:467-515](file://rdx/daemon/client.py#L467-L515)
-- [rdx/daemon/server.py:126-159](file://rdx/daemon/server.py#L126-L159)
+- [rdc_tool/server.py:90-149](file://rdc_tool/server.py#L90-L149)
+- [rdc_tool/server_runtime.py:1-120](file://rdc_tool/server_runtime.py#L1-L120)
+- [rdc_tool/core/contracts.py:98-164](file://rdc_tool/core/contracts.py#L98-L164)
+- [rdc_tool/core/errors.py:9-119](file://rdc_tool/core/errors.py#L9-L119)
+- [rdc_tool/daemon/client.py:467-515](file://rdc_tool/daemon/client.py#L467-L515)
+- [rdc_tool/daemon/server.py:126-159](file://rdc_tool/daemon/server.py#L126-L159)
 
 ## 核心组件
 - 统一响应信封
@@ -86,11 +86,11 @@ G --> H["daemon/server.py<br/>守护进程状态"]
   - daemon 通过命名管道与 CLI 交互，记录 active_operation、active_request_count、last_activity_at 等
 
 **章节来源**
-- [rdx/core/contracts.py:98-164](file://rdx/core/contracts.py#L98-L164)
-- [rdx/core/errors.py:9-119](file://rdx/core/errors.py#L9-L119)
-- [rdx/operation_definitions.py:324-393](file://rdx/operation_definitions.py#L324-L393)
-- [rdx/server_runtime.py:196-238](file://rdx/server_runtime.py#L196-L238)
-- [rdx/daemon/server.py:126-159](file://rdx/daemon/server.py#L126-L159)
+- [rdc_tool/core/contracts.py:98-164](file://rdc_tool/core/contracts.py#L98-L164)
+- [rdc_tool/core/errors.py:9-119](file://rdc_tool/core/errors.py#L9-L119)
+- [rdc_tool/operation_definitions.py:324-393](file://rdc_tool/operation_definitions.py#L324-L393)
+- [rdc_tool/server_runtime.py:196-238](file://rdc_tool/server_runtime.py#L196-L238)
+- [rdc_tool/daemon/server.py:126-159](file://rdc_tool/daemon/server.py#L126-L159)
 
 ## 架构总览
 下图展示一次工具调用的端到端流程，包括错误捕获、标准化响应与状态记录。
@@ -122,12 +122,12 @@ end
 ```
 
 **图示来源**
-- [rdx/server.py:90-149](file://rdx/server.py#L90-L149)
-- [rdx/core/contracts.py:98-164](file://rdx/core/contracts.py#L98-L164)
-- [rdx/core/errors.py:90-119](file://rdx/core/errors.py#L90-L119)
+- [rdc_tool/server.py:90-149](file://rdc_tool/server.py#L90-L149)
+- [rdc_tool/core/contracts.py:98-164](file://rdc_tool/core/contracts.py#L98-L164)
+- [rdc_tool/core/errors.py:90-119](file://rdc_tool/core/errors.py#L90-L119)
 
 **章节来源**
-- [rdx/server.py:90-149](file://rdx/server.py#L90-L149)
+- [rdc_tool/server.py:90-149](file://rdc_tool/server.py#L90-L149)
 
 ## 详细组件分析
 
@@ -143,8 +143,8 @@ end
 - projections：可选的结构化投影（如 TSV 行集合）
 
 **章节来源**
-- [rdx/core/contracts.py:98-164](file://rdx/core/contracts.py#L98-L164)
-- [rdx/models.py:103-122](file://rdx/models.py#L103-L122)
+- [rdc_tool/core/contracts.py:98-164](file://rdc_tool/core/contracts.py#L98-L164)
+- [rdc_tool/models.py:103-122](file://rdc_tool/models.py#L103-L122)
 
 ### 错误分类体系
 - 客户端错误
@@ -161,8 +161,8 @@ end
 map_exception 负责将常见 Python 异常映射到稳定错误类别，确保上层统一处理。
 
 **章节来源**
-- [rdx/core/errors.py:9-119](file://rdx/core/errors.py#L9-L119)
-- [rdx/daemon/client.py:31-37](file://rdx/daemon/client.py#L31-L37)
+- [rdc_tool/core/errors.py:9-119](file://rdc_tool/core/errors.py#L9-L119)
+- [rdc_tool/daemon/client.py:31-37](file://rdc_tool/daemon/client.py#L31-L37)
 
 ### 状态查询接口
 - rd.core.get_runtime_metrics
@@ -179,7 +179,7 @@ map_exception 负责将常见 Python 异常映射到稳定错误类别，确保�
 这些接口的定义与返回契约在 operation_definitions 中声明，并由 server_runtime 提供具体实现。
 
 **章节来源**
-- [rdx/operation_definitions.py:324-393](file://rdx/operation_definitions.py#L324-L393)
+- [rdc_tool/operation_definitions.py:324-393](file://rdc_tool/operation_definitions.py#L324-L393)
 - [tests/test_runtime_recovery_and_discovery.py:135-169](file://tests/test_runtime_recovery_and_discovery.py#L135-L169)
 
 ### 运行时上下文与操作历史
@@ -189,17 +189,17 @@ map_exception 负责将常见 Python 异常映射到稳定错误类别，确保�
 - 恢复与限制：_ensure_context_capacity 检查上下文数量限制，防止资源耗尽
 
 **章节来源**
-- [rdx/server_runtime.py:196-238](file://rdx/server_runtime.py#L196-L238)
-- [rdx/server_runtime.py:647-654](file://rdx/server_runtime.py#L647-L654)
-- [rdx/server_runtime.py:427-447](file://rdx/server_runtime.py#L427-L447)
+- [rdc_tool/server_runtime.py:196-238](file://rdc_tool/server_runtime.py#L196-L238)
+- [rdc_tool/server_runtime.py:647-654](file://rdc_tool/server_runtime.py#L647-L654)
+- [rdc_tool/server_runtime.py:427-447](file://rdc_tool/server_runtime.py#L427-L447)
 
 ### 守护进程通信与超时
 - daemon/client.daemon_request 通过命名管道发送方法调用，若未在规定时间内收到响应，则抛出 DaemonRequestTimeout，包含 failed_step、timeout_seconds、active_request_count、active_operation、daemon_state_excerpt 等诊断信息
 - daemon/server 维护 state（pid、started_at、last_activity_at、attached_clients、active_request_count、active_operation 等），并在每次请求后刷新状态
 
 **章节来源**
-- [rdx/daemon/client.py:467-515](file://rdx/daemon/client.py#L467-L515)
-- [rdx/daemon/server.py:126-159](file://rdx/daemon/server.py#L126-L159)
+- [rdc_tool/daemon/client.py:467-515](file://rdc_tool/daemon/client.py#L467-L515)
+- [rdc_tool/daemon/server.py:126-159](file://rdc_tool/daemon/server.py#L126-L159)
 
 ### 类图：错误类型与响应模型
 ```mermaid
@@ -239,8 +239,8 @@ ToolResponse --> ErrorDetail : "包含"
 ```
 
 **图示来源**
-- [rdx/core/errors.py:9-87](file://rdx/core/errors.py#L9-L87)
-- [rdx/models.py:111-122](file://rdx/models.py#L111-L122)
+- [rdc_tool/core/errors.py:9-87](file://rdc_tool/core/errors.py#L9-L87)
+- [rdc_tool/models.py:111-122](file://rdc_tool/models.py#L111-L122)
 
 ## 依赖关系分析
 - server.py 依赖 core/contracts.py 生成统一响应，依赖 core/errors.py 进行异常映射
@@ -259,19 +259,19 @@ T["tests/test_runtime_recovery_and_discovery.py"] --> R
 ```
 
 **图示来源**
-- [rdx/server.py:90-149](file://rdx/server.py#L90-L149)
-- [rdx/server_runtime.py:1-120](file://rdx/server_runtime.py#L1-L120)
-- [rdx/operation_definitions.py:324-393](file://rdx/operation_definitions.py#L324-L393)
-- [rdx/daemon/client.py:467-515](file://rdx/daemon/client.py#L467-L515)
-- [rdx/daemon/server.py:126-159](file://rdx/daemon/server.py#L126-L159)
+- [rdc_tool/server.py:90-149](file://rdc_tool/server.py#L90-L149)
+- [rdc_tool/server_runtime.py:1-120](file://rdc_tool/server_runtime.py#L1-L120)
+- [rdc_tool/operation_definitions.py:324-393](file://rdc_tool/operation_definitions.py#L324-L393)
+- [rdc_tool/daemon/client.py:467-515](file://rdc_tool/daemon/client.py#L467-L515)
+- [rdc_tool/daemon/server.py:126-159](file://rdc_tool/daemon/server.py#L126-L159)
 - [tests/test_runtime_recovery_and_discovery.py:135-169](file://tests/test_runtime_recovery_and_discovery.py#L135-L169)
 
 **章节来源**
-- [rdx/server.py:90-149](file://rdx/server.py#L90-L149)
-- [rdx/server_runtime.py:1-120](file://rdx/server_runtime.py#L1-L120)
-- [rdx/operation_definitions.py:324-393](file://rdx/operation_definitions.py#L324-L393)
-- [rdx/daemon/client.py:467-515](file://rdx/daemon/client.py#L467-L515)
-- [rdx/daemon/server.py:126-159](file://rdx/daemon/server.py#L126-L159)
+- [rdc_tool/server.py:90-149](file://rdc_tool/server.py#L90-L149)
+- [rdc_tool/server_runtime.py:1-120](file://rdc_tool/server_runtime.py#L1-L120)
+- [rdc_tool/operation_definitions.py:324-393](file://rdc_tool/operation_definitions.py#L324-L393)
+- [rdc_tool/daemon/client.py:467-515](file://rdc_tool/daemon/client.py#L467-L515)
+- [rdc_tool/daemon/server.py:126-159](file://rdc_tool/daemon/server.py#L126-L159)
 - [tests/test_runtime_recovery_and_discovery.py:135-169](file://tests/test_runtime_recovery_and_discovery.py#L135-L169)
 
 ## 性能考量
@@ -305,13 +305,13 @@ T["tests/test_runtime_recovery_and_discovery.py"] --> R
   - 使用 rd.core.get_runtime_metrics 查看 limits、metrics、recovery、recent_operations
 
 **章节来源**
-- [rdx/core/errors.py:9-119](file://rdx/core/errors.py#L9-L119)
-- [rdx/daemon/client.py:467-515](file://rdx/daemon/client.py#L467-L515)
-- [rdx/operation_definitions.py:324-393](file://rdx/operation_definitions.py#L324-L393)
+- [rdc_tool/core/errors.py:9-119](file://rdc_tool/core/errors.py#L9-L119)
+- [rdc_tool/daemon/client.py:467-515](file://rdc_tool/daemon/client.py#L467-L515)
+- [rdc_tool/operation_definitions.py:324-393](file://rdc_tool/operation_definitions.py#L324-L393)
 - [tests/test_runtime_recovery_and_discovery.py:135-169](file://tests/test_runtime_recovery_and_discovery.py#L135-L169)
 
 ## 结论
-RDX-Tool 通过统一的错误响应格式与稳定的错误分类，实现了跨层一致的异常处理；借助 server_runtime 的上下文管理与操作历史，提供了强大的状态查询能力；配合守护进程的通信与超时机制，增强了系统的可观测性与健壮性。遵循本文的最佳实践，可有效提升错误处理的效率与系统稳定性。
+RDC-Tool 通过统一的错误响应格式与稳定的错误分类，实现了跨层一致的异常处理；借助 server_runtime 的上下文管理与操作历史，提供了强大的状态查询能力；配合守护进程的通信与超时机制，增强了系统的可观测性与健壮性。遵循本文的最佳实践，可有效提升错误处理的效率与系统稳定性。
 
 [本节为总结，不直接分析具体文件]
 

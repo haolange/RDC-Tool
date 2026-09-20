@@ -26,14 +26,14 @@ def _cmd_exe() -> str:
 
 def _launcher_env() -> dict[str, str]:
     env = os.environ.copy()
-    env.setdefault("RDX_TOOLS_ROOT", str(ROOT))
-    env.pop("RDX_PYTHON", None)
+    env.setdefault("RDC_TOOL_ROOT", str(ROOT))
+    env.pop("RDC_TOOL_PYTHON", None)
     return env
 
 
 def _run_cmd(*args: str) -> tuple[int, dict, str]:
     proc = subprocess.run(
-        [_cmd_exe(), "/c", str(ROOT / "bin" / "rdx.cmd"), *args],
+        [_cmd_exe(), "/c", str(ROOT / "bin" / "rdc-tool.cmd"), *args],
         cwd=str(ROOT),
         stdin=subprocess.DEVNULL,
         capture_output=True,
@@ -50,7 +50,7 @@ def _run_cmd(*args: str) -> tuple[int, dict, str]:
 
 def _run_cmd_from_cwd(cwd: Path, *args: str) -> tuple[int, dict, str]:
     proc = subprocess.run(
-        [_cmd_exe(), "/c", str(ROOT / str(ROOT / "bin" / "rdx.cmd")), *args],
+        [_cmd_exe(), "/c", str(ROOT / str(ROOT / "bin" / "rdc-tool.cmd")), *args],
         cwd=str(cwd),
         stdin=subprocess.DEVNULL,
         capture_output=True,
@@ -81,7 +81,7 @@ def _cleanup_context(context_id: str) -> None:
         )
 
 
-@pytest.mark.skipif(os.name != "nt", reason="bin/rdx.cmd launcher tests are windows-specific")
+@pytest.mark.skipif(os.name != "nt", reason="bin/rdc-tool.cmd launcher tests are windows-specific")
 def test_noninteractive_daemon_status_returns_full_payload() -> None:
     context_id = "pytest-cmd-daemon-status"
     try:
@@ -91,24 +91,24 @@ def test_noninteractive_daemon_status_returns_full_payload() -> None:
 
     assert code == 0
     assert payload["ok"] is True
-    assert payload["result_kind"] == "rdx.daemon.status"
+    assert payload["result_kind"] == "rdc_tool.daemon.status"
     assert isinstance(payload.get("data"), dict)
     assert isinstance(payload["data"].get("state"), dict)
 
 
-@pytest.mark.skipif(os.name != "nt", reason="bin/rdx.cmd launcher tests are windows-specific")
+@pytest.mark.skipif(os.name != "nt", reason="bin/rdc-tool.cmd launcher tests are windows-specific")
 def test_noninteractive_doctor_returns_cli_only_payload() -> None:
     code, payload, _ = _run_cmd( "--json", "doctor")
 
     assert code == 0
     assert payload["ok"] is True
-    assert payload["result_kind"] == "rdx.doctor"
+    assert payload["result_kind"] == "rdc_tool.doctor"
 
 
-@pytest.mark.skipif(os.name != "nt", reason="bin/rdx.cmd launcher tests are windows-specific")
+@pytest.mark.skipif(os.name != "nt", reason="bin/rdc-tool.cmd launcher tests are windows-specific")
 def test_noninteractive_unknown_command_uses_cli_usage_error() -> None:
     proc = subprocess.run(
-        [_cmd_exe(), "/c", str(ROOT / "bin" / "rdx.cmd"),  "__unknown_command__"],
+        [_cmd_exe(), "/c", str(ROOT / "bin" / "rdc-tool.cmd"),  "__unknown_command__"],
         cwd=str(ROOT),
         stdin=subprocess.DEVNULL,
         capture_output=True,
@@ -125,18 +125,18 @@ def test_noninteractive_unknown_command_uses_cli_usage_error() -> None:
     assert "invalid choice" in combined
 
 
-@pytest.mark.skipif(os.name != "nt", reason="bin/rdx.cmd launcher tests are windows-specific")
+@pytest.mark.skipif(os.name != "nt", reason="bin/rdc-tool.cmd launcher tests are windows-specific")
 def test_launcher_missing_command_returns_usage_error() -> None:
-    proc = subprocess.run([_cmd_exe(), "/c", str(ROOT / "bin" / "rdx.cmd")], cwd=ROOT, stdin=subprocess.DEVNULL, capture_output=True, text=True, env=_launcher_env(), timeout=30)
+    proc = subprocess.run([_cmd_exe(), "/c", str(ROOT / "bin" / "rdc-tool.cmd")], cwd=ROOT, stdin=subprocess.DEVNULL, capture_output=True, text=True, env=_launcher_env(), timeout=30)
     assert proc.returncode == 2
     assert "missing command" in proc.stderr
 
 
-@pytest.mark.skipif(os.name != "nt", reason="bin/rdx.cmd launcher tests are windows-specific")
+@pytest.mark.skipif(os.name != "nt", reason="bin/rdc-tool.cmd launcher tests are windows-specific")
 def test_noninteractive_version_and_completion_are_available() -> None:
     version_code, version_payload, _ = _run_cmd( "version", "--json")
     completion_proc = subprocess.run(
-        [_cmd_exe(), "/c", str(ROOT / "bin" / "rdx.cmd"),  "completion", "powershell"],
+        [_cmd_exe(), "/c", str(ROOT / "bin" / "rdc-tool.cmd"),  "completion", "powershell"],
         cwd=str(ROOT),
         stdin=subprocess.DEVNULL,
         capture_output=True,
@@ -150,11 +150,11 @@ def test_noninteractive_version_and_completion_are_available() -> None:
 
     assert version_code == 0
     assert version_payload["ok"] is True
-    assert version_payload["result_kind"] == "rdx.version"
+    assert version_payload["result_kind"] == "rdc_tool.version"
     assert completion_proc.returncode == 0
     assert "Register-ArgumentCompleter" in completion_proc.stdout
 
-@pytest.mark.skipif(os.name != "nt", reason="bin/rdx.cmd launcher tests are windows-specific")
+@pytest.mark.skipif(os.name != "nt", reason="bin/rdc-tool.cmd launcher tests are windows-specific")
 def test_noninteractive_facade_out_argument_is_passed_through() -> None:
     context_id = "pytest-cmd-facade-out"
     try:
@@ -176,7 +176,7 @@ def test_noninteractive_facade_out_argument_is_passed_through() -> None:
     assert "Parameter cannot be processed" not in output
 
 
-@pytest.mark.skipif(os.name != "nt", reason="bin/rdx.cmd launcher tests are windows-specific")
+@pytest.mark.skipif(os.name != "nt", reason="bin/rdc-tool.cmd launcher tests are windows-specific")
 def test_noninteractive_tools_list_passthroughs_canonical_payload() -> None:
     code, payload, _ = _run_cmd(
 
@@ -189,11 +189,11 @@ def test_noninteractive_tools_list_passthroughs_canonical_payload() -> None:
 
     assert code == 0
     assert payload["ok"] is True
-    assert payload["result_kind"] == "rdx.tools.list"
+    assert payload["result_kind"] == "rdc_tool.tools.list"
     assert payload["data"]["tool_count"] >= 1
 
 
-@pytest.mark.skipif(os.name != "nt", reason="bin/rdx.cmd launcher tests are windows-specific")
+@pytest.mark.skipif(os.name != "nt", reason="bin/rdc-tool.cmd launcher tests are windows-specific")
 def test_noninteractive_tools_search_runs_from_caller_cwd(tmp_path: Path) -> None:
     code, payload, _ = _run_cmd_from_cwd(
         tmp_path,
@@ -206,5 +206,5 @@ def test_noninteractive_tools_search_runs_from_caller_cwd(tmp_path: Path) -> Non
 
     assert code == 0
     assert payload["ok"] is True
-    assert payload["result_kind"] == "rdx.tools.search"
+    assert payload["result_kind"] == "rdc_tool.tools.search"
     assert payload["data"]["tool_count"] >= 1

@@ -1,0 +1,44 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  contract:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - run: python -m pip install -e ".[dev]"
+      - run: python spec/validate_catalog.py
+      - run: python scripts/generate_tool_reference.py --check
+      - run: python -m pytest tests -q -m "unit or contract" --basetemp=intermediate/ci-tests
+      - run: python scripts/check_markdown_health.py
+      - run: python scripts/check_identity.py
+  doctor-no-capture:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      - name: Start packaged CLI without a capture
+        shell: pwsh
+        run: |
+          & .\bin\rdc-tool.cmd --version
+          if ($LASTEXITCODE -ne 0) { throw 'CLI version failed' }
+          $result = & .\bin\rdc-tool.cmd --json doctor
+          $exitCode = $LASTEXITCODE
+          $result
+          $payload = $result | ConvertFrom-Json
+          if ($payload.result_kind -ne 'rdc_tool.doctor') { throw 'Unexpected doctor response' }
+          if ($exitCode -notin @(0, 2)) { throw "Unexpected doctor exit: $exitCode" }
+          exit 0

@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from rdx.runtime_catalog import catalog_payload
+from rdc_tool.runtime_catalog import catalog_payload
 
 DEFAULT_OUTPUT = ROOT / "docs" / "tool-reference.md"
 
@@ -72,13 +72,13 @@ def generate_tool_reference() -> str:
     lines: list[str] = [
         "# Tool Reference",
         "",
-        "This file is generated from the structured definitions in `rdx/operation_definitions.py`. Do not edit it by hand; run `python -B scripts/generate_tool_reference.py`.",
+        "This file is generated from the structured definitions in `rdc_tool/operation_definitions.py`. Do not edit it by hand; run `python -B scripts/generate_tool_reference.py`.",
         "",
         f"- Tool count: {len(tools)}",
         f"- Group count: {len(grouped)}",
         f"- Catalog fingerprint: `{payload.get('fingerprint', '')}`",
-        "- Canonical transport: `rdx call <rd.*> --format json`",
-        "- Discovery: `rdx tools list`, `rdx tools search <query>`, and `rdx tools describe <rd.*>`",
+        "- Canonical transport: `rdc-tool call <rd.*> --format json`",
+        "- Discovery: `rdc-tool tools list`, `rdc-tool tools search <query>`, and `rdc-tool tools describe <rd.*>`",
         "",
         "The catalog declares what an operation accepts and what it can affect. Authorization is still enforced by the embedding host; a catalog entry does not grant access.",
         "",

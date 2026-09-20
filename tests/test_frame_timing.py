@@ -3,7 +3,7 @@ from types import SimpleNamespace as NS
 
 import pytest
 
-from rdx.core.perf_service import measure_frame_gpu
+from rdc_tool.core.perf_service import measure_frame_gpu
 
 
 def fixture_controller(values):

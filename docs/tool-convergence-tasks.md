@@ -261,3 +261,24 @@ Publication cleanup recheck: 295 OS-temp investigation fixture directories from 
 | C05 Short A-B-A | H01-H07 | 通过 | Small disposable fixture; two native runs completed in about 22 seconds | Actual pixel change/restoration and five signed receipts independently verified; applicable original fingerprint retained |
 | C06 Independent verification | C01-C05 | 通过 | Domain tests, native/device proofs, Agent gates and independent review | Current Agent2944/413 files, contracts248, coverage ratchet/typecheck/lint/gates/build; Tools405 and release gate; native/device and independent scoped review passed; verification.json; C04 narrow supplement independently passed |
 | C07 Closeout | C06 | 通过 | Contracts/ledger, owned resource cleanup and desktop ownership | Docs and evidence synchronized; credentials/test copies/QA cleaned, contexts cleared before owned daemon/helper stop, no forwards; ordinary desktop launch/exit and absent canonical lock verified. Supplemental two contexts released, credentials/copies/QA cleaned, ordinary desktop window verified and canonical lock absent. All C01-C07 complete; agent/supplement/cleanup.json |
+
+## RDC identity and public maintenance (2026-09-20)
+
+Approved scope: RDC-Tool and RDC-Agent identity hard cut, including Agent internal identifiers; local one-time data conversion only; no runtime migration compatibility. Preserve rd.* operation contracts, captures and original historical evidence. Work on main; authorized non-force commits/pushes, Tool release and Issue #1 closure after release. Agent stays private. The earlier task restrictions above are historical and do not override this approval.
+
+| Task | Dependencies | State | Completion / evidence |
+|---|---|---|---|
+| T1 Naming and contract baseline | — | 通过 | Approved naming map; original catalog saved locally for semantic comparison; current worktrees clean |
+| T2 Tool identity and distribution | T1 | 通过 | Canonical package/launchers/env/metadata; 128 operation definitions unchanged; original fingerprint retained |
+| T3 Tool docs, License and CI | T2 | 待验证 | Generated references, Markdown and identity checks pass; Windows workflow authored, remote execution pending; wiki retained by user decision |
+| T4 Agent complete identity | T1,T2 | 通过 | Full source/IPC/policy/skill/path rename; same-install Settings validation and real 128-operation catalog handshake pass |
+| T5 Integrated gates | T3,T4 | 通过 | Tool 407 cases covered by full batch and affected rechecks; catalog/reference/Markdown/identity/source release gate pass. Agent 2946 pass, 4 existing opt-in skips; coverage ratchet 75.14 lines/76.81 functions/62.23 branches/72.72 statements; typecheck/lint/gates/build pass |
+| T6 Package and local cutover | T5 | 通过 | Single Tool zip SHA256 c5067db3143458d5dfcce07779d075f3ba33cfd605d911b1ca6953c7af29b74c; 3132 extracted/installed files match. Settings, catalog, bounded replay open/close, historical messages and new resource read/write pass. Same-volume roots renamed; IDs/capture hashes preserved. Agent packaged desktop starts/closes normally and releases its lock |
+| T7 Commit, push and release | T6 | 待执行 | Matching remote heads, green Tool Actions, annotated tag and assets |
+| T8 Issue and cleanup | T7 | 待执行 | Comment then close, remote verification, owned resource cleanup |
+
+Validation policy: focused batch after identity edits; one complete final gate batch; rerun only affected failures. No repeated GPU/Android acceptance or full package copies. Original local data and historical evidence are not disposable test output.
+
+Acceptance boundaries: installation is isolated on this host, not a second clean Windows machine. No repeat Android presentation or model-effectiveness claim. The browser automation carrier blocked localhost and no Chrome carrier was available; UI screenshots/visual inspection are not claimed. Native desktop window creation/title and normal exit were independently observed through the process lifecycle.
+
+Packaging failure resolved during T6: electron-builder 26.8.1 omitted pnpm deduplicated transitive dependencies, causing a packaged-main missing-module error while source execution worked. Agent upgraded to upstream 26.16.1; the packaged runtime and ordinary desktop then passed. Desktop smoke now uses isolated data roots and requires actual service initialization, preventing a live error-dialog process from passing. General's resident Skill wording remains domain-neutral; assertions were retained. Both wiki inventories are preserved (159 Tool, 253 Agent); naming/reference corrections were delegated to Luna as requested.

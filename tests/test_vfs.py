@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from rdx import server
+from rdc_tool import server
 
 
 @pytest.mark.unit

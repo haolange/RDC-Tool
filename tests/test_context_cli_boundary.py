@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from rdx import server
-from rdx.context_snapshot import clear_context_snapshot
-from rdx.runtime_state import clear_context_state
+from rdc_tool import server
+from rdc_tool.context_snapshot import clear_context_snapshot
+from rdc_tool.runtime_state import clear_context_state
 
 
 PRE_GA_CONTEXT_FIELDS = {

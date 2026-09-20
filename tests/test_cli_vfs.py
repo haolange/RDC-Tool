@@ -3,11 +3,11 @@ from __future__ import annotations
 import argparse
 import asyncio
 
-from rdx import cli as rdx_cli
+from rdc_tool import cli as rdc_tool_cli
 
 
 def test_build_parser_accepts_vfs_tree_command() -> None:
-    parser = rdx_cli._build_parser()
+    parser = rdc_tool_cli._build_parser()
     args = parser.parse_args(["vfs", "tree", "--path", "/draws", "--depth", "3"])
 
     assert args.command == "vfs"
@@ -18,7 +18,7 @@ def test_build_parser_accepts_vfs_tree_command() -> None:
 
 
 def test_build_parser_accepts_facade_commands() -> None:
-    parser = rdx_cli._build_parser()
+    parser = rdc_tool_cli._build_parser()
 
     event_list = parser.parse_args(["event", "list", "--format", "tsv"])
     event_show = parser.parse_args(["event", "show", "--event-id", "7"])
@@ -41,7 +41,7 @@ def test_build_parser_accepts_facade_commands() -> None:
 
 
 def test_build_parser_accepts_cli_first_doctor_and_tools() -> None:
-    parser = rdx_cli._build_parser()
+    parser = rdc_tool_cli._build_parser()
 
     doctor = parser.parse_args(["--json", "doctor"])
     version = parser.parse_args(["version", "--json"])
@@ -79,19 +79,19 @@ def test_build_parser_accepts_cli_first_doctor_and_tools() -> None:
 def test_doctor_reports_cli_only_contract(monkeypatch) -> None:
     captured: list[dict] = []
 
-    monkeypatch.setattr(rdx_cli, "_print_json", lambda payload: captured.append(payload))
-    monkeypatch.setattr(rdx_cli, "_daemon_status_payload", lambda context: {"ok": True, "data": {"running": False, "context_id": context}})
-    monkeypatch.setattr(rdx_cli, "missing_dependencies", lambda: [])
+    monkeypatch.setattr(rdc_tool_cli, "_print_json", lambda payload: captured.append(payload))
+    monkeypatch.setattr(rdc_tool_cli, "_daemon_status_payload", lambda context: {"ok": True, "data": {"running": False, "context_id": context}})
+    monkeypatch.setattr(rdc_tool_cli, "missing_dependencies", lambda: [])
     monkeypatch.setattr(
-        rdx_cli,
+        rdc_tool_cli,
         "validate_bundled_python_layout",
         lambda: (True, [], {"bundled_python": {"python_version": "test", "python_entry": "python.exe"}}),
     )
 
     args = argparse.Namespace(command="doctor", daemon_context="ctx-doctor", json=True)
-    exit_code = asyncio.run(rdx_cli._main_async(args))
+    exit_code = asyncio.run(rdc_tool_cli._main_async(args))
 
-    assert exit_code == rdx_cli.EXIT_OK
+    assert exit_code == rdc_tool_cli.EXIT_OK
     assert captured[0]["ok"] is True
     details = captured[0]["data"]
     assert details["context_id"] == "ctx-doctor"
@@ -120,23 +120,23 @@ def test_tools_list_and_search_emit_catalog_summaries(monkeypatch) -> None:
         },
     ]
 
-    monkeypatch.setattr(rdx_cli, "_print_json", lambda payload: captured.append(payload))
-    monkeypatch.setattr(rdx_cli, "load_tool_catalog", lambda: fake_catalog)
-    monkeypatch.setattr(rdx_cli, "catalog_payload", lambda: {"schema_version": "1", "fingerprint": "abc123"})
+    monkeypatch.setattr(rdc_tool_cli, "_print_json", lambda payload: captured.append(payload))
+    monkeypatch.setattr(rdc_tool_cli, "load_tool_catalog", lambda: fake_catalog)
+    monkeypatch.setattr(rdc_tool_cli, "catalog_payload", lambda: {"schema_version": "1", "fingerprint": "abc123"})
 
     list_code = asyncio.run(
-        rdx_cli._main_async(argparse.Namespace(command="tools", tools_cmd="list", namespace="", limit=0, daemon_context="default")),
+        rdc_tool_cli._main_async(argparse.Namespace(command="tools", tools_cmd="list", namespace="", limit=0, daemon_context="default")),
     )
     search_code = asyncio.run(
-        rdx_cli._main_async(argparse.Namespace(command="tools", tools_cmd="search", query="pipeline", limit=20, daemon_context="default")),
+        rdc_tool_cli._main_async(argparse.Namespace(command="tools", tools_cmd="search", query="pipeline", limit=20, daemon_context="default")),
     )
 
-    assert list_code == rdx_cli.EXIT_OK
-    assert search_code == rdx_cli.EXIT_OK
-    assert captured[0]["result_kind"] == "rdx.tools.list"
+    assert list_code == rdc_tool_cli.EXIT_OK
+    assert search_code == rdc_tool_cli.EXIT_OK
+    assert captured[0]["result_kind"] == "rdc_tool.tools.list"
     assert captured[0]["data"]["tool_count"] == 2
     assert captured[0]["data"]["fingerprint"] == "abc123"
-    assert captured[1]["result_kind"] == "rdx.tools.search"
+    assert captured[1]["result_kind"] == "rdc_tool.tools.search"
     assert captured[1]["data"]["tool_count"] == 1
     assert captured[1]["data"]["tools"][0]["name"] == "rd.pipeline.get_state"
 
@@ -149,45 +149,45 @@ def test_tools_describe_returns_full_contract_and_rejects_unknown(monkeypatch) -
         "scope": "replay",
         "effects": ["replay_position"],
     }
-    monkeypatch.setattr(rdx_cli, "_print_json", lambda payload: captured.append(payload))
-    monkeypatch.setattr(rdx_cli, "describe_operation", lambda name: definition if name == definition["name"] else (_ for _ in ()).throw(ValueError("unknown")))
+    monkeypatch.setattr(rdc_tool_cli, "_print_json", lambda payload: captured.append(payload))
+    monkeypatch.setattr(rdc_tool_cli, "describe_operation", lambda name: definition if name == definition["name"] else (_ for _ in ()).throw(ValueError("unknown")))
 
-    known = asyncio.run(rdx_cli._main_async(argparse.Namespace(command="tools", tools_cmd="describe", operation=definition["name"], daemon_context="default")))
-    unknown = asyncio.run(rdx_cli._main_async(argparse.Namespace(command="tools", tools_cmd="describe", operation="rd.unknown.nope", daemon_context="default")))
+    known = asyncio.run(rdc_tool_cli._main_async(argparse.Namespace(command="tools", tools_cmd="describe", operation=definition["name"], daemon_context="default")))
+    unknown = asyncio.run(rdc_tool_cli._main_async(argparse.Namespace(command="tools", tools_cmd="describe", operation="rd.unknown.nope", daemon_context="default")))
 
-    assert known == rdx_cli.EXIT_OK
-    assert captured[0]["result_kind"] == "rdx.tools.describe"
+    assert known == rdc_tool_cli.EXIT_OK
+    assert captured[0]["result_kind"] == "rdc_tool.tools.describe"
     assert captured[0]["data"] == definition
-    assert unknown == rdx_cli.EXIT_RUNTIME_ERR
+    assert unknown == rdc_tool_cli.EXIT_RUNTIME_ERR
     assert captured[1]["error"]["code"] == "operation_not_found"
 
 
 def test_version_command_emits_stable_json(monkeypatch) -> None:
     captured: list[dict] = []
 
-    monkeypatch.setattr(rdx_cli, "_print_json", lambda payload: captured.append(payload))
+    monkeypatch.setattr(rdc_tool_cli, "_print_json", lambda payload: captured.append(payload))
 
     exit_code = asyncio.run(
-        rdx_cli._main_async(argparse.Namespace(command="version", json=True, daemon_context="default")),
+        rdc_tool_cli._main_async(argparse.Namespace(command="version", json=True, daemon_context="default")),
     )
 
-    assert exit_code == rdx_cli.EXIT_OK
+    assert exit_code == rdc_tool_cli.EXIT_OK
     assert captured[0]["ok"] is True
-    assert captured[0]["result_kind"] == "rdx.version"
-    assert captured[0]["data"]["public_commands"] == ["rdx"]
+    assert captured[0]["result_kind"] == "rdc_tool.version"
+    assert captured[0]["data"]["public_commands"] == ["rdc-tool"]
     assert {"windows_cmd", "posix_shell", "python_cli"} <= set(captured[0]["data"]["entrypoints"])
     assert captured[0]["data"]["compatibility"]["json_envelope"] == "stable"
     assert captured[0]["data"]["compatibility"]["stability"] == "current-contract"
 
 
 def test_completion_command_outputs_shell_script(monkeypatch, capsys) -> None:
-    monkeypatch.setattr(rdx_cli, "load_tool_catalog", lambda: [{"name": "rd.session.get_context"}])
+    monkeypatch.setattr(rdc_tool_cli, "load_tool_catalog", lambda: [{"name": "rd.session.get_context"}])
 
     exit_code = asyncio.run(
-        rdx_cli._main_async(argparse.Namespace(command="completion", shell="powershell", daemon_context="default")),
+        rdc_tool_cli._main_async(argparse.Namespace(command="completion", shell="powershell", daemon_context="default")),
     )
 
-    assert exit_code == rdx_cli.EXIT_OK
+    assert exit_code == rdc_tool_cli.EXIT_OK
     output = capsys.readouterr().out
     assert "Register-ArgumentCompleter" in output
     assert "rd.session.get_context" in output
@@ -201,14 +201,14 @@ def test_context_commands_route_to_canonical_session_tools(monkeypatch) -> None:
         seen.append((operation, dict(args), context))
         return {"ok": True, "result_kind": operation, "data": {"context_id": context}, "artifacts": [], "error": None, "meta": {}, "projections": {}}
 
-    monkeypatch.setattr(rdx_cli, "_daemon_exec", _fake_daemon_exec)
-    monkeypatch.setattr(rdx_cli, "_print_json", lambda payload: captured.append(payload))
+    monkeypatch.setattr(rdc_tool_cli, "_daemon_exec", _fake_daemon_exec)
+    monkeypatch.setattr(rdc_tool_cli, "_print_json", lambda payload: captured.append(payload))
 
     status_code = asyncio.run(
-        rdx_cli._main_async(argparse.Namespace(command="context", context_cmd="status", daemon_context="ctx-agent", json=True)),
+        rdc_tool_cli._main_async(argparse.Namespace(command="context", context_cmd="status", daemon_context="ctx-agent", json=True)),
     )
     update_code = asyncio.run(
-        rdx_cli._main_async(
+        rdc_tool_cli._main_async(
             argparse.Namespace(
                 command="context",
                 context_cmd="update",
@@ -220,12 +220,12 @@ def test_context_commands_route_to_canonical_session_tools(monkeypatch) -> None:
         ),
     )
     list_code = asyncio.run(
-        rdx_cli._main_async(argparse.Namespace(command="context", context_cmd="list", daemon_context="ctx-agent", json=True)),
+        rdc_tool_cli._main_async(argparse.Namespace(command="context", context_cmd="list", daemon_context="ctx-agent", json=True)),
     )
 
-    assert status_code == rdx_cli.EXIT_OK
-    assert update_code == rdx_cli.EXIT_OK
-    assert list_code == rdx_cli.EXIT_OK
+    assert status_code == rdc_tool_cli.EXIT_OK
+    assert update_code == rdc_tool_cli.EXIT_OK
+    assert list_code == rdc_tool_cli.EXIT_OK
     assert seen == [
         ("rd.session.get_context", {}, "ctx-agent"),
         ("rd.session.update_context", {"key": "notes", "value": {"summary": "triaged"}}, "ctx-agent"),
@@ -238,14 +238,14 @@ def test_session_preview_status_without_daemon_is_successful_status(monkeypatch)
     captured: list[dict] = []
 
     monkeypatch.setattr(
-        rdx_cli,
+        rdc_tool_cli,
         "_daemon_status_payload",
         lambda context: {"ok": True, "data": {"running": False, "state": {"context_id": context}}},
     )
-    monkeypatch.setattr(rdx_cli, "_print_json", lambda payload: captured.append(payload))
+    monkeypatch.setattr(rdc_tool_cli, "_print_json", lambda payload: captured.append(payload))
 
     exit_code = asyncio.run(
-        rdx_cli._main_async(
+        rdc_tool_cli._main_async(
             argparse.Namespace(
                 command="session",
                 session_cmd="preview",
@@ -255,8 +255,8 @@ def test_session_preview_status_without_daemon_is_successful_status(monkeypatch)
         ),
     )
 
-    assert exit_code == rdx_cli.EXIT_OK
-    assert captured[0]["result_kind"] == "rdx.session.preview.status"
+    assert exit_code == rdc_tool_cli.EXIT_OK
+    assert captured[0]["result_kind"] == "rdc_tool.session.preview.status"
     assert captured[0]["data"]["running"] is False
     assert captured[0]["data"]["has_session"] is False
 
@@ -270,8 +270,8 @@ def test_vfs_command_routes_to_direct_exec(monkeypatch) -> None:
         assert context == "default"
         return {"ok": True, "data": {"node": {"path": "/pipeline"}}, "projections": {}, "meta": {}}
 
-    monkeypatch.setattr(rdx_cli, "_daemon_exec", _fake_daemon_exec)
-    monkeypatch.setattr(rdx_cli, "_print_json", lambda payload: captured.append(payload))
+    monkeypatch.setattr(rdc_tool_cli, "_daemon_exec", _fake_daemon_exec)
+    monkeypatch.setattr(rdc_tool_cli, "_print_json", lambda payload: captured.append(payload))
 
     args = argparse.Namespace(
         command="vfs",
@@ -281,9 +281,9 @@ def test_vfs_command_routes_to_direct_exec(monkeypatch) -> None:
         format="json",
         daemon_context="default",
     )
-    exit_code = asyncio.run(rdx_cli._main_async(args))
+    exit_code = asyncio.run(rdc_tool_cli._main_async(args))
 
-    assert exit_code == rdx_cli.EXIT_OK
+    assert exit_code == rdc_tool_cli.EXIT_OK
     assert captured[0]["ok"] is True
     assert captured[0]["data"]["node"]["path"] == "/pipeline"
 
@@ -297,8 +297,8 @@ def test_vfs_command_routes_to_daemon_exec(monkeypatch) -> None:
         assert context == "ctx-vfs"
         return {"ok": True, "data": {"tree": {"path": "/draws"}}}
 
-    monkeypatch.setattr(rdx_cli, "_daemon_exec", _fake_daemon_exec)
-    monkeypatch.setattr(rdx_cli, "_print_json", lambda payload: captured.append(payload))
+    monkeypatch.setattr(rdc_tool_cli, "_daemon_exec", _fake_daemon_exec)
+    monkeypatch.setattr(rdc_tool_cli, "_print_json", lambda payload: captured.append(payload))
 
     args = argparse.Namespace(
         command="vfs",
@@ -310,9 +310,9 @@ def test_vfs_command_routes_to_daemon_exec(monkeypatch) -> None:
         format="json",
         daemon_context="ctx-vfs",
     )
-    exit_code = asyncio.run(rdx_cli._main_async(args))
+    exit_code = asyncio.run(rdc_tool_cli._main_async(args))
 
-    assert exit_code == rdx_cli.EXIT_OK
+    assert exit_code == rdc_tool_cli.EXIT_OK
     assert captured[0]["ok"] is True
     assert captured[0]["data"]["tree"]["path"] == "/draws"
 
@@ -338,7 +338,7 @@ def test_vfs_ls_tsv_renders_daemon_projection(monkeypatch, capsys) -> None:
             },
         }
 
-    monkeypatch.setattr(rdx_cli, "_daemon_exec", _fake_daemon_exec)
+    monkeypatch.setattr(rdc_tool_cli, "_daemon_exec", _fake_daemon_exec)
 
     args = argparse.Namespace(
         command="vfs",
@@ -349,9 +349,9 @@ def test_vfs_ls_tsv_renders_daemon_projection(monkeypatch, capsys) -> None:
         daemon_context="ctx-vfs",
     )
 
-    exit_code = asyncio.run(rdx_cli._main_async(args))
+    exit_code = asyncio.run(rdc_tool_cli._main_async(args))
 
-    assert exit_code == rdx_cli.EXIT_OK
+    assert exit_code == rdc_tool_cli.EXIT_OK
     assert "format_version\tname\tpath" in capsys.readouterr().out
 
 
@@ -362,11 +362,11 @@ def test_tsv_missing_projection_returns_stable_validation_error(monkeypatch) -> 
         assert args["projection"] == {"kind": "tabular", "include_tsv_text": True}
         return {"ok": True, "result_kind": operation, "data": {"context_id": context}, "artifacts": [], "error": None, "meta": {}, "projections": {}}
 
-    monkeypatch.setattr(rdx_cli, "_daemon_exec", _fake_daemon_exec)
-    monkeypatch.setattr(rdx_cli, "_print_json", lambda payload: captured.append(payload))
+    monkeypatch.setattr(rdc_tool_cli, "_daemon_exec", _fake_daemon_exec)
+    monkeypatch.setattr(rdc_tool_cli, "_print_json", lambda payload: captured.append(payload))
 
     exit_code = asyncio.run(
-        rdx_cli._main_async(
+        rdc_tool_cli._main_async(
             argparse.Namespace(
                 command="call",
                 operation="rd.session.get_context",
@@ -379,7 +379,7 @@ def test_tsv_missing_projection_returns_stable_validation_error(monkeypatch) -> 
         ),
     )
 
-    assert exit_code == rdx_cli.EXIT_RUNTIME_ERR
+    assert exit_code == rdc_tool_cli.EXIT_RUNTIME_ERR
     assert captured[0]["ok"] is False
     assert captured[0]["error"]["code"] == "tabular_projection_missing"
     assert captured[0]["error"]["details"]["requested_format"] == "tsv"
@@ -388,11 +388,11 @@ def test_tsv_missing_projection_returns_stable_validation_error(monkeypatch) -> 
 def test_pipeline_diff_and_assert_without_session_return_session_required(monkeypatch) -> None:
     captured: list[dict] = []
 
-    monkeypatch.setattr(rdx_cli, "_default_session_id", lambda value, context="default": (_ for _ in ()).throw(RuntimeError("No session_id available.")))
-    monkeypatch.setattr(rdx_cli, "_print_json", lambda payload: captured.append(payload))
+    monkeypatch.setattr(rdc_tool_cli, "_default_session_id", lambda value, context="default": (_ for _ in ()).throw(RuntimeError("No session_id available.")))
+    monkeypatch.setattr(rdc_tool_cli, "_print_json", lambda payload: captured.append(payload))
 
     diff_code = asyncio.run(
-        rdx_cli._main_async(
+        rdc_tool_cli._main_async(
             argparse.Namespace(
                 command="diff",
                 diff_cmd="pipeline",
@@ -405,7 +405,7 @@ def test_pipeline_diff_and_assert_without_session_return_session_required(monkey
         ),
     )
     assert_code = asyncio.run(
-        rdx_cli._main_async(
+        rdc_tool_cli._main_async(
             argparse.Namespace(
                 command="assert",
                 assert_cmd="pipeline",
@@ -418,15 +418,15 @@ def test_pipeline_diff_and_assert_without_session_return_session_required(monkey
         ),
     )
 
-    assert diff_code == rdx_cli.EXIT_RUNTIME_ERR
-    assert assert_code == rdx_cli.EXIT_RUNTIME_ERR
+    assert diff_code == rdc_tool_cli.EXIT_RUNTIME_ERR
+    assert assert_code == rdc_tool_cli.EXIT_RUNTIME_ERR
     assert captured[0]["error"]["code"] == "session_required"
     assert captured[0]["error"]["details"]["context_id"] == "ctx-agent"
     assert captured[1]["error"]["code"] == "session_required"
 
 
 def test_facade_commands_dispatch_to_canonical_tools(monkeypatch) -> None:
-    parser = rdx_cli._build_parser()
+    parser = rdc_tool_cli._build_parser()
     seen: list[tuple[str, dict[str, object], str]] = []
     captured: list[dict] = []
 
@@ -434,8 +434,8 @@ def test_facade_commands_dispatch_to_canonical_tools(monkeypatch) -> None:
         seen.append((operation, dict(args), context))
         return {"ok": True, "result_kind": operation, "data": {"operation": operation}, "artifacts": [], "error": None, "meta": {}, "projections": {}}
 
-    monkeypatch.setattr(rdx_cli, "_daemon_exec", _fake_daemon_exec)
-    monkeypatch.setattr(rdx_cli, "_print_json", lambda payload: captured.append(payload))
+    monkeypatch.setattr(rdc_tool_cli, "_daemon_exec", _fake_daemon_exec)
+    monkeypatch.setattr(rdc_tool_cli, "_print_json", lambda payload: captured.append(payload))
 
     cases = [
         (["event", "list"], "rd.event.get_action_tree", {"session_id": "sess_demo"}),
@@ -458,8 +458,8 @@ def test_facade_commands_dispatch_to_canonical_tools(monkeypatch) -> None:
 
     for argv, expected_operation, expected_subset in cases:
         args = parser.parse_args(["--daemon-context", "ctx-agent", *argv, "--session-id", "sess_demo"])
-        exit_code = asyncio.run(rdx_cli._main_async(args))
-        assert exit_code == rdx_cli.EXIT_OK
+        exit_code = asyncio.run(rdc_tool_cli._main_async(args))
+        assert exit_code == rdc_tool_cli.EXIT_OK
         operation, call_args, context = seen[-1]
         assert operation == expected_operation
         assert context == "ctx-agent"
@@ -472,7 +472,7 @@ def test_facade_commands_dispatch_to_canonical_tools(monkeypatch) -> None:
 
 
 def test_facade_list_tsv_requests_and_renders_projection(monkeypatch, capsys) -> None:
-    parser = rdx_cli._build_parser()
+    parser = rdc_tool_cli._build_parser()
 
     def _fake_daemon_exec(operation: str, args: dict[str, object], *, remote: bool = False, context: str = "default"):  # type: ignore[no-untyped-def]
         assert operation == "rd.event.get_action_tree"
@@ -487,42 +487,42 @@ def test_facade_list_tsv_requests_and_renders_projection(monkeypatch, capsys) ->
             "projections": {"tabular": {"columns": ["event_id", "name"], "rows": [[7, "draw"]], "tsv_text": "event_id\tname\n7\tdraw"}},
         }
 
-    monkeypatch.setattr(rdx_cli, "_daemon_exec", _fake_daemon_exec)
+    monkeypatch.setattr(rdc_tool_cli, "_daemon_exec", _fake_daemon_exec)
     args = parser.parse_args(["event", "list", "--session-id", "sess_demo", "--format", "tsv"])
 
-    exit_code = asyncio.run(rdx_cli._main_async(args))
+    exit_code = asyncio.run(rdc_tool_cli._main_async(args))
 
-    assert exit_code == rdx_cli.EXIT_OK
+    assert exit_code == rdc_tool_cli.EXIT_OK
     assert "event_id	name" in capsys.readouterr().out
 
 
 def test_facade_nested_tsv_returns_projection_not_supported(monkeypatch) -> None:
-    parser = rdx_cli._build_parser()
+    parser = rdc_tool_cli._build_parser()
     captured: list[dict] = []
 
     def _unexpected_daemon_exec(*args, **kwargs):  # type: ignore[no-untyped-def]
         raise AssertionError("nested TSV facade should fail before daemon dispatch")
 
-    monkeypatch.setattr(rdx_cli, "_daemon_exec", _unexpected_daemon_exec)
-    monkeypatch.setattr(rdx_cli, "_print_json", lambda payload: captured.append(payload))
+    monkeypatch.setattr(rdc_tool_cli, "_daemon_exec", _unexpected_daemon_exec)
+    monkeypatch.setattr(rdc_tool_cli, "_print_json", lambda payload: captured.append(payload))
     args = parser.parse_args(["pipeline", "show", "--session-id", "sess_demo", "--format", "tsv"])
 
-    exit_code = asyncio.run(rdx_cli._main_async(args))
+    exit_code = asyncio.run(rdc_tool_cli._main_async(args))
 
-    assert exit_code == rdx_cli.EXIT_RUNTIME_ERR
+    assert exit_code == rdc_tool_cli.EXIT_RUNTIME_ERR
     assert captured[0]["error"]["code"] == "projection_not_supported"
 
 
 def test_facade_without_session_returns_session_required(monkeypatch) -> None:
-    parser = rdx_cli._build_parser()
+    parser = rdc_tool_cli._build_parser()
     captured: list[dict] = []
 
-    monkeypatch.setattr(rdx_cli, "_default_session_id", lambda value, context="default": (_ for _ in ()).throw(RuntimeError("No session_id available.")))
-    monkeypatch.setattr(rdx_cli, "_print_json", lambda payload: captured.append(payload))
+    monkeypatch.setattr(rdc_tool_cli, "_default_session_id", lambda value, context="default": (_ for _ in ()).throw(RuntimeError("No session_id available.")))
+    monkeypatch.setattr(rdc_tool_cli, "_print_json", lambda payload: captured.append(payload))
     args = parser.parse_args(["event", "list"])
 
-    exit_code = asyncio.run(rdx_cli._main_async(args))
+    exit_code = asyncio.run(rdc_tool_cli._main_async(args))
 
-    assert exit_code == rdx_cli.EXIT_RUNTIME_ERR
-    assert captured[0]["result_kind"] == "rdx.event.list"
+    assert exit_code == rdc_tool_cli.EXIT_RUNTIME_ERR
+    assert captured[0]["result_kind"] == "rdc_tool.event.list"
     assert captured[0]["error"]["code"] == "session_required"

@@ -6,7 +6,7 @@ import json
 import os
 from pathlib import Path
 
-from rdx.daemon import worker as daemon_worker
+from rdc_tool.daemon import worker as daemon_worker
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -48,7 +48,7 @@ def _prepare_runtime_source(tmp_path: Path) -> Path:
 
 def test_worker_uses_source_runtime_directly(tmp_path: Path, monkeypatch) -> None:
     source_root = _prepare_runtime_source(tmp_path)
-    monkeypatch.setenv("RDX_TOOLS_ROOT", str(ROOT))
+    monkeypatch.setenv("RDC_TOOL_ROOT", str(ROOT))
     monkeypatch.setattr(daemon_worker, "binaries_root", lambda: source_root)
     monkeypatch.setattr(daemon_worker, "pymodules_dir", lambda: source_root / "pymodules")
 
@@ -75,10 +75,10 @@ def test_worker_uses_source_runtime_directly(tmp_path: Path, monkeypatch) -> Non
     try:
         env = captured["env"]
         assert isinstance(env, dict)
-        assert env["RDX_RUNTIME_DLL_DIR"] == str(source_root.resolve())
-        assert env["RDX_RENDERDOC_PATH"] == str((source_root / "pymodules").resolve())
-        assert env["RDX_WORKER_SOURCE_MANIFEST"] == str((source_root / "manifest.runtime.json").resolve())
-        assert env["RDX_DAEMON_PID"] == str(os.getpid())
+        assert env["RDC_TOOL_RUNTIME_DLL_DIR"] == str(source_root.resolve())
+        assert env["RDC_TOOL_RENDERDOC_PATH"] == str((source_root / "pymodules").resolve())
+        assert env["RDC_TOOL_WORKER_SOURCE_MANIFEST"] == str((source_root / "manifest.runtime.json").resolve())
+        assert env["RDC_TOOL_DAEMON_PID"] == str(os.getpid())
 
         worker_state = worker.snapshot()
         assert worker_state["binaries_dir"] == str(source_root.resolve())
@@ -95,9 +95,9 @@ def test_worker_keeps_loop_and_native_thread_across_requests_and_shutdown(monkey
     import threading
     import time
     from types import SimpleNamespace
-    import rdx
-    from rdx import runtime_worker
-    monkeypatch.setenv("RDX_CONTEXT_ID", "default")
+    import rdc_tool
+    from rdc_tool import runtime_worker
+    monkeypatch.setenv("RDC_TOOL_CONTEXT_ID", "default")
     loops=[]
     native_threads=[]
     def native():
@@ -110,7 +110,7 @@ def test_worker_keeps_loop_and_native_thread_across_requests_and_shutdown(monkey
     async def shutdown(**kwargs):
         loops.append(id(asyncio.get_running_loop()))
         await asyncio.to_thread(native)
-    monkeypatch.setattr(rdx, "server", SimpleNamespace(dispatch_operation=dispatch, runtime_shutdown=shutdown))
+    monkeypatch.setattr(rdc_tool, "server", SimpleNamespace(dispatch_operation=dispatch, runtime_shutdown=shutdown))
     requests=[{"id":str(i),"method":method,"params":{"operation":"rd.test"}} for i,method in enumerate(["exec","exec","shutdown"])]
     monkeypatch.setattr(runtime_worker.sys,"stdin",io.StringIO("\n".join(json.dumps(x) for x in requests)))
     outputs=[]
@@ -123,12 +123,12 @@ def test_worker_keeps_loop_and_native_thread_across_requests_and_shutdown(monkey
 
 def test_worker_eof_shuts_down_before_thread_executor_closes(monkeypatch):
     from types import SimpleNamespace
-    import rdx
-    from rdx import runtime_worker
-    monkeypatch.setenv("RDX_CONTEXT_ID", "default")
+    import rdc_tool
+    from rdc_tool import runtime_worker
+    monkeypatch.setenv("RDC_TOOL_CONTEXT_ID", "default")
     closed=[]
     async def shutdown(**kwargs): closed.append(kwargs)
-    monkeypatch.setattr(rdx,"server",SimpleNamespace(runtime_shutdown=shutdown))
+    monkeypatch.setattr(rdc_tool,"server",SimpleNamespace(runtime_shutdown=shutdown))
     monkeypatch.setattr(runtime_worker.sys,"stdin",io.StringIO(""))
     monkeypatch.setattr(runtime_worker,"_emit",lambda result: None)
     assert runtime_worker.main(["--context-id","eof-test"]) == 0

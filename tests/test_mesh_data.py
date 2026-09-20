@@ -1,8 +1,8 @@
 from types import SimpleNamespace as NS
 import struct
 import pytest
-from rdx.core.mesh_data import decode_format, vertex_input, input_obj
-from rdx.core.replay_facts import post_transform_outputs
+from rdc_tool.core.mesh_data import decode_format, vertex_input, input_obj
+from rdc_tool.core.replay_facts import post_transform_outputs
 
 
 def fmt(kind='Float', width=4, count=3):
@@ -79,8 +79,8 @@ def test_regular_bgra_and_read_failures_are_not_unsupported():
 
 def test_obj_handler_preserves_buffer_failure(monkeypatch, tmp_path):
     import asyncio,json
-    from rdx import server_runtime as server
-    from rdx.core import mesh_data
+    from rdc_tool import server_runtime as server
+    from rdc_tool.core import mesh_data
     monkeypatch.setattr(server,'_get_controller',lambda _:asyncio.sleep(0,result=object()))
     monkeypatch.setattr(server,'_ensure_event',lambda *_:asyncio.sleep(0,result=10))
     monkeypatch.setattr(server,'_get_rd',lambda:object())

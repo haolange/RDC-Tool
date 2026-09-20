@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from rdx import replay_observation as observation
+from rdc_tool import replay_observation as observation
 
 
 @pytest.fixture

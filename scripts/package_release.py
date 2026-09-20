@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a self-contained Windows x64 release zip for rdx-tools."""
+"""Build a self-contained Windows x64 release zip for rdc-tool."""
 
 from __future__ import annotations
 
@@ -16,13 +16,13 @@ SCRIPT_ROOT = Path(__file__).resolve().parents[1]
 if str(SCRIPT_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPT_ROOT))
 
-from rdx import __version__ as TOOL_VERSION
-from rdx.runtime_paths import intermediate_root
+from rdc_tool import __version__ as TOOL_VERSION
+from rdc_tool.runtime_paths import intermediate_root
 from scripts._shared import tools_root, write_text
 
 
 PACKAGE_PLATFORM = "windows-x64"
-PACKAGE_PREFIX = "rdx-tools"
+PACKAGE_PREFIX = "rdc-tool"
 EXCLUDE_DIRS = {
     ".git",
     ".mypy_cache",
@@ -43,7 +43,7 @@ RELEASE_ROOT_FILES = {
     "THIRD_PARTY_NOTICES.md",
     "README.md",
     "pyproject.toml",
-    "bin/rdx.cmd",
+    "bin/rdc-tool.cmd",
     "install.cmd",
 }
 RELEASE_DIRS = {
@@ -52,7 +52,7 @@ RELEASE_DIRS = {
     "cli",
     "docs",
     "policy",
-    "rdx",
+    "rdc_tool",
     "scripts",
     "spec",
 }
@@ -75,6 +75,8 @@ def _sha256(path: Path) -> str:
 
 def _should_skip(path: Path, root: Path) -> bool:
     rel = path.relative_to(root)
+    if rel.as_posix() == 'docs/tool-convergence-tasks.md':
+        return True  # Maintainer history contains local evidence, not installation documentation.
     if any(part in EXCLUDE_DIRS for part in rel.parts):
         return True
     if path.is_file() and path.suffix.lower() in EXCLUDE_FILE_SUFFIXES:
@@ -107,7 +109,7 @@ def _copy_release_tree(root: Path, staging_root: Path) -> list[dict[str, object]
 
 
 def _license_inventory(staging_root: Path) -> list[dict[str, str]]:
-    rows = [{"name": "rdx-tools", "version": TOOL_VERSION, "license": "Apache-2.0", "path": "LICENSE"}]
+    rows = [{"name": "rdc-tool", "version": TOOL_VERSION, "license": "Apache-2.0", "path": "LICENSE"}]
     site_packages = staging_root / "binaries" / "windows" / "x64" / "python" / "Lib" / "site-packages"
     if not site_packages.is_dir():
         return rows
@@ -139,14 +141,14 @@ def _write_release_metadata(staging_root: Path, files: list[dict[str, object]]) 
         "name": PACKAGE_PREFIX,
         "version": TOOL_VERSION,
         "platform": PACKAGE_PLATFORM,
-        "public_commands": ["rdx"],
-        "entrypoints": ["bin/rdx.cmd", "bin/rdx", "cli/run_cli.py", "install.cmd"],
+        "public_commands": ["rdc-tool"],
+        "entrypoints": ["bin/rdc-tool.cmd", "bin/rdc-tool", "cli/run_cli.py", "install.cmd"],
         "file_count": len(files),
         "files": files,
     }
     licenses = _license_inventory(staging_root)
     sbom = {
-        "schema": "rdx-tools.sbom.v1",
+        "schema": "rdc-tool.sbom.v1",
         "name": PACKAGE_PREFIX,
         "version": TOOL_VERSION,
         "platform": PACKAGE_PLATFORM,
@@ -167,8 +169,8 @@ def _zip_dir(staging_root: Path, zip_path: Path) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Build rdx-tools release package")
-    parser.add_argument("--out-dir", default="dist", help="Output directory under the rdx-tools root")
+    parser = argparse.ArgumentParser(description="Build rdc-tool release package")
+    parser.add_argument("--out-dir", default="dist", help="Output directory under the rdc-tool root")
     parser.add_argument("--version", default=TOOL_VERSION, help="Expected package version")
     args = parser.parse_args(argv)
 
@@ -196,7 +198,7 @@ def main(argv: list[str] | None = None) -> int:
     checksum_path = out_dir / "SHA256SUMS"
     write_text(checksum_path, f"{sha}  {package_name}\n")
     report = [
-        "# rdx-tools Release Report",
+        "# rdc-tool Release Report",
         "",
         f"- version: {TOOL_VERSION}",
         f"- platform: {PACKAGE_PLATFORM}",

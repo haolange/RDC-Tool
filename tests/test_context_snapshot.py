@@ -4,9 +4,9 @@ import asyncio
 import json
 from pathlib import Path
 
-from rdx import server
-from rdx.context_snapshot import clear_context_snapshot
-from rdx.core.engine import ExecutionContext
+from rdc_tool import server
+from rdc_tool.context_snapshot import clear_context_snapshot
+from rdc_tool.core.engine import ExecutionContext
 
 
 def test_session_context_update_and_get_round_trip() -> None:

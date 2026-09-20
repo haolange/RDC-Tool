@@ -2,9 +2,9 @@
 
 <cite>
 **本文引用的文件**
-- [rdx/handlers/buffer.py](file://rdx/handlers/buffer.py)
-- [rdx/server_runtime.py](file://rdx/server_runtime.py)
-- [rdx/operation_definitions.py](file://rdx/operation_definitions.py)
+- [rdc_tool/handlers/buffer.py](file://rdc_tool/handlers/buffer.py)
+- [rdc_tool/server_runtime.py](file://rdc_tool/server_runtime.py)
+- [rdc_tool/operation_definitions.py](file://rdc_tool/operation_definitions.py)
 </cite>
 
 ## 目录
@@ -28,27 +28,27 @@
 
 ## 项目结构
 缓冲区相关入口与实现分布在如下位置：
-- 处理器路由：rdx/handlers/buffer.py 将 action 转发到运行时调度器。
-- 运行时调度与实现：rdx/server_runtime.py 中的 _dispatch_buffer 集中实现了 get_data、get_structured_data、search_pattern 三大动作。
-- 公开操作定义：rdx/operation_definitions.py 定义了 rd.buffer.* 的输入参数、返回值、作用域与约束，作为对外契约。
+- 处理器路由：rdc_tool/handlers/buffer.py 将 action 转发到运行时调度器。
+- 运行时调度与实现：rdc_tool/server_runtime.py 中的 _dispatch_buffer 集中实现了 get_data、get_structured_data、search_pattern 三大动作。
+- 公开操作定义：rdc_tool/operation_definitions.py 定义了 rd.buffer.* 的输入参数、返回值、作用域与约束，作为对外契约。
 
 ```mermaid
 graph TB
-A["调用方"] --> B["rdx/handlers/buffer.py<br/>handle(action, args)"]
-B --> C["rdx/server_runtime.py<br/>_dispatch_buffer(action, args)"]
+A["调用方"] --> B["rdc_tool/handlers/buffer.py<br/>handle(action, args)"]
+B --> C["rdc_tool/server_runtime.py<br/>_dispatch_buffer(action, args)"]
 C --> D["渲染后端控制器<br/>GetBuffers / GetBufferData"]
 C --> E["ArtifactStore<br/>存储二进制产物"]
 C --> F["文件系统<br/>output_path 写入"]
 ```
 
 图表来源
-- [rdx/handlers/buffer.py:8-9](file://rdx/handlers/buffer.py#L8-L9)
-- [rdx/server_runtime.py:8180-8220](file://rdx/server_runtime.py#L8180-L8220)
+- [rdc_tool/handlers/buffer.py:8-9](file://rdc_tool/handlers/buffer.py#L8-L9)
+- [rdc_tool/server_runtime.py:8180-8220](file://rdc_tool/server_runtime.py#L8180-L8220)
 
 章节来源
-- [rdx/handlers/buffer.py:1-10](file://rdx/handlers/buffer.py#L1-L10)
-- [rdx/server_runtime.py:8180-8220](file://rdx/server_runtime.py#L8180-L8220)
-- [rdx/operation_definitions.py:4-66](file://rdx/operation_definitions.py#L4-L66)
+- [rdc_tool/handlers/buffer.py:1-10](file://rdc_tool/handlers/buffer.py#L1-L10)
+- [rdc_tool/server_runtime.py:8180-8220](file://rdc_tool/server_runtime.py#L8180-L8220)
+- [rdc_tool/operation_definitions.py:4-66](file://rdc_tool/operation_definitions.py#L4-L66)
 
 ## 核心组件
 - 处理器路由层：接收 action 与参数，统一委派给运行时调度器。
@@ -56,9 +56,9 @@ C --> F["文件系统<br/>output_path 写入"]
 - 公开契约层：以 JSON Schema 形式声明参数类型、取值范围、必填项与作用域，保证跨工具一致性。
 
 章节来源
-- [rdx/handlers/buffer.py:8-9](file://rdx/handlers/buffer.py#L8-L9)
-- [rdx/server_runtime.py:8180-8292](file://rdx/server_runtime.py#L8180-L8292)
-- [rdx/operation_definitions.py:4-160](file://rdx/operation_definitions.py#L4-L160)
+- [rdc_tool/handlers/buffer.py:8-9](file://rdc_tool/handlers/buffer.py#L8-L9)
+- [rdc_tool/server_runtime.py:8180-8292](file://rdc_tool/server_runtime.py#L8180-L8292)
+- [rdc_tool/operation_definitions.py:4-160](file://rdc_tool/operation_definitions.py#L4-L160)
 
 ## 架构总览
 下图展示了从调用方到后端控制器的完整调用链，包括参数校验、数据读取、输出落盘与结构化解码流程。
@@ -95,8 +95,8 @@ end
 ```
 
 图表来源
-- [rdx/handlers/buffer.py:8-9](file://rdx/handlers/buffer.py#L8-L9)
-- [rdx/server_runtime.py:8180-8292](file://rdx/server_runtime.py#L8180-L8292)
+- [rdc_tool/handlers/buffer.py:8-9](file://rdc_tool/handlers/buffer.py#L8-L9)
+- [rdc_tool/server_runtime.py:8180-8292](file://rdc_tool/server_runtime.py#L8180-L8292)
 
 ## 详细组件分析
 
@@ -142,11 +142,11 @@ ErrInline --> End
 ```
 
 图表来源
-- [rdx/server_runtime.py:8191-8220](file://rdx/server_runtime.py#L8191-L8220)
+- [rdc_tool/server_runtime.py:8191-8220](file://rdc_tool/server_runtime.py#L8191-L8220)
 
 章节来源
-- [rdx/server_runtime.py:8180-8220](file://rdx/server_runtime.py#L8180-L8220)
-- [rdx/operation_definitions.py:4-66](file://rdx/operation_definitions.py#L4-L66)
+- [rdc_tool/server_runtime.py:8180-8220](file://rdc_tool/server_runtime.py#L8180-L8220)
+- [rdc_tool/operation_definitions.py:4-66](file://rdc_tool/operation_definitions.py#L4-L66)
 
 ### rd.buffer.get_structured_data：结构化数据解码
 - 布局定义
@@ -193,11 +193,11 @@ Next --> |否| Ret["返回 elements[]"]
 ```
 
 图表来源
-- [rdx/server_runtime.py:8250-8290](file://rdx/server_runtime.py#L8250-L8290)
+- [rdc_tool/server_runtime.py:8250-8290](file://rdc_tool/server_runtime.py#L8250-L8290)
 
 章节来源
-- [rdx/server_runtime.py:8250-8290](file://rdx/server_runtime.py#L8250-L8290)
-- [rdx/operation_definitions.py:67-124](file://rdx/operation_definitions.py#L67-L124)
+- [rdc_tool/server_runtime.py:8250-8290](file://rdc_tool/server_runtime.py#L8250-L8290)
+- [rdc_tool/operation_definitions.py:67-124](file://rdc_tool/operation_definitions.py#L67-L124)
 
 ### rd.buffer.search_pattern：模式搜索
 - 模式输入
@@ -225,18 +225,18 @@ Advance --> SearchLoop
 ```
 
 图表来源
-- [rdx/server_runtime.py:8224-8248](file://rdx/server_runtime.py#L8224-L8248)
+- [rdc_tool/server_runtime.py:8224-8248](file://rdc_tool/server_runtime.py#L8224-L8248)
 
 章节来源
-- [rdx/server_runtime.py:8224-8248](file://rdx/server_runtime.py#L8224-L8248)
-- [rdx/operation_definitions.py:125-160](file://rdx/operation_definitions.py#L125-L160)
+- [rdc_tool/server_runtime.py:8224-8248](file://rdc_tool/server_runtime.py#L8224-L8248)
+- [rdc_tool/operation_definitions.py:125-160](file://rdc_tool/operation_definitions.py#L125-L160)
 
 ## 依赖关系分析
 - 处理器与运行时：
-  - rdx/handlers/buffer.py 仅负责分发，无业务逻辑。
-  - rdx/server_runtime.py 承载全部业务逻辑，依赖渲染控制器与 ArtifactStore。
+  - rdc_tool/handlers/buffer.py 仅负责分发，无业务逻辑。
+  - rdc_tool/server_runtime.py 承载全部业务逻辑，依赖渲染控制器与 ArtifactStore。
 - 公开契约：
-  - rdx/operation_definitions.py 提供输入/输出 Schema，驱动工具发现与文档生成。
+  - rdc_tool/operation_definitions.py 提供输入/输出 Schema，驱动工具发现与文档生成。
 
 ```mermaid
 graph LR
@@ -248,14 +248,14 @@ O["operation_definitions.py"] --> R
 ```
 
 图表来源
-- [rdx/handlers/buffer.py:8-9](file://rdx/handlers/buffer.py#L8-L9)
-- [rdx/server_runtime.py:8180-8292](file://rdx/server_runtime.py#L8180-L8292)
-- [rdx/operation_definitions.py:4-160](file://rdx/operation_definitions.py#L4-L160)
+- [rdc_tool/handlers/buffer.py:8-9](file://rdc_tool/handlers/buffer.py#L8-L9)
+- [rdc_tool/server_runtime.py:8180-8292](file://rdc_tool/server_runtime.py#L8180-L8292)
+- [rdc_tool/operation_definitions.py:4-160](file://rdc_tool/operation_definitions.py#L4-L160)
 
 章节来源
-- [rdx/handlers/buffer.py:1-10](file://rdx/handlers/buffer.py#L1-L10)
-- [rdx/server_runtime.py:8180-8292](file://rdx/server_runtime.py#L8180-L8292)
-- [rdx/operation_definitions.py:4-160](file://rdx/operation_definitions.py#L4-L160)
+- [rdc_tool/handlers/buffer.py:1-10](file://rdc_tool/handlers/buffer.py#L1-L10)
+- [rdc_tool/server_runtime.py:8180-8292](file://rdc_tool/server_runtime.py#L8180-L8292)
+- [rdc_tool/operation_definitions.py:4-160](file://rdc_tool/operation_definitions.py#L4-L160)
 
 ## 性能考虑
 - 避免大对象内联传输
@@ -290,8 +290,8 @@ O["operation_definitions.py"] --> R
   - 如会话状态异常，关闭并重新打开会话。
 
 章节来源
-- [rdx/server_runtime.py:8191-8292](file://rdx/server_runtime.py#L8191-L8292)
-- [rdx/operation_definitions.py:4-160](file://rdx/operation_definitions.py#L4-L160)
+- [rdc_tool/server_runtime.py:8191-8292](file://rdc_tool/server_runtime.py#L8191-L8292)
+- [rdc_tool/operation_definitions.py:4-160](file://rdc_tool/operation_definitions.py#L4-L160)
 
 ## 结论
 rd.buffer.* API 提供了对缓冲区数据的灵活访问能力：

@@ -2,11 +2,11 @@
 
 ## Doctor
 
-Run `rdx --json doctor` first. It reports the tools root, Python runtime, RenderDoc DLL/PYD layout, catalog count, launchers, and daemon status.
+Run `rdc-tool --json doctor` first. It reports the tools root, Python runtime, RenderDoc DLL/PYD layout, catalog count, launchers, and daemon status.
 
 ## Session State
 
-Use `rdx context status --json` to inspect the active context. If the wrong capture/session is active, run `rdx context clear --json` and reopen the `.rdc`. Use `rdx context update --key notes --value "..." --json` to leave agent-facing recovery notes.
+Use `rdc-tool context status --json` to inspect the active context. If the wrong capture/session is active, run `rdc-tool context clear --json` and reopen the `.rdc`. Use `rdc-tool context update --key notes --value "..." --json` to leave agent-facing recovery notes.
 
 If VFS, facade commands, `diff pipeline`, or `assert pipeline` reports `session_required`, the selected `--daemon-context` has no active session. Open a capture with `capture open --file <rdc>` or pass `--session-id`.
 
@@ -16,13 +16,13 @@ If a remote replay fails after `rd.remote.connect`, check whether state says `re
 
 ## Replay Reopen
 
-`rd.capture.open_replay` reuses an existing live session for the same capture in the same context. Use `rd.capture.close_replay` to release replay resources before reopening. After a daemon timeout, check `rdx context status --json` and operation history before clearing or stopping the context. If stale cleanup fails, the runtime returns `stale_session_requires_restart` with recovery commands.
+`rd.capture.open_replay` reuses an existing live session for the same capture in the same context. Use `rd.capture.close_replay` to release replay resources before reopening. After a daemon timeout, check `rdc-tool context status --json` and operation history before clearing or stopping the context. If stale cleanup fails, the runtime returns `stale_session_requires_restart` with recovery commands.
 
 ## Shader Replacement
 
 Read `edit_plan` before editing shader text. It is returned by `rd.shader.get_source`, `rd.shader.get_disassembly`, `rd.shader.compile`, and `rd.shader.edit_and_replace`.
 
-When debug source is unavailable, `rd.shader.get_source` returns a format-aware fallback. SPIR-V can point to `rd.shader.get_disassembly` with `target=SPIR-V ASM` and `source_encoding=spirvasm`. If `rd.shader.edit_and_replace` edits raw SPIR-V ASM and the replay backend only accepts binary `SPIRV`, `rdx-tools` uses `spirv-as` to assemble the edited ASM before calling RenderDoc. Check `rdx --json doctor` -> `shader_tools.spirv_as` when the tool returns `shader_build_failed` with `failure_reason=spirv_assembly_failed`.
+When debug source is unavailable, `rd.shader.get_source` returns a format-aware fallback. SPIR-V can point to `rd.shader.get_disassembly` with `target=SPIR-V ASM` and `source_encoding=spirvasm`. If `rd.shader.edit_and_replace` edits raw SPIR-V ASM and the replay backend only accepts binary `SPIRV`, `rdc-tool` uses `spirv-as` to assemble the edited ASM before calling RenderDoc. Check `rdc-tool --json doctor` -> `shader_tools.spirv_as` when the tool returns `shader_build_failed` with `failure_reason=spirv_assembly_failed`.
 
 DXIL/DXBC disassembly is read-only by default. If `edit_plan.captured_source_editable=false`, do not pass that disassembly text to `rd.shader.edit_and_replace`. Full replacement is separate: provide complete HLSL/GLSL through `source_path` or `source_text`, plus `entry` and `target` such as `ps_6_6`. Build failures do not call `ReplaceResource`; replacement failures include `replacement_attempted`, `cleanup_attempted`, and `context_preserved`.
 
@@ -32,7 +32,7 @@ DXIL/DXBC disassembly is read-only by default. If `edit_plan.captured_source_edi
 
 Texture statistics, histograms, and numeric differences read data in memory. An unsupported packed/compressed layout, byte-count mismatch, invalid subresource, non-finite input, invalid histogram range, or backend read failure returns a structured failure. Empty or zero output is not used as a substitute for failed acquisition. Use `rd.texture.get_data` or an export operation only when a persistent artifact is required.
 
-If an operation returns `not_found` after upgrading, run `rdx tools search <term>` and `rdx tools describe <name>`. The current runtime does not execute old names. See [tool-interface-upgrade.md](tool-interface-upgrade.md) for the documented destination, then update the caller.
+If an operation returns `not_found` after upgrading, run `rdc-tool tools search <term>` and `rdc-tool tools describe <name>`. The current runtime does not execute old names. See [tool-interface-upgrade.md](tool-interface-upgrade.md) for the documented destination, then update the caller.
 
 ## Preview
 

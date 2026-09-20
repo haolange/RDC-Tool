@@ -4,8 +4,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from rdx import remote_bootstrap
-from rdx.remote_bootstrap import AdbDevice, AndroidBootstrapResult
+from rdc_tool import remote_bootstrap
+from rdc_tool.remote_bootstrap import AdbDevice, AndroidBootstrapResult
 
 
 def test_choose_adb_device_requires_serial_when_multiple() -> None:
@@ -31,7 +31,7 @@ def test_resolve_adb_path_uses_env_override(monkeypatch: pytest.MonkeyPatch, tmp
     adb_path = tmp_path / "adb.exe"
     adb_path.write_text("", encoding="utf-8")
 
-    monkeypatch.setenv("RDX_ANDROID_ADB_PATH", str(adb_path))
+    monkeypatch.setenv("RDC_TOOL_ANDROID_ADB_PATH", str(adb_path))
     monkeypatch.setattr(remote_bootstrap.shutil, "which", lambda _: None)
 
     assert remote_bootstrap.resolve_adb_path() == str(adb_path.resolve())

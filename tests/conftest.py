@@ -8,22 +8,22 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-os.environ.setdefault("RDX_INTERMEDIATE_ROOT", str(ROOT / "intermediate" / "tool-convergence-tests"))
-TEST_ROOT = Path(os.environ["RDX_INTERMEDIATE_ROOT"])
+os.environ.setdefault("RDC_TOOL_INTERMEDIATE_ROOT", str(ROOT / "intermediate" / "tool-convergence-tests"))
+TEST_ROOT = Path(os.environ["RDC_TOOL_INTERMEDIATE_ROOT"])
 PYTEST_OUT = TEST_ROOT / "pytest"
 PYTEST_OUT.mkdir(parents=True, exist_ok=True)
 
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from rdx.context_snapshot import clear_context_snapshot
-from rdx.runtime_paths import cli_runtime_dir
-from rdx.runtime_state import clear_context_state
+from rdc_tool.context_snapshot import clear_context_snapshot
+from rdc_tool.runtime_paths import cli_runtime_dir
+from rdc_tool.runtime_state import clear_context_state
 
-os.environ.setdefault("RDX_TOOLS_ROOT", str(ROOT))
-os.environ.setdefault("RDX_ARTIFACT_DIR", str(TEST_ROOT / "artifacts"))
-os.environ.setdefault("RDX_RENDERDOC_PATH", str(ROOT / "binaries" / "windows" / "x64" / "pymodules"))
-os.environ.setdefault("RDX_RUNTIME_DLL_DIR", str(ROOT / "binaries" / "windows" / "x64"))
+os.environ.setdefault("RDC_TOOL_ROOT", str(ROOT))
+os.environ.setdefault("RDC_TOOL_ARTIFACT_DIR", str(TEST_ROOT / "artifacts"))
+os.environ.setdefault("RDC_TOOL_RENDERDOC_PATH", str(ROOT / "binaries" / "windows" / "x64" / "pymodules"))
+os.environ.setdefault("RDC_TOOL_RUNTIME_DLL_DIR", str(ROOT / "binaries" / "windows" / "x64"))
 
 
 @pytest.fixture(autouse=True)

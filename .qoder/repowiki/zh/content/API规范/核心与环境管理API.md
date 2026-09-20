@@ -2,10 +2,10 @@
 
 <cite>
 **本文引用的文件**
-- [core.py](file://rdx/handlers/core.py)
-- [server_runtime.py](file://rdx/server_runtime.py)
-- [config.py](file://rdx/config.py)
-- [runtime_bootstrap.py](file://rdx/runtime_bootstrap.py)
+- [core.py](file://rdc_tool/handlers/core.py)
+- [server_runtime.py](file://rdc_tool/server_runtime.py)
+- [config.py](file://rdc_tool/config.py)
+- [runtime_bootstrap.py](file://rdc_tool/runtime_bootstrap.py)
 - [test_cli_capture_open.py](file://tests/test_cli_capture_open.py)
 </cite>
 
@@ -36,22 +36,22 @@ rd.core.* 通过统一处理器转发到 server_runtime 中的核心实现，核
 graph TB
 Client["调用方"] --> Handler["handlers/core.py<br/>handle(action, args, env)"]
 Handler --> Runtime["server_runtime.py<br/>_dispatch_core(action, args)"]
-Runtime --> Config["config.py<br/>RdxConfig / 运行时配置"]
+Runtime --> Config["config.py<br/>RdcToolConfig / 运行时配置"]
 Runtime --> Bootstrap["runtime_bootstrap.py<br/>渲染库/模块引导"]
 Runtime --> State["RuntimeState<br/>上下文/会话/远程连接状态"]
 ```
 
 图表来源
-- [core.py:8-9](file://rdx/handlers/core.py#L8-L9)
-- [server_runtime.py:230-239](file://rdx/server_runtime.py#L230-L239)
-- [config.py:117-134](file://rdx/config.py#L117-L134)
-- [runtime_bootstrap.py:42-57](file://rdx/runtime_bootstrap.py#L42-L57)
+- [core.py:8-9](file://rdc_tool/handlers/core.py#L8-L9)
+- [server_runtime.py:230-239](file://rdc_tool/server_runtime.py#L230-L239)
+- [config.py:117-134](file://rdc_tool/config.py#L117-L134)
+- [runtime_bootstrap.py:42-57](file://rdc_tool/runtime_bootstrap.py#L42-L57)
 
 章节来源
-- [core.py:8-9](file://rdx/handlers/core.py#L8-L9)
-- [server_runtime.py:230-239](file://rdx/server_runtime.py#L230-L239)
-- [config.py:117-134](file://rdx/config.py#L117-L134)
-- [runtime_bootstrap.py:42-57](file://rdx/runtime_bootstrap.py#L42-L57)
+- [core.py:8-9](file://rdc_tool/handlers/core.py#L8-L9)
+- [server_runtime.py:230-239](file://rdc_tool/server_runtime.py#L230-L239)
+- [config.py:117-134](file://rdc_tool/config.py#L117-L134)
+- [runtime_bootstrap.py:42-57](file://rdc_tool/runtime_bootstrap.py#L42-L57)
 
 ## 核心组件
 - 处理器层：将 action 路由到 server_runtime 的核心分发器
@@ -60,13 +60,13 @@ Runtime --> State["RuntimeState<br/>上下文/会话/远程连接状态"]
 - 引导层：解析运行期二进制与 Python 模块路径，必要时注册 DLL 目录并调整 PATH
 
 章节来源
-- [core.py:8-9](file://rdx/handlers/core.py#L8-L9)
-- [server_runtime.py:230-239](file://rdx/server_runtime.py#L230-L239)
-- [config.py:15-134](file://rdx/config.py#L15-L134)
-- [runtime_bootstrap.py:42-85](file://rdx/runtime_bootstrap.py#L42-L85)
+- [core.py:8-9](file://rdc_tool/handlers/core.py#L8-L9)
+- [server_runtime.py:230-239](file://rdc_tool/server_runtime.py#L230-L239)
+- [config.py:15-134](file://rdc_tool/config.py#L15-L134)
+- [runtime_bootstrap.py:42-85](file://rdc_tool/runtime_bootstrap.py#L42-L85)
 
 ## 架构总览
-rd.core.* 操作通过 handlers/core.py 的 handle 函数统一转发至 server_runtime._dispatch_core，由该分发器根据 action 字符串执行具体逻辑（如 init、get_version、get_capabilities、set_config、get_config、healthcheck）。配置通过 RdxConfig 统一管理，运行时状态保存在 RuntimeState 中，远程能力与本地渲染库能力共同决定能力矩阵。
+rd.core.* 操作通过 handlers/core.py 的 handle 函数统一转发至 server_runtime._dispatch_core，由该分发器根据 action 字符串执行具体逻辑（如 init、get_version、get_capabilities、set_config、get_config、healthcheck）。配置通过 RdcToolConfig 统一管理，运行时状态保存在 RuntimeState 中，远程能力与本地渲染库能力共同决定能力矩阵。
 
 ```mermaid
 sequenceDiagram
@@ -77,16 +77,16 @@ participant CFG as "config.py"
 participant RB as "runtime_bootstrap.py"
 C->>H : 调用 rd.core.init(args, env)
 H->>SR : _dispatch_core("init", args)
-SR->>CFG : 读取/合并 RdxConfig(含环境变量)
+SR->>CFG : 读取/合并 RdcToolConfig(含环境变量)
 SR->>RB : 引导渲染库/模块路径
 SR-->>C : {"ok" : true, "data" : {}}
 ```
 
 图表来源
-- [core.py:8-9](file://rdx/handlers/core.py#L8-L9)
-- [server_runtime.py:230-239](file://rdx/server_runtime.py#L230-L239)
-- [config.py:135-186](file://rdx/config.py#L135-L186)
-- [runtime_bootstrap.py:42-85](file://rdx/runtime_bootstrap.py#L42-L85)
+- [core.py:8-9](file://rdc_tool/handlers/core.py#L8-L9)
+- [server_runtime.py:230-239](file://rdc_tool/server_runtime.py#L230-L239)
+- [config.py:135-186](file://rdc_tool/config.py#L135-L186)
+- [runtime_bootstrap.py:42-85](file://rdc_tool/runtime_bootstrap.py#L42-L85)
 
 ## 详细组件分析
 
@@ -115,14 +115,14 @@ Err --> End
 ```
 
 图表来源
-- [server_runtime.py:277-390](file://rdx/server_runtime.py#L277-L390)
-- [server_runtime.py:427-447](file://rdx/server_runtime.py#L427-L447)
-- [runtime_bootstrap.py:42-85](file://rdx/runtime_bootstrap.py#L42-L85)
+- [server_runtime.py:277-390](file://rdc_tool/server_runtime.py#L277-L390)
+- [server_runtime.py:427-447](file://rdc_tool/server_runtime.py#L427-L447)
+- [runtime_bootstrap.py:42-85](file://rdc_tool/runtime_bootstrap.py#L42-L85)
 
 章节来源
-- [server_runtime.py:277-390](file://rdx/server_runtime.py#L277-L390)
-- [server_runtime.py:427-447](file://rdx/server_runtime.py#L427-L447)
-- [runtime_bootstrap.py:42-85](file://rdx/runtime_bootstrap.py#L42-L85)
+- [server_runtime.py:277-390](file://rdc_tool/server_runtime.py#L277-L390)
+- [server_runtime.py:427-447](file://rdc_tool/server_runtime.py#L427-L447)
+- [runtime_bootstrap.py:42-85](file://rdc_tool/runtime_bootstrap.py#L42-L85)
 
 ### 版本查询：rd.core.get_version
 - 作用：返回当前渲染库/运行时的版本字符串
@@ -130,7 +130,7 @@ Err --> End
 - 使用场景：兼容性检查、诊断、发布基线验证
 
 章节来源
-- [server_runtime.py:6049-6051](file://rdx/server_runtime.py#L6049-L6051)
+- [server_runtime.py:6049-6051](file://rdc_tool/server_runtime.py#L6049-L6051)
 
 ### 能力检测：rd.core.get_capabilities
 - 作用：探测当前环境可用的能力集合，形成“能力矩阵”
@@ -163,10 +163,10 @@ class CapabilitySummary {
 ```
 
 图表来源
-- [server_runtime.py:6052-6165](file://rdx/server_runtime.py#L6052-L6165)
+- [server_runtime.py:6052-6165](file://rdc_tool/server_runtime.py#L6052-L6165)
 
 章节来源
-- [server_runtime.py:6052-6165](file://rdx/server_runtime.py#L6052-L6165)
+- [server_runtime.py:6052-6165](file://rdc_tool/server_runtime.py#L6052-L6165)
 
 ### 运行时配置管理：rd.core.set_config 与 rd.core.get_config
 - set_config
@@ -179,14 +179,14 @@ class CapabilitySummary {
     - confidence_weights.sharpness/consistency/range_factor：置信度权重（需为正且总和非零，内部会归一化）
     - adaptive_bisect.mode/history_store_path：自适应二分模式与历史存储路径
     - runtime_limits.max_contexts/max_sessions_per_context/max_capture_files/max_capture_size_bytes/max_estimated_replay_memory_bytes/replay_memory_multiplier/max_recent_operations：运行时限制
-  - 行为：更新全局 RdxConfig 并序列化回 RuntimeState.config
+  - 行为：更新全局 RdcToolConfig 并序列化回 RuntimeState.config
 - get_config
   - 返回当前运行时配置的序列化视图，字段与 set_config 对应，便于外部工具读取当前生效配置
 
 ```mermaid
 flowchart TD
 SetCfg["rd.core.set_config(payload)"] --> Validate["校验与归一化<br/>权重求和/范围限制"]
-Validate --> UpdateCfg["更新 RdxConfig 实例"]
+Validate --> UpdateCfg["更新 RdcToolConfig 实例"]
 UpdateCfg --> Serialize["_serialize_runtime_config()"]
 Serialize --> Store["写入 RuntimeState.config"]
 Store --> GetCfg["rd.core.get_config()"]
@@ -194,10 +194,10 @@ GetCfg --> Return["返回配置快照"]
 ```
 
 图表来源
-- [server_runtime.py:277-390](file://rdx/server_runtime.py#L277-L390)
+- [server_runtime.py:277-390](file://rdc_tool/server_runtime.py#L277-L390)
 
 章节来源
-- [server_runtime.py:277-390](file://rdx/server_runtime.py#L277-L390)
+- [server_runtime.py:277-390](file://rdc_tool/server_runtime.py#L277-L390)
 
 ### 健康检查：rd.core.healthcheck
 - 作用：对渲染库导入、工件目录可写性、回放/远程运行时进行探针检查
@@ -205,7 +205,7 @@ GetCfg --> Return["返回配置快照"]
 - 用途：部署前自检、故障定位
 
 章节来源
-- [server_runtime.py:6018-6044](file://rdx/server_runtime.py#L6018-L6044)
+- [server_runtime.py:6018-6044](file://rdc_tool/server_runtime.py#L6018-L6044)
 
 ### 调用序列与错误包装示例
 - CLI 打开捕获的典型调用序列：rd.core.init → rd.capture.open_file → rd.capture.open_replay → rd.replay.set_frame → rd.session.get_context
@@ -249,16 +249,16 @@ B --> E["RuntimeState(上下文/会话/远程)"]
 ```
 
 图表来源
-- [core.py:8-9](file://rdx/handlers/core.py#L8-L9)
-- [server_runtime.py:230-239](file://rdx/server_runtime.py#L230-L239)
-- [config.py:117-134](file://rdx/config.py#L117-L134)
-- [runtime_bootstrap.py:42-85](file://rdx/runtime_bootstrap.py#L42-L85)
+- [core.py:8-9](file://rdc_tool/handlers/core.py#L8-L9)
+- [server_runtime.py:230-239](file://rdc_tool/server_runtime.py#L230-L239)
+- [config.py:117-134](file://rdc_tool/config.py#L117-L134)
+- [runtime_bootstrap.py:42-85](file://rdc_tool/runtime_bootstrap.py#L42-L85)
 
 章节来源
-- [core.py:8-9](file://rdx/handlers/core.py#L8-L9)
-- [server_runtime.py:230-239](file://rdx/server_runtime.py#L230-L239)
-- [config.py:117-134](file://rdx/config.py#L117-L134)
-- [runtime_bootstrap.py:42-85](file://rdx/runtime_bootstrap.py#L42-L85)
+- [core.py:8-9](file://rdc_tool/handlers/core.py#L8-L9)
+- [server_runtime.py:230-239](file://rdc_tool/server_runtime.py#L230-L239)
+- [config.py:117-134](file://rdc_tool/config.py#L117-L134)
+- [runtime_bootstrap.py:42-85](file://rdc_tool/runtime_bootstrap.py#L42-L85)
 
 ## 性能考虑
 - 配置应用阶段会对权重进行归一化与边界约束，避免无效配置导致后续计算异常
@@ -280,8 +280,8 @@ B --> E["RuntimeState(上下文/会话/远程)"]
   - 对于捕获/回放失败，参考测试中的错误包装结构，定位 failed_step 与 daemon_state
 
 章节来源
-- [server_runtime.py:427-447](file://rdx/server_runtime.py#L427-L447)
-- [server_runtime.py:6018-6044](file://rdx/server_runtime.py#L6018-L6044)
+- [server_runtime.py:427-447](file://rdc_tool/server_runtime.py#L427-L447)
+- [server_runtime.py:6018-6044](file://rdc_tool/server_runtime.py#L6018-L6044)
 - [test_cli_capture_open.py:160-310](file://tests/test_cli_capture_open.py#L160-L310)
 
 ## 结论
@@ -291,11 +291,11 @@ rd.core.* 提供了稳定的环境初始化、配置管理与能力探测入口�
 
 ## 附录
 - 环境变量注入要点（来自配置模块）
-  - RDX_RENDERDOC_PATH、RDX_ARTIFACT_STORE、RDX_DATA_DIR、RDX_REPORT_DIR、RDX_LOG_LEVEL、RDX_GPU_VENDOR、RDX_SPIRV_TOOLS_PATH、RDX_HEADLESS、RDX_BISECT_*、RDX_CONTEXT_ARTIFACT_*、RDX_MAX_* 等
+  - RDC_TOOL_RENDERDOC_PATH、RDC_TOOL_ARTIFACT_STORE、RDC_TOOL_DATA_DIR、RDC_TOOL_REPORT_DIR、RDC_TOOL_LOG_LEVEL、RDC_TOOL_GPU_VENDOR、RDC_TOOL_SPIRV_TOOLS_PATH、RDC_TOOL_HEADLESS、RDC_TOOL_BISECT_*、RDC_TOOL_CONTEXT_ARTIFACT_*、RDC_TOOL_MAX_* 等
 - 运行时引导要点
-  - 通过 RDX_RUNTIME_DLL_DIR 与 RDX_RENDERDOC_PATH 指定二进制与 Python 模块路径
+  - 通过 RDC_TOOL_RUNTIME_DLL_DIR 与 RDC_TOOL_RENDERDOC_PATH 指定二进制与 Python 模块路径
   - Windows 下可能调用 add_dll_directory 注册 DLL 目录，PATH 会被前置追加以避免冲突
 
 章节来源
-- [config.py:135-186](file://rdx/config.py#L135-L186)
-- [runtime_bootstrap.py:42-85](file://rdx/runtime_bootstrap.py#L42-L85)
+- [config.py:135-186](file://rdc_tool/config.py#L135-L186)
+- [runtime_bootstrap.py:42-85](file://rdc_tool/runtime_bootstrap.py#L42-L85)

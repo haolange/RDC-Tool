@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 
-from rdx import cli as rdx_cli
+from rdc_tool import cli as rdc_tool_cli
 
 
 def test_capture_open_success_returns_machine_readable_payload(monkeypatch, tmp_path) -> None:
@@ -55,8 +55,8 @@ def test_capture_open_success_returns_machine_readable_payload(monkeypatch, tmp_
             }
         raise AssertionError(f"unexpected operation: {operation}")
 
-    monkeypatch.setattr(rdx_cli, "_daemon_exec", _fake_daemon_exec)
-    monkeypatch.setattr(rdx_cli, "_print_json", lambda payload: captured.append(payload))
+    monkeypatch.setattr(rdc_tool_cli, "_daemon_exec", _fake_daemon_exec)
+    monkeypatch.setattr(rdc_tool_cli, "_print_json", lambda payload: captured.append(payload))
 
     args = argparse.Namespace(
         command="capture",
@@ -68,9 +68,9 @@ def test_capture_open_success_returns_machine_readable_payload(monkeypatch, tmp_
         remote_id=None,
         preview=False,
     )
-    exit_code = asyncio.run(rdx_cli._cmd_capture_open(args))
+    exit_code = asyncio.run(rdc_tool_cli._cmd_capture_open(args))
 
-    assert exit_code == rdx_cli.EXIT_OK
+    assert exit_code == rdc_tool_cli.EXIT_OK
     assert seen_ops == [
         "rd.core.init",
         "rd.capture.open_file",
@@ -79,7 +79,7 @@ def test_capture_open_success_returns_machine_readable_payload(monkeypatch, tmp_
         "rd.session.get_context",
     ]
     assert captured[0]["ok"] is True
-    assert captured[0]["result_kind"] == "rdx.capture.open"
+    assert captured[0]["result_kind"] == "rdc_tool.capture.open"
     assert captured[0]["data"]["context_id"] == "ctx-demo"
     assert captured[0]["data"]["capture_file_id"] == "capf_demo"
     assert captured[0]["data"]["capture_path"] == str(capture_path.resolve())
@@ -135,8 +135,8 @@ def test_capture_open_passes_remote_id_to_open_replay(monkeypatch, tmp_path) -> 
             }
         raise AssertionError(f"unexpected operation: {operation}")
 
-    monkeypatch.setattr(rdx_cli, "_daemon_exec", _fake_daemon_exec)
-    monkeypatch.setattr(rdx_cli, "_print_json", lambda payload: captured.append(payload))
+    monkeypatch.setattr(rdc_tool_cli, "_daemon_exec", _fake_daemon_exec)
+    monkeypatch.setattr(rdc_tool_cli, "_print_json", lambda payload: captured.append(payload))
 
     args = argparse.Namespace(
         command="capture",
@@ -148,9 +148,9 @@ def test_capture_open_passes_remote_id_to_open_replay(monkeypatch, tmp_path) -> 
         remote_id="remote_abc",
         preview=False,
     )
-    exit_code = asyncio.run(rdx_cli._cmd_capture_open(args))
+    exit_code = asyncio.run(rdc_tool_cli._cmd_capture_open(args))
 
-    assert exit_code == rdx_cli.EXIT_OK
+    assert exit_code == rdc_tool_cli.EXIT_OK
     assert seen_replay_options == [{"remote_id": "remote_abc"}]
     assert captured[0]["data"]["backend"] == "remote"
     assert captured[0]["data"]["remote_id"] == "remote_abc"
@@ -194,9 +194,9 @@ def test_capture_open_wraps_open_replay_failure_with_step_state(monkeypatch, tmp
             }
         raise AssertionError(f"unexpected operation: {operation}")
 
-    monkeypatch.setattr(rdx_cli, "_daemon_exec", _fake_daemon_exec)
+    monkeypatch.setattr(rdc_tool_cli, "_daemon_exec", _fake_daemon_exec)
     monkeypatch.setattr(
-        rdx_cli,
+        rdc_tool_cli,
         "_daemon_status_payload",
         lambda context: {
             "ok": True,
@@ -212,11 +212,11 @@ def test_capture_open_wraps_open_replay_failure_with_step_state(monkeypatch, tmp
         },
     )
     monkeypatch.setattr(
-        rdx_cli,
+        rdc_tool_cli,
         "_daemon_status_payload",
         lambda context: {"ok": True, "data": {"running": True, "state": {"context_id": context}}},
     )
-    monkeypatch.setattr(rdx_cli, "_print_json", lambda payload: captured.append(payload))
+    monkeypatch.setattr(rdc_tool_cli, "_print_json", lambda payload: captured.append(payload))
 
     args = argparse.Namespace(
         command="capture",
@@ -228,9 +228,9 @@ def test_capture_open_wraps_open_replay_failure_with_step_state(monkeypatch, tmp
         remote_id=None,
         preview=False,
     )
-    exit_code = asyncio.run(rdx_cli._cmd_capture_open(args))
+    exit_code = asyncio.run(rdc_tool_cli._cmd_capture_open(args))
 
-    assert exit_code == rdx_cli.EXIT_RUNTIME_ERR
+    assert exit_code == rdc_tool_cli.EXIT_RUNTIME_ERR
     assert captured[0]["ok"] is False
     assert captured[0]["error"]["code"] == "renderdoc_error"
     assert captured[0]["error"]["details"]["failed_step"] == "open_replay"
@@ -267,9 +267,9 @@ def test_capture_open_wraps_open_replay_exception_with_step_state(monkeypatch, t
             }
         raise AssertionError(f"unexpected operation: {operation}")
 
-    monkeypatch.setattr(rdx_cli, "_daemon_exec", _fake_daemon_exec)
+    monkeypatch.setattr(rdc_tool_cli, "_daemon_exec", _fake_daemon_exec)
     monkeypatch.setattr(
-        rdx_cli,
+        rdc_tool_cli,
         "_daemon_status_payload",
         lambda context: {
             "ok": True,
@@ -286,7 +286,7 @@ def test_capture_open_wraps_open_replay_exception_with_step_state(monkeypatch, t
             },
         },
     )
-    monkeypatch.setattr(rdx_cli, "_print_json", lambda payload: captured.append(payload))
+    monkeypatch.setattr(rdc_tool_cli, "_print_json", lambda payload: captured.append(payload))
 
     args = argparse.Namespace(
         command="capture",
@@ -298,9 +298,9 @@ def test_capture_open_wraps_open_replay_exception_with_step_state(monkeypatch, t
         remote_id=None,
         preview=False,
     )
-    exit_code = asyncio.run(rdx_cli._cmd_capture_open(args))
+    exit_code = asyncio.run(rdc_tool_cli._cmd_capture_open(args))
 
-    assert exit_code == rdx_cli.EXIT_RUNTIME_ERR
+    assert exit_code == rdc_tool_cli.EXIT_RUNTIME_ERR
     assert captured[0]["ok"] is False
     assert captured[0]["error"]["details"]["failed_step"] == "open_replay"
     assert captured[0]["error"]["details"]["capture_file_id"] == "capf_demo"
@@ -328,9 +328,9 @@ def test_capture_open_wraps_get_context_exception_with_step_state(monkeypatch, t
             raise RuntimeError("daemon timeout")
         raise AssertionError(f"unexpected operation: {operation}")
 
-    monkeypatch.setattr(rdx_cli, "_daemon_exec", _fake_daemon_exec)
+    monkeypatch.setattr(rdc_tool_cli, "_daemon_exec", _fake_daemon_exec)
     monkeypatch.setattr(
-        rdx_cli,
+        rdc_tool_cli,
         "_daemon_status_payload",
         lambda context: {
             "ok": True,
@@ -345,7 +345,7 @@ def test_capture_open_wraps_get_context_exception_with_step_state(monkeypatch, t
             },
         },
     )
-    monkeypatch.setattr(rdx_cli, "_print_json", lambda payload: captured.append(payload))
+    monkeypatch.setattr(rdc_tool_cli, "_print_json", lambda payload: captured.append(payload))
 
     args = argparse.Namespace(
         command="capture",
@@ -357,9 +357,9 @@ def test_capture_open_wraps_get_context_exception_with_step_state(monkeypatch, t
         remote_id=None,
         preview=False,
     )
-    exit_code = asyncio.run(rdx_cli._cmd_capture_open(args))
+    exit_code = asyncio.run(rdc_tool_cli._cmd_capture_open(args))
 
-    assert exit_code == rdx_cli.EXIT_RUNTIME_ERR
+    assert exit_code == rdc_tool_cli.EXIT_RUNTIME_ERR
     assert captured[0]["ok"] is False
     assert captured[0]["error"]["details"]["failed_step"] == "get_context"
     assert captured[0]["error"]["details"]["session_id"] == "sess_demo"
@@ -407,8 +407,8 @@ def test_capture_open_with_preview_invokes_session_open_preview(monkeypatch, tmp
             }
         raise AssertionError(f"unexpected operation: {operation}")
 
-    monkeypatch.setattr(rdx_cli, "_daemon_exec", _fake_daemon_exec)
-    monkeypatch.setattr(rdx_cli, "_print_json", lambda payload: captured.append(payload))
+    monkeypatch.setattr(rdc_tool_cli, "_daemon_exec", _fake_daemon_exec)
+    monkeypatch.setattr(rdc_tool_cli, "_print_json", lambda payload: captured.append(payload))
 
     args = argparse.Namespace(
         command="capture",
@@ -420,9 +420,9 @@ def test_capture_open_with_preview_invokes_session_open_preview(monkeypatch, tmp
         remote_id=None,
         preview=True,
     )
-    exit_code = asyncio.run(rdx_cli._cmd_capture_open(args))
+    exit_code = asyncio.run(rdc_tool_cli._cmd_capture_open(args))
 
-    assert exit_code == rdx_cli.EXIT_OK
+    assert exit_code == rdc_tool_cli.EXIT_OK
     assert "rd.session.open_preview" in seen_ops
     assert captured[0]["ok"] is True
     assert captured[0]["data"]["context"]["preview"]["enabled"] is True
@@ -432,7 +432,7 @@ def test_session_preview_status_reads_context_preview(monkeypatch) -> None:
     captured: list[dict] = []
 
     monkeypatch.setattr(
-        rdx_cli,
+        rdc_tool_cli,
         "_daemon_exec",
         lambda operation, args, *, remote=False, context="default": {
             "ok": True,
@@ -457,11 +457,11 @@ def test_session_preview_status_reads_context_preview(monkeypatch) -> None:
         },
     )
     monkeypatch.setattr(
-        rdx_cli,
+        rdc_tool_cli,
         "_daemon_status_payload",
         lambda context: {"ok": True, "data": {"running": True, "state": {"context_id": context}}},
     )
-    monkeypatch.setattr(rdx_cli, "_print_json", lambda payload: captured.append(payload))
+    monkeypatch.setattr(rdc_tool_cli, "_print_json", lambda payload: captured.append(payload))
 
     args = argparse.Namespace(
         command="session",
@@ -469,9 +469,9 @@ def test_session_preview_status_reads_context_preview(monkeypatch) -> None:
         session_preview_cmd="status",
         daemon_context="ctx-demo",
     )
-    exit_code = asyncio.run(rdx_cli._cmd_session_preview(args))
+    exit_code = asyncio.run(rdc_tool_cli._cmd_session_preview(args))
 
-    assert exit_code == rdx_cli.EXIT_OK
+    assert exit_code == rdc_tool_cli.EXIT_OK
     assert captured[0]["ok"] is True
     assert captured[0]["data"]["preview"]["enabled"] is True
     assert captured[0]["data"]["preview"]["state"] == "live"

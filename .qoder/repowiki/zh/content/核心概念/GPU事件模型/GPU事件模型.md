@@ -2,14 +2,14 @@
 
 <cite>
 **本文引用的文件**
-- [rdx/core/event_graph.py](file://rdx/core/event_graph.py)
-- [rdx/models.py](file://rdx/models.py)
-- [rdx/core/session_manager.py](file://rdx/core/session_manager.py)
-- [rdx/server_runtime.py](file://rdx/server_runtime.py)
-- [rdx/replay_observation.py](file://rdx/replay_observation.py)
-- [rdx/core/perf_service.py](file://rdx/core/perf_service.py)
-- [rdx/core/render_service.py](file://rdx/core/render_service.py)
-- [rdx/handlers/event.py](file://rdx/handlers/event.py)
+- [rdc_tool/core/event_graph.py](file://rdc_tool/core/event_graph.py)
+- [rdc_tool/models.py](file://rdc_tool/models.py)
+- [rdc_tool/core/session_manager.py](file://rdc_tool/core/session_manager.py)
+- [rdc_tool/server_runtime.py](file://rdc_tool/server_runtime.py)
+- [rdc_tool/replay_observation.py](file://rdc_tool/replay_observation.py)
+- [rdc_tool/core/perf_service.py](file://rdc_tool/core/perf_service.py)
+- [rdc_tool/core/render_service.py](file://rdc_tool/core/render_service.py)
+- [rdc_tool/handlers/event.py](file://rdc_tool/handlers/event.py)
 </cite>
 
 ## 目录
@@ -59,20 +59,20 @@ SR --> RO
 ```
 
 图表来源
-- [rdx/core/session_manager.py:175-251](file://rdx/core/session_manager.py#L175-L251)
-- [rdx/core/event_graph.py:152-191](file://rdx/core/event_graph.py#L152-L191)
-- [rdx/core/render_service.py:357-521](file://rdx/core/render_service.py#L357-L521)
-- [rdx/core/perf_service.py:235-487](file://rdx/core/perf_service.py#L235-L487)
-- [rdx/replay_observation.py:40-147](file://rdx/replay_observation.py#L40-L147)
-- [rdx/server_runtime.py:231-238](file://rdx/server_runtime.py#L231-L238)
+- [rdc_tool/core/session_manager.py:175-251](file://rdc_tool/core/session_manager.py#L175-L251)
+- [rdc_tool/core/event_graph.py:152-191](file://rdc_tool/core/event_graph.py#L152-L191)
+- [rdc_tool/core/render_service.py:357-521](file://rdc_tool/core/render_service.py#L357-L521)
+- [rdc_tool/core/perf_service.py:235-487](file://rdc_tool/core/perf_service.py#L235-L487)
+- [rdc_tool/replay_observation.py:40-147](file://rdc_tool/replay_observation.py#L40-L147)
+- [rdc_tool/server_runtime.py:231-238](file://rdc_tool/server_runtime.py#L231-L238)
 
 章节来源
-- [rdx/core/session_manager.py:175-251](file://rdx/core/session_manager.py#L175-L251)
-- [rdx/core/event_graph.py:152-191](file://rdx/core/event_graph.py#L152-L191)
-- [rdx/core/render_service.py:357-521](file://rdx/core/render_service.py#L357-L521)
-- [rdx/core/perf_service.py:235-487](file://rdx/core/perf_service.py#L235-L487)
-- [rdx/replay_observation.py:40-147](file://rdx/replay_observation.py#L40-L147)
-- [rdx/server_runtime.py:231-238](file://rdx/server_runtime.py#L231-L238)
+- [rdc_tool/core/session_manager.py:175-251](file://rdc_tool/core/session_manager.py#L175-L251)
+- [rdc_tool/core/event_graph.py:152-191](file://rdc_tool/core/event_graph.py#L152-L191)
+- [rdc_tool/core/render_service.py:357-521](file://rdc_tool/core/render_service.py#L357-L521)
+- [rdc_tool/core/perf_service.py:235-487](file://rdc_tool/core/perf_service.py#L235-L487)
+- [rdc_tool/replay_observation.py:40-147](file://rdc_tool/replay_observation.py#L40-L147)
+- [rdc_tool/server_runtime.py:231-238](file://rdc_tool/server_runtime.py#L231-L238)
 
 ## 核心组件
 - 事件图服务（EventGraphService）
@@ -95,12 +95,12 @@ SR --> RO
   - 工具注册、上下文状态、预览绑定、跨服务协调
 
 章节来源
-- [rdx/core/event_graph.py:152-386](file://rdx/core/event_graph.py#L152-L386)
-- [rdx/replay_observation.py:40-147](file://rdx/replay_observation.py#L40-L147)
-- [rdx/core/render_service.py:357-800](file://rdx/core/render_service.py#L357-L800)
-- [rdx/core/perf_service.py:235-618](file://rdx/core/perf_service.py#L235-L618)
-- [rdx/core/session_manager.py:175-569](file://rdx/core/session_manager.py#L175-L569)
-- [rdx/server_runtime.py:231-238](file://rdx/server_runtime.py#L231-L238)
+- [rdc_tool/core/event_graph.py:152-386](file://rdc_tool/core/event_graph.py#L152-L386)
+- [rdc_tool/replay_observation.py:40-147](file://rdc_tool/replay_observation.py#L40-L147)
+- [rdc_tool/core/render_service.py:357-800](file://rdc_tool/core/render_service.py#L357-L800)
+- [rdc_tool/core/perf_service.py:235-618](file://rdc_tool/core/perf_service.py#L235-L618)
+- [rdc_tool/core/session_manager.py:175-569](file://rdc_tool/core/session_manager.py#L175-L569)
+- [rdc_tool/server_runtime.py:231-238](file://rdc_tool/server_runtime.py#L231-L238)
 
 ## 架构总览
 下图展示从用户调用到具体服务的协作流程，包括事件图构建、回放观测、渲染与性能分析。
@@ -124,12 +124,12 @@ SR-->>U : 返回结果事件列表/图像/artifact/性能摘要
 ```
 
 图表来源
-- [rdx/server_runtime.py:231-238](file://rdx/server_runtime.py#L231-L238)
-- [rdx/core/session_manager.py:175-251](file://rdx/core/session_manager.py#L175-L251)
-- [rdx/core/event_graph.py:152-191](file://rdx/core/event_graph.py#L152-L191)
-- [rdx/replay_observation.py:40-147](file://rdx/replay_observation.py#L40-L147)
-- [rdx/core/render_service.py:357-521](file://rdx/core/render_service.py#L357-L521)
-- [rdx/core/perf_service.py:235-487](file://rdx/core/perf_service.py#L235-L487)
+- [rdc_tool/server_runtime.py:231-238](file://rdc_tool/server_runtime.py#L231-L238)
+- [rdc_tool/core/session_manager.py:175-251](file://rdc_tool/core/session_manager.py#L175-L251)
+- [rdc_tool/core/event_graph.py:152-191](file://rdc_tool/core/event_graph.py#L152-L191)
+- [rdc_tool/replay_observation.py:40-147](file://rdc_tool/replay_observation.py#L40-L147)
+- [rdc_tool/core/render_service.py:357-521](file://rdc_tool/core/render_service.py#L357-L521)
+- [rdc_tool/core/perf_service.py:235-487](file://rdc_tool/core/perf_service.py#L235-L487)
 
 ## 详细组件分析
 
@@ -178,12 +178,12 @@ EventNode --> EventFlags : "包含"
 ```
 
 图表来源
-- [rdx/core/event_graph.py:152-386](file://rdx/core/event_graph.py#L152-L386)
-- [rdx/models.py:163-181](file://rdx/models.py#L163-L181)
+- [rdc_tool/core/event_graph.py:152-386](file://rdc_tool/core/event_graph.py#L152-L386)
+- [rdc_tool/models.py:163-181](file://rdc_tool/models.py#L163-L181)
 
 章节来源
-- [rdx/core/event_graph.py:152-386](file://rdx/core/event_graph.py#L152-L386)
-- [rdx/models.py:163-181](file://rdx/models.py#L163-L181)
+- [rdc_tool/core/event_graph.py:152-386](file://rdc_tool/core/event_graph.py#L152-L386)
+- [rdc_tool/models.py:163-181](file://rdc_tool/models.py#L163-L181)
 
 ### 回放观测（ReplayObservation）
 - 作用：在无窗口环境下进行回放观测，支持获取事件列表、解析最终输出（Present+SwapBuffer）、选择颜色目标并导出PNG
@@ -207,12 +207,12 @@ Result --> End
 ```
 
 图表来源
-- [rdx/replay_observation.py:40-147](file://rdx/replay_observation.py#L40-L147)
-- [rdx/core/render_service.py:523-646](file://rdx/core/render_service.py#L523-L646)
+- [rdc_tool/replay_observation.py:40-147](file://rdc_tool/replay_observation.py#L40-L147)
+- [rdc_tool/core/render_service.py:523-646](file://rdc_tool/core/render_service.py#L523-L646)
 
 章节来源
-- [rdx/replay_observation.py:40-147](file://rdx/replay_observation.py#L40-L147)
-- [rdx/core/render_service.py:523-646](file://rdx/core/render_service.py#L523-L646)
+- [rdc_tool/replay_observation.py:40-147](file://rdc_tool/replay_observation.py#L40-L147)
+- [rdc_tool/core/render_service.py:523-646](file://rdc_tool/core/render_service.py#L523-L646)
 
 ### 渲染服务（RenderService）
 - 作用：执行 SetFrameEvent、配置 TextureDisplay、读取输出纹理、编码保存为多种格式；支持 raw/npz 导出与像素统计
@@ -239,12 +239,12 @@ RS-->>RS : 返回artifact与view_meta
 ```
 
 图表来源
-- [rdx/core/render_service.py:357-521](file://rdx/core/render_service.py#L357-L521)
-- [rdx/core/render_service.py:523-646](file://rdx/core/render_service.py#L523-L646)
-- [rdx/core/render_service.py:658-794](file://rdx/core/render_service.py#L658-L794)
+- [rdc_tool/core/render_service.py:357-521](file://rdc_tool/core/render_service.py#L357-L521)
+- [rdc_tool/core/render_service.py:523-646](file://rdc_tool/core/render_service.py#L523-L646)
+- [rdc_tool/core/render_service.py:658-794](file://rdc_tool/core/render_service.py#L658-L794)
 
 章节来源
-- [rdx/core/render_service.py:357-800](file://rdx/core/render_service.py#L357-L800)
+- [rdc_tool/core/render_service.py:357-800](file://rdc_tool/core/render_service.py#L357-L800)
 
 ### 性能服务（PerfService）
 - 作用：枚举GPU计数器、按事件范围采样、统计异常、检测热点事件
@@ -264,10 +264,10 @@ F --> G["返回PerfResult(samples,summaries,anomaly_events)"]
 ```
 
 图表来源
-- [rdx/core/perf_service.py:235-487](file://rdx/core/perf_service.py#L235-L487)
+- [rdc_tool/core/perf_service.py:235-487](file://rdc_tool/core/perf_service.py#L235-L487)
 
 章节来源
-- [rdx/core/perf_service.py:235-618](file://rdx/core/perf_service.py#L235-L618)
+- [rdc_tool/core/perf_service.py:235-618](file://rdc_tool/core/perf_service.py#L235-L618)
 
 ### 会话管理（SessionManager）
 - 作用：创建/打开/关闭会话，获取控制器与输出，处理本地/远程后端
@@ -277,7 +277,7 @@ F --> G["返回PerfResult(samples,summaries,anomaly_events)"]
   - _cleanup：安全关闭输出、控制器、捕获文件、远程连接
 
 章节来源
-- [rdx/core/session_manager.py:175-569](file://rdx/core/session_manager.py#L175-L569)
+- [rdc_tool/core/session_manager.py:175-569](file://rdc_tool/core/session_manager.py#L175-L569)
 
 ### 运行时调度（server_runtime）
 - 作用：工具注册、上下文状态管理、预览绑定、跨服务协调
@@ -286,7 +286,7 @@ F --> G["返回PerfResult(samples,summaries,anomaly_events)"]
   - 上下文快照与状态同步，确保预览与回放一致性
 
 章节来源
-- [rdx/server_runtime.py:231-238](file://rdx/server_runtime.py#L231-L238)
+- [rdc_tool/server_runtime.py:231-238](file://rdc_tool/server_runtime.py#L231-L238)
 
 ## 依赖关系分析
 - SessionManager 是底层资源入口，提供 ReplayController 与 ReplayOutput
@@ -308,20 +308,20 @@ SR --> PS
 ```
 
 图表来源
-- [rdx/core/session_manager.py:175-251](file://rdx/core/session_manager.py#L175-L251)
-- [rdx/core/event_graph.py:152-191](file://rdx/core/event_graph.py#L152-L191)
-- [rdx/replay_observation.py:40-147](file://rdx/replay_observation.py#L40-L147)
-- [rdx/core/render_service.py:357-521](file://rdx/core/render_service.py#L357-L521)
-- [rdx/core/perf_service.py:235-487](file://rdx/core/perf_service.py#L235-L487)
-- [rdx/server_runtime.py:231-238](file://rdx/server_runtime.py#L231-L238)
+- [rdc_tool/core/session_manager.py:175-251](file://rdc_tool/core/session_manager.py#L175-L251)
+- [rdc_tool/core/event_graph.py:152-191](file://rdc_tool/core/event_graph.py#L152-L191)
+- [rdc_tool/replay_observation.py:40-147](file://rdc_tool/replay_observation.py#L40-L147)
+- [rdc_tool/core/render_service.py:357-521](file://rdc_tool/core/render_service.py#L357-L521)
+- [rdc_tool/core/perf_service.py:235-487](file://rdc_tool/core/perf_service.py#L235-L487)
+- [rdc_tool/server_runtime.py:231-238](file://rdc_tool/server_runtime.py#L231-L238)
 
 章节来源
-- [rdx/core/session_manager.py:175-251](file://rdx/core/session_manager.py#L175-L251)
-- [rdx/core/event_graph.py:152-191](file://rdx/core/event_graph.py#L152-L191)
-- [rdx/replay_observation.py:40-147](file://rdx/replay_observation.py#L40-L147)
-- [rdx/core/render_service.py:357-521](file://rdx/core/render_service.py#L357-L521)
-- [rdx/core/perf_service.py:235-487](file://rdx/core/perf_service.py#L235-L487)
-- [rdx/server_runtime.py:231-238](file://rdx/server_runtime.py#L231-L238)
+- [rdc_tool/core/session_manager.py:175-251](file://rdc_tool/core/session_manager.py#L175-L251)
+- [rdc_tool/core/event_graph.py:152-191](file://rdc_tool/core/event_graph.py#L152-L191)
+- [rdc_tool/replay_observation.py:40-147](file://rdc_tool/replay_observation.py#L40-L147)
+- [rdc_tool/core/render_service.py:357-521](file://rdc_tool/core/render_service.py#L357-L521)
+- [rdc_tool/core/perf_service.py:235-487](file://rdc_tool/core/perf_service.py#L235-L487)
+- [rdc_tool/server_runtime.py:231-238](file://rdc_tool/server_runtime.py#L231-L238)
 
 ## 性能考量
 - 事件图构建复杂度：O(N)，N为 Action 树节点数；递归遍历 children
@@ -342,11 +342,11 @@ SR --> PS
 - 事件范围无效：确保 lo <= hi 且存在事件 ID
 
 章节来源
-- [rdx/core/render_service.py:39-56](file://rdx/core/render_service.py#L39-L56)
-- [rdx/core/render_service.py:523-646](file://rdx/core/render_service.py#L523-L646)
-- [rdx/replay_observation.py:16-36](file://rdx/replay_observation.py#L16-L36)
-- [rdx/core/perf_service.py:28-63](file://rdx/core/perf_service.py#L28-L63)
-- [rdx/core/perf_service.py:493-618](file://rdx/core/perf_service.py#L493-L618)
+- [rdc_tool/core/render_service.py:39-56](file://rdc_tool/core/render_service.py#L39-L56)
+- [rdc_tool/core/render_service.py:523-646](file://rdc_tool/core/render_service.py#L523-L646)
+- [rdc_tool/replay_observation.py:16-36](file://rdc_tool/replay_observation.py#L16-L36)
+- [rdc_tool/core/perf_service.py:28-63](file://rdc_tool/core/perf_service.py#L28-L63)
+- [rdc_tool/core/perf_service.py:493-618](file://rdc_tool/core/perf_service.py#L493-L618)
 
 ## 结论
 RDC-Tool 通过分层服务设计，将 RenderDoc 的事件模型抽象为可查询、可观测、可分析的体系。EventGraphService 提供结构化事件图与 pass 推断；ReplayObservation 实现无窗口回放与目标导出；RenderService 完成渲染与读回；PerfService 提供性能分析与热点检测。配合 SessionManager 与 server_runtime，形成完整的 GPU 事件诊断工作流。
@@ -358,28 +358,28 @@ RDC-Tool 通过分层服务设计，将 RenderDoc 的事件模型抽象为可查
   - 使用 EventGraphService.build_event_tree 获取树
   - 使用 get_draw_events 筛选 draw/dispatch 事件
   - 使用 get_event_range 获取事件范围，便于后续性能采样
-  - 参考路径：[rdx/core/event_graph.py:161-216](file://rdx/core/event_graph.py#L161-L216)
+  - 参考路径：[rdc_tool/core/event_graph.py:161-216](file://rdc_tool/core/event_graph.py#L161-L216)
 
 - 推断 Pass 边界
   - 调用 infer_passes，基于输出目标变化划分 pass
   - 适用于缺少 debug markers 的捕获
-  - 参考路径：[rdx/core/event_graph.py:252-309](file://rdx/core/event_graph.py#L252-L309)
+  - 参考路径：[rdc_tool/core/event_graph.py:252-309](file://rdc_tool/core/event_graph.py#L252-L309)
 
 - 回放观测与图像导出
   - 使用 replay_observation.handle 获取事件列表或导出 PNG
   - 支持 final_output、rt_index、texture_id 三种目标选择
-  - 参考路径：[rdx/replay_observation.py:40-147](file://rdx/replay_observation.py#L40-L147)
+  - 参考路径：[rdc_tool/replay_observation.py:40-147](file://rdc_tool/replay_observation.py#L40-L147)
 
 - 渲染事件与纹理保存
   - 使用 RenderService.render_event 渲染当前事件并存储 artifact
   - 使用 save_texture_file 直接保存纹理为 PNG/EXR/HDR/RAW
-  - 参考路径：[rdx/core/render_service.py:357-521](file://rdx/core/render_service.py#L357-L521)、[rdx/core/render_service.py:523-646](file://rdx/core/render_service.py#L523-L646)
+  - 参考路径：[rdc_tool/core/render_service.py:357-521](file://rdc_tool/core/render_service.py#L357-L521)、[rdc_tool/core/render_service.py:523-646](file://rdc_tool/core/render_service.py#L523-L646)
 
 - 性能分析与热点检测
   - 使用 PerfService.enumerate_counters 获取可用计数器
   - 使用 sample_counters 在事件范围内采样并统计异常
   - 使用 detect_hotspots 识别最慢事件
-  - 参考路径：[rdx/core/perf_service.py:235-487](file://rdx/core/perf_service.py#L235-L487)、[rdx/core/perf_service.py:493-618](file://rdx/core/perf_service.py#L493-L618)
+  - 参考路径：[rdc_tool/core/perf_service.py:235-487](file://rdc_tool/core/perf_service.py#L235-L487)、[rdc_tool/core/perf_service.py:493-618](file://rdc_tool/core/perf_service.py#L493-L618)
 
 - 调试技巧
   - 先构建事件图，再按类型/范围筛选，缩小问题域
@@ -388,7 +388,7 @@ RDC-Tool 通过分层服务设计，将 RenderDoc 的事件模型抽象为可查
   - 利用性能服务定位热点事件，进一步检查资源绑定与状态
 
 章节来源
-- [rdx/core/event_graph.py:161-309](file://rdx/core/event_graph.py#L161-L309)
-- [rdx/replay_observation.py:40-147](file://rdx/replay_observation.py#L40-L147)
-- [rdx/core/render_service.py:357-646](file://rdx/core/render_service.py#L357-L646)
-- [rdx/core/perf_service.py:235-618](file://rdx/core/perf_service.py#L235-L618)
+- [rdc_tool/core/event_graph.py:161-309](file://rdc_tool/core/event_graph.py#L161-L309)
+- [rdc_tool/replay_observation.py:40-147](file://rdc_tool/replay_observation.py#L40-L147)
+- [rdc_tool/core/render_service.py:357-646](file://rdc_tool/core/render_service.py#L357-L646)
+- [rdc_tool/core/perf_service.py:235-618](file://rdc_tool/core/perf_service.py#L235-L618)

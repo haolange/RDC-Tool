@@ -14,7 +14,7 @@ SCRIPT_ROOT = Path(__file__).resolve().parents[1]
 if str(SCRIPT_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPT_ROOT))
 
-from rdx.runtime_paths import artifacts_dir, logs_dir
+from rdc_tool.runtime_paths import artifacts_dir, logs_dir
 
 
 DEFAULT_LOCAL_MARKERS = ["RenderGBuffer", "RenderForward"]
@@ -29,7 +29,7 @@ def _cli_path() -> Path:
 
 
 def _python_cmd() -> str:
-    env_python = str(os.environ.get("RDX_PYTHON") or "").strip()
+    env_python = str(os.environ.get("RDC_TOOL_PYTHON") or "").strip()
     if env_python:
         return env_python
     bundled = _repo_root() / "binaries" / "windows" / "x64" / "python" / "python.exe"
@@ -227,7 +227,7 @@ def _find_preview_window_rect(context_id: str) -> Optional[tuple[int, int, int, 
             buffer = ctypes.create_unicode_buffer(length + 1)
             user32.GetWindowTextW(hwnd, buffer, length + 1)
             title = buffer.value or ""
-            if title.startswith("RDX Preview [") and f"[{context_id}]" in title:
+            if title.startswith("RDC-Tool Preview [") and f"[{context_id}]" in title:
                 titles.append((int(hwnd), title))
             return True
 
@@ -607,7 +607,7 @@ def main() -> int:
     parser.add_argument("--daemon-context-prefix", default="preview-geometry-smoke")
     parser.add_argument("--local-marker-hints", default=",".join(DEFAULT_LOCAL_MARKERS))
     parser.add_argument("--hop-delay-ms", type=int, default=50)
-    parser.add_argument("--remote-device-serial", default=str(os.environ.get("RDX_REMOTE_DEVICE_SERIAL") or ""))
+    parser.add_argument("--remote-device-serial", default=str(os.environ.get("RDC_TOOL_REMOTE_DEVICE_SERIAL") or ""))
     args = parser.parse_args()
 
     artifact_dir = Path(args.artifact_dir).resolve()

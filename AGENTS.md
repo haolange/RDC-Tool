@@ -2,7 +2,7 @@
 
 ## 范围与权威
 
-本文件约束 `rdx-tools` CLI 工程（`rdx/`、`cli/`、`docs/`、`scripts/`、`tests/`、`spec/`）。本库是 CLI-only；公开命令为 `rdx`，`bin/rdx.cmd`、`bin/rdx` 与同安装捆绑 Python + `cli/run_cli.py` 是运行入口；`install.cmd` 只包装安装脚本。
+本文件约束 `rdc-tool` CLI 工程（`rdc_tool/`、`cli/`、`docs/`、`scripts/`、`tests/`、`spec/`）。本库是 CLI-only；公开命令为 `rdc-tool`，`bin/rdc-tool.cmd`、`bin/rdc-tool` 与同安装捆绑 Python + `cli/run_cli.py` 是运行入口；`install.cmd` 只包装安装脚本。
 
 - 先核对当前工作区改动、实际调用链、公开契约和已有证据，再实现；不覆盖其他工作，不重复已完成工作。若代码、文档、catalog 或测试不一致，结合用户要求与真实行为判断错误方并同步修正，不能只因文档写错就修改运行语义。
 - 用户当前明确要求优先；本文件维护长期工程规则，任务状态与验收事实放现有 Task 和主题文档。不要把临时禁令、机器路径、PID、某轮延期或进度流水账写成永久规则。
@@ -14,7 +14,7 @@
 - 只维护一套当前实现；替代路径时同步处理旧入口、配置、类型、内部调用、测试和文档，不保留 legacy/deprecated alias、转发兼容层、双写双读或无依据 fallback。确实无法直接迁移时，先说明具体约束并按用户明确决定执行，不能自行留下债务。
 - 按稳定职责命名，不以 V1/V2、new/old、final/final2 建立长期并行体系。包发布号仅作安装信息，不能代替接口能力校验；仍有实际解析用途的协议/存储格式标识须核对调用契约后处理，禁止凭名字删除。
 - 不为将来可能使用而增加抽象、配置和扩展点。抽象须能减少重复、降低错误或符合既有设计；工具价值由真实独立能力决定，不以数量多为目标。
-- `rdx/operation_definitions.py` 是操作名称、参数、结果、前置条件及影响声明的唯一真源；通过生成器同步注册、catalog、CLI discovery 和 `docs/tool-reference.md`，不恢复提取输入、metadata overlay 或手工副本。数量从实际集合计算，调用方校验真实定义与指纹。
+- `rdc_tool/operation_definitions.py` 是操作名称、参数、结果、前置条件及影响声明的唯一真源；通过生成器同步注册、catalog、CLI discovery 和 `docs/tool-reference.md`，不恢复提取输入、metadata overlay 或手工副本。数量从实际集合计算，调用方校验真实定义与指纹。
 - 生命周期、身份和安全约束由代码保证；专业流程、报告组织和判断方法交给 Skill。Skill 提供知识，不能替代运行时参数、权限和前置条件校验。
 - CLI facade、VFS、独立 preview 与内嵌消费者复用同一套有效实现。管线 facade/VFS 使用 `rd.pipeline.get_state`，事件浏览使用 `rd.event.get_action_tree`；应用完整轻量事件索引使用 `rd.session.get_replay_events`。
 - 合法空结果、读取失败和不支持必须区分；不以空值、固定零值或假成功掩盖失败，观察事实与推断分别表达。

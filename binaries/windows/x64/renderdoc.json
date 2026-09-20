@@ -1,11 +1,11 @@
 {
-  "file_format_version" : "1.1.2",
-  "layer" : {
+  "file_format_version": "1.1.2",
+  "layer": {
     "name": "VK_LAYER_RENDERDOC_Capture",
     "type": "GLOBAL",
     "library_path": ".\\renderdoc.dll",
     "api_version": "1.4.324",
-    "implementation_version": "43",
+    "implementation_version": "45",
     "description": "Debugging capture layer for RenderDoc",
     "functions": {
       "vkGetInstanceProcAddr": "VK_LAYER_RENDERDOC_CaptureGetInstanceProcAddr",
@@ -25,24 +25,27 @@
       {
         "name": "VK_EXT_debug_marker",
         "spec_version": "4",
-        "entrypoints": ["vkDebugMarkerSetObjectTagEXT",
-                        "vkDebugMarkerSetObjectNameEXT",
-                        "vkCmdDebugMarkerBeginEXT",
-                        "vkCmdDebugMarkerEndEXT",
-                        "vkCmdDebugMarkerInsertEXT"
-                       ]
+        "entrypoints": [
+          "vkDebugMarkerSetObjectTagEXT",
+          "vkDebugMarkerSetObjectNameEXT",
+          "vkCmdDebugMarkerBeginEXT",
+          "vkCmdDebugMarkerEndEXT",
+          "vkCmdDebugMarkerInsertEXT"
+        ]
       },
       {
         "name": "VK_EXT_tooling_info",
         "spec_version": "1",
-        "entrypoints": ["vkGetPhysicalDeviceToolPropertiesEXT"]
+        "entrypoints": [
+          "vkGetPhysicalDeviceToolPropertiesEXT"
+        ]
       }
     ],
     "enable_environment": {
       "ENABLE_VULKAN_RENDERDOC_CAPTURE": "1"
     },
     "disable_environment": {
-      "DISABLE_VULKAN_RENDERDOC_CAPTURE_1_43": "1"
+      "DISABLE_VULKAN_RENDERDOC_CAPTURE_1_45": "1"
     }
   }
 }

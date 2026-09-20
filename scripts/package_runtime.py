@@ -1,5 +1,5 @@
 ﻿#!/usr/bin/env python3
-"""Copy runtime binaries into rdx-tools/binaries and generate manifest."""
+"""Copy runtime binaries into rdc-tool/binaries and generate manifest."""
 
 from __future__ import annotations
 
@@ -16,7 +16,8 @@ SCRIPT_ROOT = Path(__file__).resolve().parents[1]
 if str(SCRIPT_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPT_ROOT))
 
-from rdx.runtime_requirements import should_bundle_site_package
+from rdc_tool.runtime_requirements import should_bundle_site_package
+from scripts.distribution_metadata import write_distribution_metadata
 from scripts._shared import ensure_within_root, resolve_repo_path, tools_root, write_text
 
 
@@ -277,8 +278,8 @@ def _manifest_entry(path: Path, out_root: Path) -> dict[str, object]:
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Package runtime binaries for rdx-tools")
-    parser.add_argument("--source", dest="renderdoc_source", default="", help="Repo-relative staging directory under the rdx-tools root")
+    parser = argparse.ArgumentParser(description="Package runtime binaries for rdc-tool")
+    parser.add_argument("--source", dest="renderdoc_source", default="", help="Repo-relative staging directory under the rdc-tool root")
     parser.add_argument("--python-home", default="", help="Absolute or repo-relative CPython home used to build the bundled runtime")
     parser.add_argument("--site-packages-source", default=".venv/Lib/site-packages", help="Repo-relative site-packages source for the bundled runtime")
     parser.add_argument("--python-version", default="", help="Override the bundled CPython version metadata")
@@ -332,6 +333,8 @@ def main(argv: list[str] | None = None) -> int:
     else:
         bundled_python = _existing_bundled_python_metadata(out_root)
 
+    if bundled_python:
+        write_distribution_metadata(tools_root_path, out_root / 'python' / 'Lib' / 'site-packages')
     manifest_entries = [_manifest_entry(path, out_root) for path in _iter_manifest_files(out_root)]
 
     if not manifest_entries:

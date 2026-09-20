@@ -8,7 +8,7 @@ from typing import Any
 
 
 def tools_root(anchor_file: str) -> Path:
-    env_root = os.environ.get("RDX_TOOLS_ROOT", "").strip()
+    env_root = os.environ.get("RDC_TOOL_ROOT", "").strip()
     if env_root:
         env_path = Path(env_root).expanduser().resolve()
         if env_path.is_dir():

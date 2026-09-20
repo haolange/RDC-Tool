@@ -5,12 +5,12 @@ Use this prompt for Android remote-only smoke through CLI transport. Consult [..
 Core sequence:
 
 ```bat
-rdx --json doctor
-rdx call rd.remote.connect --args-file intermediate\logs\remote_connect_args.json --format json
-rdx call rd.remote.ping --args-file intermediate\logs\remote_ping_args.json --format json
-rdx call rd.capture.open_file --args-file intermediate\logs\remote_open_file_args.json --format json
-rdx call rd.capture.open_replay --args-file intermediate\logs\remote_open_replay_args.json --format json
-rdx call rd.session.get_context --format json
+rdc-tool --json doctor
+rdc-tool call rd.remote.connect --args-file intermediate\logs\remote_connect_args.json --format json
+rdc-tool call rd.remote.ping --args-file intermediate\logs\remote_ping_args.json --format json
+rdc-tool call rd.capture.open_file --args-file intermediate\logs\remote_open_file_args.json --format json
+rdc-tool call rd.capture.open_replay --args-file intermediate\logs\remote_open_replay_args.json --format json
+rdc-tool call rd.session.get_context --format json
 ```
 
 For direct RenderDoc remote endpoints, the connect args file must include
@@ -33,7 +33,7 @@ Navigate with real IDs from the complete replay index, query one bounded action
 subtree, close the owning replay, and reopen it once. Reuse the established
 remote connection and the already confirmed transfer result instead of uploading
 the same capture repeatedly. Put smoke logs and small observation images under
-`RDX_INTERMEDIATE_ROOT`; remove them after the recorded acceptance result is saved.
+`RDC_TOOL_INTERMEDIATE_ROOT`; remove them after the recorded acceptance result is saved.
 The matching native client and helper expose `PresentReplay(event_id, texture_id)`.
 `remote_display.status=presented` requires the applied event, selected texture and fresh
 native completion sequence; PNG export alone does not prove presentation. Missing native

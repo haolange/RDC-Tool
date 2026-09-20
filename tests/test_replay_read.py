@@ -3,8 +3,8 @@ from types import SimpleNamespace as NS
 
 import pytest
 
-from rdx.core.replay_read import InitialContentsUnavailable, ReplayRestoreError, initial_provenance, preserving_event
-from rdx.runtime_catalog import validate_operation_arguments
+from rdc_tool.core.replay_read import InitialContentsUnavailable, ReplayRestoreError, initial_provenance, preserving_event
+from rdc_tool.runtime_catalog import validate_operation_arguments
 
 
 def test_read_failure_restores_event_before_propagating():

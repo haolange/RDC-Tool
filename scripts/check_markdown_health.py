@@ -10,7 +10,7 @@ if str(SCRIPT_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPT_ROOT))
 
 from scripts._shared import tools_root
-from rdx.runtime_catalog import catalog_payload
+from rdc_tool.runtime_catalog import catalog_payload
 
 
 RISKY_PATTERNS = (

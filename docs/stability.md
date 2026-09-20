@@ -1,15 +1,15 @@
 ﻿# Stability
 
-`rdx-tools` treats the CLI entrypoints and canonical JSON envelope as stable.
+`rdc-tool` treats the CLI entrypoints and canonical JSON envelope as stable.
 
 Stable public command:
 
-- `rdx`
+- `rdc-tool`
 
 Packaged launcher files:
 
-- `bin/rdx.cmd`
-- `bin/rdx`
+- `bin/rdc-tool.cmd`
+- `bin/rdc-tool`
 - `bundled-python cli/run_cli.py`
 
 Stable agent-facing commands:
@@ -47,3 +47,9 @@ Current contract policy:
 - `--daemon-context <id>` selects a continuous runtime namespace; omitting it uses `default`.
 - Interface changes update the same definitions, consumers, tests and documentation; do not introduce version-named runtime paths or compatibility aliases.
 
+
+## RenderDoc runtime baseline
+
+The current assembled and verified baseline is **RenderDoc 1.45**. RDC-Tool does not track every upstream minor release: a newer runtime becomes the baseline only after matching runtime packaging, catalog checks, tests and release gates pass. RenderDoc 1.44 and earlier official GUI releases are not separate assembly targets. Use the replay path matching this bundled runtime. Capture-format compatibility follows upstream RenderDoc.
+
+RDC-Agent **0.6.x** pairs with RDC-Tool **1.0.0** and the current RenderDoc **1.45** runtime. Catalog definitions and fingerprints, not package version numbers, authorize operations. Local PNG export does not prove Android device presentation.

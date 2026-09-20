@@ -7,7 +7,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-from rdx.runtime_catalog import catalog_payload
+from rdc_tool.runtime_catalog import catalog_payload
 
 
 def main(argv=None) -> int:

@@ -7,10 +7,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from rdx import server
-from rdx.context_snapshot import clear_context_snapshot, load_context_snapshot
-from rdx.preview_window import fit_content_rect, fit_size_within_bounds
-from rdx.runtime_state import clear_context_state, load_context_state, save_context_state
+from rdc_tool import server
+from rdc_tool.context_snapshot import clear_context_snapshot, load_context_snapshot
+from rdc_tool.preview_window import fit_content_rect, fit_size_within_bounds
+from rdc_tool.runtime_state import clear_context_state, load_context_state, save_context_state
 
 
 @pytest.fixture(autouse=True)

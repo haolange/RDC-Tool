@@ -1,13 +1,13 @@
-﻿# rdx-tools docs
+﻿# rdc-tool docs
 
-These documents describe the CLI-only `rdx-tools` runtime.
+These documents describe the CLI-only `rdc-tool` runtime.
 
 - [Quickstart](quickstart.md)
 - [Install](install.md)
 - [Agent integration](agent-integration.md)
 - [Session model](session-model.md)
 - [Agent model](agent-model.md)
-- [rdx-native agent playbook](rdx-native-agent-playbook.md)
+- [rdc-tool-native agent playbook](rdc-tool-native-agent-playbook.md)
 - [Documentation governance](doc-governance.md)
 - [Tools](tools.md)
 - [Tool reference](tool-reference.md)

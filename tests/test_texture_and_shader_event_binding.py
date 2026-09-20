@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 import numpy as np
 
-from rdx import server
+from rdc_tool import server
 
 
 class _FakeShaderPipe:

@@ -4,7 +4,7 @@ import hashlib
 from pathlib import Path
 
 from scripts.generate_tool_reference import generate_tool_reference
-from rdx.runtime_catalog import catalog_payload
+from rdc_tool.runtime_catalog import catalog_payload
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -25,14 +25,14 @@ def test_tool_reference_is_generated_from_code_owned_definitions() -> None:
         assert str(tool["scope"]) in document
 
 
-def test_rdx_native_playbook_covers_cli_and_runtime_contracts() -> None:
-    text = (ROOT / "docs" / "rdx-native-agent-playbook.md").read_text(encoding="utf-8-sig")
+def test_rdc_tool_native_playbook_covers_cli_and_runtime_contracts() -> None:
+    text = (ROOT / "docs" / "rdc-tool-native-agent-playbook.md").read_text(encoding="utf-8-sig")
     required_terms = [
-        "rdx --json doctor",
+        "rdc-tool --json doctor",
         "--daemon-context",
-        "rdx context status --json",
-        "rdx context update",
-        "rdx context clear",
+        "rdc-tool context status --json",
+        "rdc-tool context update",
+        "rdc-tool context clear",
         "capture open --file",
         "event list --format tsv",
         "pipeline show --event-id",

@@ -11,7 +11,7 @@ SUPPORTED_SCRIPTS = (
     "scripts/cleanup_workspace.py",
     "scripts/package_release.py",
     "scripts/package_runtime.py",
-    "scripts/rdx_install.ps1",
+    "scripts/rdc_tool_install.ps1",
     "scripts/release_gate.py",
     "scripts/smoke_cli.sh",
     "scripts/verify_release_package.py",

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from rdx import python_runtime
+from rdc_tool import python_runtime
 
 
 def _write(path: Path, content: bytes | str) -> None:

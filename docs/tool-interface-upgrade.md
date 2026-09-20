@@ -1,4 +1,4 @@
-﻿# Tool interface upgrade
+# Tool interface upgrade
 
 The current interface removes the following public entries without runtime aliases.
 
@@ -194,7 +194,7 @@ The current interface removes the following public entries without runtime alias
 | `rd.core.get_operation_history` | Retained. |
 | `rd.core.get_runtime_metrics` | Retained. |
 | `rd.core.list_tools` | Retained. |
-| `rd.core.search_tools` | Removed. Use `rd.core.list_tools(query=...)`, or `rdx tools search` from the CLI. Search matches names, descriptions, and parameter text; use namespace filtering for a domain-only list. |
+| `rd.core.search_tools` | Removed. Use `rd.core.list_tools(query=...)`, or `rdc-tool tools search` from the CLI. Search matches names, descriptions, and parameter text; use namespace filtering for a domain-only list. |
 | `rd.core.get_tool_graph` | Retained. |
 | `rd.vfs.ls` | Retained. |
 | `rd.vfs.cat` | Retained. |
@@ -218,79 +218,79 @@ New operation: `rd.mesh.get_post_transform_data(stage=vs|gs)`. This table is exp
 
 | 删除入口 | 复审结论 | 旧代码位置 | 原因与应有去向 |
 |---|---|---|---|
-| `rd.core.search_tools` | 合理 | HEAD:rdx/server_runtime.py:6019 | 旧为目录过滤；list_tools(query=...) 保留搜索，CLI search 仍在。 |
-| `rd.capture.get_thumbnail` | 删过头 | HEAD:rdx/server_runtime.py:6969 | 旧始终报 unavailable，但绑定存在 CaptureFile.GetThumbnail。截图需要回放，不等价于读取嵌入缩略图；应补 capture 级缩略图能力。 |
-| `rd.capture.list_frames` | 合理 | HEAD:rdx/server_runtime.py:6987 | 旧固定返回单帧0和空时间；capture/replay 元数据承接实际单帧信息，不承诺多帧捕获。 |
-| `rd.session.select_context` | 合理 | HEAD:rdx/server_runtime.py:6705 | 旧仅读取指定 context，没有切换 daemon；明确 context 的 get_context 承接真实读取语义。 |
-| `rd.event.get_actions` | 合理 | HEAD:rdx/server_runtime.py:7325 | 旧为带过滤和预算的根树；get_action_tree 保留过滤、子树、分页和投影；完整索引另有 get_replay_events。 |
-| `rd.event.get_drawcall_children` | 合理 | HEAD:rdx/server_runtime.py:7431 | 旧仅返回直接孩子 ID；get_action_details.children_event_ids 和子树查询可承接。 |
-| `rd.event.get_marker_stack` | 合理 | HEAD:rdx/server_runtime.py:7516 | 旧从父链筛 marker 名称；get_parent_chain 的真实标记可承接。 |
-| `rd.event.get_api_calls` | 删过头 | HEAD:rdx/server_runtime.py:7523 | 旧返回空数组，但 GetStructuredFile/GetStructuredData 提供结构化捕获源。应补有界事件关联 API/chunk 查询；不能承诺捕获之外的完整进程调用流。 |
-| `rd.pipeline.get_state_summary` | 合理 | HEAD:rdx/server_runtime.py:7618 | 显式请求需要的 sections 后可在调用方计算 binding_count 和摘要。默认字段变化不影响 primitive 可组合性，无需保留摘要包装。 |
-| `rd.pipeline.get_vertex_input` | 删过头 | HEAD:rdx/server_runtime.py:7675 | 旧误把普通 bindings 当 vertex_buffers；新 VB/IB/topology 仍缺顶点属性布局。绑定存在 GetVertexInputs，应补属性、槽位、偏移、格式等输入证据。 |
-| `rd.pipeline.get_primitive_topology` | 合理 | HEAD:rdx/server_runtime.py:7705 | get_state(sections=[topology]) 承接同一拓扑数据。 |
-| `rd.pipeline.get_viewports_scissors` | 删过头 | HEAD:rdx/server_runtime.py:7707 | 旧、新都只提取 viewport/scissor 第0项，且忽略 enabled；存在多个有效区域时无法取得其他区域。旧能力未完成不等于产品不需要，应提供完整数组/索引和有效状态。当前 section 名称存在不构成完整承接。 |
-| `rd.pipeline.get_rasterizer_state` | 删过头 | HEAD:rdx/server_runtime.py:7709 | 旧空对象；当前 sections 无 rasterizer。剔除、正反面、填充和偏置是渲染错误定位所需原始证据，应接入 API 状态。 |
-| `rd.pipeline.get_multisample_state` | 删过头 | HEAD:rdx/server_runtime.py:7711 | 旧空对象；当前缺 sample mask/alpha-to-coverage 等完整状态。纹理 sample 数不能替代；绑定 VKState.multisample 提供接入线索。 |
-| `rd.pipeline.get_blend_state` | 删过头 | HEAD:rdx/server_runtime.py:7713 | 当前模型和采集器仅保留 enabled 与颜色/alpha 混合方程，遗漏 writeMask、blendFactor、logicOperation 等原始状态。颜色完全禁止写入仍与正常写入返回相同信息，无法用 Skill 从方程还原，必须补状态字段。 |
-| `rd.pipeline.get_depth_stencil_state` | 删过头 | HEAD:rdx/server_runtime.py:7715 | 当前只有 depth test/write/function 和 stencil enabled，缺少正反面 stencil function/reference/compareMask/writeMask/fail/depthFail/pass 操作等。开启标志不能解释模板测试，应补原始状态。 |
-| `rd.pipeline.get_output_targets` | 合理 | HEAD:rdx/server_runtime.py:7717 | get_state(sections=[output_targets]) 保留目标和可视目标真值元数据，结果包层变化。 |
-| `rd.pipeline.get_render_targets` | 合理 | HEAD:rdx/server_runtime.py:7729 | 同一 output_targets section 提供 render_targets，不需重复入口。 |
-| `rd.pipeline.get_depth_target` | 合理 | HEAD:rdx/server_runtime.py:7735 | 同一 output_targets section 提供 depth_target，不需重复入口。 |
-| `rd.pipeline.get_uav_bindings` | 合理 | HEAD:rdx/server_runtime.py:7740 | 统一 bindings 的 type=UAV 使用相同采集器筛选，旧只是同样筛选。 |
-| `rd.pipeline.get_sampler_bindings` | 删过头 | HEAD:rdx/server_runtime.py:7744 | 旧空数组；新 schema 接受 Sampler，但采集器只调用 RO/RW/ConstantBlocks，没有 GetSamplers。反射名称也不是实际采样器状态；现有迁移承诺不成立。 |
-| `rd.pipeline.get_push_constants` | 删过头 | HEAD:rdx/server_runtime.py:7763 | 定位 Vulkan 常量错误需要真实 push-constant 字节、范围与阶段信息。当前通用常量块可能解码部分值，但未提供完整原始范围/状态，VKState.pushconsts 是接入线索；应补到统一常量或状态查询。 |
-| `rd.pipeline.get_dynamic_state` | 删过头 | HEAD:rdx/server_runtime.py:7765 | 定位 Vulkan 状态问题需要实际生效状态及可获得的动态声明信息；当前 sections 只提供其中一部分，组合 viewport 等不能生成缺失字段。应按 API 补必要状态，不要求完整历史。 |
-| `rd.pipeline.get_root_signature` | 删过头 | HEAD:rdx/server_runtime.py:7767 | 旧空对象；绑定 D3D12State.rootSignature 存在，普通绑定列表不等价于 root 参数/表布局。应补 API 专属查询。 |
-| `rd.pipeline.get_descriptor_heaps` | 删过头 | HEAD:rdx/server_runtime.py:7769 | 旧空数组；绑定 D3D12State.descriptorHeaps 存在。已访问资源绑定不能替代 heap 身份、范围和表关系。 |
-| `rd.pipeline.get_resource_states` | 删过头 | HEAD:rdx/server_runtime.py:7771 | 旧空数组；绑定 D3D12State.resourceStates、VKState.images 可作为读取线索。应提供当前状态与可证变化；不能把快照说成完整 barrier 历史。 |
-| `rd.resource.list_textures` | 合理 | HEAD:rdx/server_runtime.py:7890 | list_all(kind=texture) 承接分类枚举。 |
-| `rd.resource.list_buffers` | 合理 | HEAD:rdx/server_runtime.py:7892 | list_all(kind=buffer) 承接分类枚举。 |
-| `rd.resource.get_history` | 合理 | HEAD:rdx/server_runtime.py:7916 | 旧实为 GetUsage 记录和字符串写入判定；get_usage 保留事件记录与写入分类，不是真正逐版本内容历史。 |
-| `rd.resource.get_initial_contents` | 删过头 | HEAD:rdx/server_runtime.py:7931 | 判断 capture 中数据是否在首次写入前已错误，需要可证明的初始/事件前读取语义。当前内容和首次使用不能生成此前字节；应补时间点读取能力并明确 capture 未记录的边界，不恢复旧假 initial 包装。 |
-| `rd.resource.get_current_contents` | 合理 | HEAD:rdx/server_runtime.py:7931 | 旧转发 texture/buffer 读取或导出；新按资源类型直接调用，保持事件、subresource、范围参数。 |
-| `rd.resource.get_descriptor_info` | 删过头 | HEAD:rdx/server_runtime.py:8010 | 旧实际转发 get_details，这部分未丢；但迁移承诺 descriptor-backed bindings 未保留完整 view/subresource/range/sampler 信息。应补描述符证据，不必恢复重复 get_details 包装。 |
-| `rd.resource.get_creation_context` | 删过头 | HEAD:rdx/server_runtime.py:8030 | 旧只返回首次使用，不是创建；ResourceDescription.initialisationChunks/parentResources/derivedResources 存在。应补初始化/派生来源，缺失时未知，不能承诺创建调用栈总可得。 |
-| `rd.texture.get_subresource_data` | 合理 | HEAD:rdx/server_runtime.py:8680 | get_data 的 subresource={mip,slice,sample} 承接旧读取。 |
-| `rd.texture.get_min_max` | 合理 | HEAD:rdx/server_runtime.py:8802 | compute_stats 承接统计并区分 NaN/Inf；不是删掉最值计算。 |
-| `rd.texture.save_mip_chain` | 合理 | HEAD:rdx/server_runtime.py:8985 | 纹理详情取得 mip 数后，循环 export.texture 指定 subresource 即可。循环、结果收集与重试属于可编程调用，无需批量宏。 |
-| `rd.mesh.get_post_vs_data` | 合理 | HEAD:rdx/server_runtime.py:8518 | get_post_transform_data(stage=vs) 保留实际 GetPostVSData、事件、instance、view 和数量控制。 |
-| `rd.mesh.get_post_gs_data` | 合理 | HEAD:rdx/server_runtime.py:8518 | get_post_transform_data(stage=gs) 保留 GS 输出与未绑定状态区分。 |
-| `rd.mesh.decode_vertex_data` | 合理 | HEAD:rdx/server_runtime.py:8589 | 旧本就转发 buffer.get_structured_data；显式 layout/offset/count 可承接解码。自动取得 layout 的缺口另记 vertex_input。 |
-| `rd.mesh.get_mesh_preview` | 合理 | HEAD:rdx/server_runtime.py:8634 | 旧能力只是 wireframe overlay；查询输出目标再调用 render_overlay 可组合实现。独立几何相机查看器从未由旧入口提供，不借审查扩充产品要求。 |
-| `rd.debug.pixel_history` | 合理 | HEAD:rdx/server_runtime.py:11140 | texture.get_pixel_history 统一显式纹理与当前输出目标，旧只是转发。 |
-| `rd.debug.explain_test_failure` | 合理 | HEAD:rdx/server_runtime.py:11156 | 旧拼接 flags 字符串，没有新增诊断；原始测试证据留在像素历史，解释由 Debugger 方法承担。 |
-| `rd.perf.get_frame_timing` | 删过头 | HEAD:rdx/server_runtime.py:11338 | Optimizer 判断整帧收益需要覆盖整帧的真实测量。现有事件耗时未提供完整帧时间边界，top20 或全部事件相加都不能自行证明等价；应补底层测量语义，分析和报告仍交 Skill。 |
-| `rd.perf.get_pipeline_statistics` | 合理 | HEAD:rdx/server_runtime.py:11342 | enumerate/describe/sample 可读取设备支持的真实计数器；事件树可统计 draw/dispatch。聚合交调用方，设备不支持某计数器属于能力限制，不需恢复固定统计包装。 |
-| `rd.diag.check_render_targets` | 合理 | HEAD:rdx/server_runtime.py:11750 | 输出目标 primitive 提供事实，目标检查由 Skill 或程序化条件完成；无需每个诊断主题一个 Tool。 |
-| `rd.diag.check_depth_stencil` | 合理 | HEAD:rdx/server_runtime.py:11752 | depth_stencil 数据查询加业务条件足以承载检查；诊断规则不必硬编码为独立入口。 |
-| `rd.diag.check_viewport_scissor` | 合理 | HEAD:rdx/server_runtime.py:11756 | viewport/scissor 原始值可查，空范围与越界可由调用方计算；不要求恢复专项诊断 Tool。 |
-| `rd.diag.check_culling` | 合理 | HEAD:rdx/server_runtime.py:11760 | 剔除诊断是流程包装，应留给 Skill。缺失的原始状态只在 get_rasterizer_state 记为删过头，不把其上层诊断也算一次。 |
-| `rd.diag.check_blend` | 合理 | HEAD:rdx/server_runtime.py:11764 | blend 数据可查，结合像素历史与假设进行判断是专业流程。scan 没有同名规则不构成删除过头。 |
-| `rd.diag.check_srgb` | 合理 | HEAD:rdx/server_runtime.py:11768 | 目标格式、纹理和 shader 是事实输入；格式计数及颜色空间推理可编程组合，不需固定诊断入口。 |
-| `rd.diag.check_resource_bindings` | 合理 | HEAD:rdx/server_runtime.py:11772 | 绑定查询后计数、对照反射和验证假设属于组合。sampler 原始数据缺口记在 pipeline，不保留诊断包装。 |
-| `rd.diag.check_constant_buffers` | 合理 | HEAD:rdx/server_runtime.py:11776 | 常量读取与解码 primitive 保留，值是否异常由上下文和方法判断，无需固定检查包装。 |
-| `rd.diag.check_d3d12_resource_states` | 合理 | HEAD:rdx/server_runtime.py:11780 | 状态合法性判断可以组合数据和规则；底层状态缺口记在 get_resource_states，不恢复这个旧 unsupported 包装。 |
-| `rd.diag.check_vk_dynamic_state` | 合理 | HEAD:rdx/server_runtime.py:11782 | 动态状态诊断交 Skill；底层必要状态缺口记在 get_dynamic_state，不重复恢复诊断入口。 |
-| `rd.export.pipeline_state_json` | 合理 | HEAD:rdx/server_runtime.py:11553 | 旧为状态查询后 JSON 写文件；canonical JSON 可由调用方显式保存。输出结构变化不等于数据消失。 |
-| `rd.export.event_tree_json` | 合理 | HEAD:rdx/server_runtime.py:11563 | 旧为树查询后写文件；新查询后保存可承接，但必须遍历分页/核对截断，不能只保存第一页称完整树。 |
-| `rd.export.resource_list_csv` | 合理 | HEAD:rdx/server_runtime.py:11573 | list_all 提供记录，调用方可用标准序列化生成 CSV；格式转换不是 RenderDoc 独立能力。TSV 不等于 CSV，但不需要为转换恢复 Tool。 |
-| `rd.export.pixel_history_json` | 合理 | HEAD:rdx/server_runtime.py:11587 | 旧为像素历史查询后 JSON 写文件；直接查询后显式保存可承接。 |
-| `rd.export.repro_bundle_zip` | 合理 | HEAD:rdx/server_runtime.py:11698 | 选取证据、生成 manifest 和 ZIP 是可编程组织工作；底层导出保留，不需固定复现包布局 Tool。 |
-| `rd.export.markdown_report` | 合理 | HEAD:rdx/server_runtime.py:11705 | 报告组织由 Skill/调用方完成；CLI 提供数据与导出，不要求 CLI 自身具备每一种报告模板。 |
-| `rd.remote.set_overlay_options` | 合理 | HEAD:rdx/server_runtime.py:13044 | 旧仅报无 RPC；未发现它是当前回放分析、观察或捕获链路必需操作。运行中修改目标端 HUD 属于另一个控制需求，不因旧名称存在便要求纳入本轮产品。 |
-| `rd.macro.summarize_frame` | 合理 | HEAD:rdx/server_runtime.py:11809 | 完整事件索引、状态查询加程序化计数和聚合即可；programmable tool calls 可以执行计算，不要求 LLM 心算，也不需固定摘要 Tool。 |
-| `rd.macro.find_pass_by_marker` | 合理 | HEAD:rdx/server_runtime.py:11835 | 事件树/父链提供名称与路径，调用方可做路径正则、大小写与筛选。单次 search 不完全等价，不影响组合足够。 |
-| `rd.macro.explain_pixel` | 合理 | HEAD:rdx/server_runtime.py:11883 | 旧只说修改次数并截前20条；像素历史保留，解释责任迁给专业方法合理，不声称真实模型效果已通过。 |
-| `rd.macro.resource_dependency_graph` | 合理 | HEAD:rdx/server_runtime.py:11893 | 资源使用、事件与绑定提供事实，调用方可程序化建立生产者/消费者关系和图，再区分观察与因果。图构建不是新增底层读取，不应强制留在 Tool。更细状态/范围缺口只记对应 primitive。 |
-| `rd.macro.compare_events_report` | 合理 | HEAD:rdx/server_runtime.py:11973 | 旧 diff_pipeline_state 加 Markdown 排版；原始 diff 仍在，报告由消费者组织，不需固定宏。 |
-| `rd.macro.find_unexpected_clear` | 合理 | HEAD:rdx/server_runtime.py:11989 | 旧仅 search name_contains=clear，没有 unexpected 判定；原始检索保留，是否异常由证据与任务约束判断。 |
-| `rd.macro.quick_triage_missing_draw` | 合理 | HEAD:rdx/server_runtime.py:11993 | 事件、管线、资源、像素和 shader 的排查顺序属于 Skill；原始数据缺口分别修对应 primitive，不能据此恢复整体宏。 |
-| `rd.macro.build_bug_report_pack` | 合理 | HEAD:rdx/server_runtime.py:12003 | 读取摘要/context、选择证据再归档属于可编程流程；无需与其他报告包并存独立宏。 |
-| `rd.macro.shader_hotfix_validate` | 合理 | HEAD:rdx/server_runtime.py:12014 | 观察、替换、测量、差异与恢复 primitive 可组合；身份/审批/回执由执行层保证，流程由 Skill 组织。不能用缺少一键宏代替生命周期缺陷判断。 |
-| `rd.util.compute_hash` | 合理 | HEAD:rdx/server_runtime.py:12106 | 旧通用文件哈希，宿主语言/系统可做；移出 RDX 专业工具面合理，Agent 的证据哈希仍须由可信代码产生。 |
-| `rd.util.diff_text` | 合理 | HEAD:rdx/server_runtime.py:12123 | 旧通用 unified diff，宿主工具可承接；不是 RenderDoc 专属能力。 |
-| `rd.util.pack_zip` | 合理 | HEAD:rdx/server_runtime.py:12169 | 通用归档可交宿主执行；宿主执行环境的配置与验证不属于 RenderDoc primitive，不因需要另一次调用而恢复 Tool。 |
+| `rd.core.search_tools` | 合理 | HEAD:rdc_tool/server_runtime.py:6019 | 旧为目录过滤；list_tools(query=...) 保留搜索，CLI search 仍在。 |
+| `rd.capture.get_thumbnail` | 删过头 | HEAD:rdc_tool/server_runtime.py:6969 | 旧始终报 unavailable，但绑定存在 CaptureFile.GetThumbnail。截图需要回放，不等价于读取嵌入缩略图；应补 capture 级缩略图能力。 |
+| `rd.capture.list_frames` | 合理 | HEAD:rdc_tool/server_runtime.py:6987 | 旧固定返回单帧0和空时间；capture/replay 元数据承接实际单帧信息，不承诺多帧捕获。 |
+| `rd.session.select_context` | 合理 | HEAD:rdc_tool/server_runtime.py:6705 | 旧仅读取指定 context，没有切换 daemon；明确 context 的 get_context 承接真实读取语义。 |
+| `rd.event.get_actions` | 合理 | HEAD:rdc_tool/server_runtime.py:7325 | 旧为带过滤和预算的根树；get_action_tree 保留过滤、子树、分页和投影；完整索引另有 get_replay_events。 |
+| `rd.event.get_drawcall_children` | 合理 | HEAD:rdc_tool/server_runtime.py:7431 | 旧仅返回直接孩子 ID；get_action_details.children_event_ids 和子树查询可承接。 |
+| `rd.event.get_marker_stack` | 合理 | HEAD:rdc_tool/server_runtime.py:7516 | 旧从父链筛 marker 名称；get_parent_chain 的真实标记可承接。 |
+| `rd.event.get_api_calls` | 删过头 | HEAD:rdc_tool/server_runtime.py:7523 | 旧返回空数组，但 GetStructuredFile/GetStructuredData 提供结构化捕获源。应补有界事件关联 API/chunk 查询；不能承诺捕获之外的完整进程调用流。 |
+| `rd.pipeline.get_state_summary` | 合理 | HEAD:rdc_tool/server_runtime.py:7618 | 显式请求需要的 sections 后可在调用方计算 binding_count 和摘要。默认字段变化不影响 primitive 可组合性，无需保留摘要包装。 |
+| `rd.pipeline.get_vertex_input` | 删过头 | HEAD:rdc_tool/server_runtime.py:7675 | 旧误把普通 bindings 当 vertex_buffers；新 VB/IB/topology 仍缺顶点属性布局。绑定存在 GetVertexInputs，应补属性、槽位、偏移、格式等输入证据。 |
+| `rd.pipeline.get_primitive_topology` | 合理 | HEAD:rdc_tool/server_runtime.py:7705 | get_state(sections=[topology]) 承接同一拓扑数据。 |
+| `rd.pipeline.get_viewports_scissors` | 删过头 | HEAD:rdc_tool/server_runtime.py:7707 | 旧、新都只提取 viewport/scissor 第0项，且忽略 enabled；存在多个有效区域时无法取得其他区域。旧能力未完成不等于产品不需要，应提供完整数组/索引和有效状态。当前 section 名称存在不构成完整承接。 |
+| `rd.pipeline.get_rasterizer_state` | 删过头 | HEAD:rdc_tool/server_runtime.py:7709 | 旧空对象；当前 sections 无 rasterizer。剔除、正反面、填充和偏置是渲染错误定位所需原始证据，应接入 API 状态。 |
+| `rd.pipeline.get_multisample_state` | 删过头 | HEAD:rdc_tool/server_runtime.py:7711 | 旧空对象；当前缺 sample mask/alpha-to-coverage 等完整状态。纹理 sample 数不能替代；绑定 VKState.multisample 提供接入线索。 |
+| `rd.pipeline.get_blend_state` | 删过头 | HEAD:rdc_tool/server_runtime.py:7713 | 当前模型和采集器仅保留 enabled 与颜色/alpha 混合方程，遗漏 writeMask、blendFactor、logicOperation 等原始状态。颜色完全禁止写入仍与正常写入返回相同信息，无法用 Skill 从方程还原，必须补状态字段。 |
+| `rd.pipeline.get_depth_stencil_state` | 删过头 | HEAD:rdc_tool/server_runtime.py:7715 | 当前只有 depth test/write/function 和 stencil enabled，缺少正反面 stencil function/reference/compareMask/writeMask/fail/depthFail/pass 操作等。开启标志不能解释模板测试，应补原始状态。 |
+| `rd.pipeline.get_output_targets` | 合理 | HEAD:rdc_tool/server_runtime.py:7717 | get_state(sections=[output_targets]) 保留目标和可视目标真值元数据，结果包层变化。 |
+| `rd.pipeline.get_render_targets` | 合理 | HEAD:rdc_tool/server_runtime.py:7729 | 同一 output_targets section 提供 render_targets，不需重复入口。 |
+| `rd.pipeline.get_depth_target` | 合理 | HEAD:rdc_tool/server_runtime.py:7735 | 同一 output_targets section 提供 depth_target，不需重复入口。 |
+| `rd.pipeline.get_uav_bindings` | 合理 | HEAD:rdc_tool/server_runtime.py:7740 | 统一 bindings 的 type=UAV 使用相同采集器筛选，旧只是同样筛选。 |
+| `rd.pipeline.get_sampler_bindings` | 删过头 | HEAD:rdc_tool/server_runtime.py:7744 | 旧空数组；新 schema 接受 Sampler，但采集器只调用 RO/RW/ConstantBlocks，没有 GetSamplers。反射名称也不是实际采样器状态；现有迁移承诺不成立。 |
+| `rd.pipeline.get_push_constants` | 删过头 | HEAD:rdc_tool/server_runtime.py:7763 | 定位 Vulkan 常量错误需要真实 push-constant 字节、范围与阶段信息。当前通用常量块可能解码部分值，但未提供完整原始范围/状态，VKState.pushconsts 是接入线索；应补到统一常量或状态查询。 |
+| `rd.pipeline.get_dynamic_state` | 删过头 | HEAD:rdc_tool/server_runtime.py:7765 | 定位 Vulkan 状态问题需要实际生效状态及可获得的动态声明信息；当前 sections 只提供其中一部分，组合 viewport 等不能生成缺失字段。应按 API 补必要状态，不要求完整历史。 |
+| `rd.pipeline.get_root_signature` | 删过头 | HEAD:rdc_tool/server_runtime.py:7767 | 旧空对象；绑定 D3D12State.rootSignature 存在，普通绑定列表不等价于 root 参数/表布局。应补 API 专属查询。 |
+| `rd.pipeline.get_descriptor_heaps` | 删过头 | HEAD:rdc_tool/server_runtime.py:7769 | 旧空数组；绑定 D3D12State.descriptorHeaps 存在。已访问资源绑定不能替代 heap 身份、范围和表关系。 |
+| `rd.pipeline.get_resource_states` | 删过头 | HEAD:rdc_tool/server_runtime.py:7771 | 旧空数组；绑定 D3D12State.resourceStates、VKState.images 可作为读取线索。应提供当前状态与可证变化；不能把快照说成完整 barrier 历史。 |
+| `rd.resource.list_textures` | 合理 | HEAD:rdc_tool/server_runtime.py:7890 | list_all(kind=texture) 承接分类枚举。 |
+| `rd.resource.list_buffers` | 合理 | HEAD:rdc_tool/server_runtime.py:7892 | list_all(kind=buffer) 承接分类枚举。 |
+| `rd.resource.get_history` | 合理 | HEAD:rdc_tool/server_runtime.py:7916 | 旧实为 GetUsage 记录和字符串写入判定；get_usage 保留事件记录与写入分类，不是真正逐版本内容历史。 |
+| `rd.resource.get_initial_contents` | 删过头 | HEAD:rdc_tool/server_runtime.py:7931 | 判断 capture 中数据是否在首次写入前已错误，需要可证明的初始/事件前读取语义。当前内容和首次使用不能生成此前字节；应补时间点读取能力并明确 capture 未记录的边界，不恢复旧假 initial 包装。 |
+| `rd.resource.get_current_contents` | 合理 | HEAD:rdc_tool/server_runtime.py:7931 | 旧转发 texture/buffer 读取或导出；新按资源类型直接调用，保持事件、subresource、范围参数。 |
+| `rd.resource.get_descriptor_info` | 删过头 | HEAD:rdc_tool/server_runtime.py:8010 | 旧实际转发 get_details，这部分未丢；但迁移承诺 descriptor-backed bindings 未保留完整 view/subresource/range/sampler 信息。应补描述符证据，不必恢复重复 get_details 包装。 |
+| `rd.resource.get_creation_context` | 删过头 | HEAD:rdc_tool/server_runtime.py:8030 | 旧只返回首次使用，不是创建；ResourceDescription.initialisationChunks/parentResources/derivedResources 存在。应补初始化/派生来源，缺失时未知，不能承诺创建调用栈总可得。 |
+| `rd.texture.get_subresource_data` | 合理 | HEAD:rdc_tool/server_runtime.py:8680 | get_data 的 subresource={mip,slice,sample} 承接旧读取。 |
+| `rd.texture.get_min_max` | 合理 | HEAD:rdc_tool/server_runtime.py:8802 | compute_stats 承接统计并区分 NaN/Inf；不是删掉最值计算。 |
+| `rd.texture.save_mip_chain` | 合理 | HEAD:rdc_tool/server_runtime.py:8985 | 纹理详情取得 mip 数后，循环 export.texture 指定 subresource 即可。循环、结果收集与重试属于可编程调用，无需批量宏。 |
+| `rd.mesh.get_post_vs_data` | 合理 | HEAD:rdc_tool/server_runtime.py:8518 | get_post_transform_data(stage=vs) 保留实际 GetPostVSData、事件、instance、view 和数量控制。 |
+| `rd.mesh.get_post_gs_data` | 合理 | HEAD:rdc_tool/server_runtime.py:8518 | get_post_transform_data(stage=gs) 保留 GS 输出与未绑定状态区分。 |
+| `rd.mesh.decode_vertex_data` | 合理 | HEAD:rdc_tool/server_runtime.py:8589 | 旧本就转发 buffer.get_structured_data；显式 layout/offset/count 可承接解码。自动取得 layout 的缺口另记 vertex_input。 |
+| `rd.mesh.get_mesh_preview` | 合理 | HEAD:rdc_tool/server_runtime.py:8634 | 旧能力只是 wireframe overlay；查询输出目标再调用 render_overlay 可组合实现。独立几何相机查看器从未由旧入口提供，不借审查扩充产品要求。 |
+| `rd.debug.pixel_history` | 合理 | HEAD:rdc_tool/server_runtime.py:11140 | texture.get_pixel_history 统一显式纹理与当前输出目标，旧只是转发。 |
+| `rd.debug.explain_test_failure` | 合理 | HEAD:rdc_tool/server_runtime.py:11156 | 旧拼接 flags 字符串，没有新增诊断；原始测试证据留在像素历史，解释由 Debugger 方法承担。 |
+| `rd.perf.get_frame_timing` | 删过头 | HEAD:rdc_tool/server_runtime.py:11338 | Optimizer 判断整帧收益需要覆盖整帧的真实测量。现有事件耗时未提供完整帧时间边界，top20 或全部事件相加都不能自行证明等价；应补底层测量语义，分析和报告仍交 Skill。 |
+| `rd.perf.get_pipeline_statistics` | 合理 | HEAD:rdc_tool/server_runtime.py:11342 | enumerate/describe/sample 可读取设备支持的真实计数器；事件树可统计 draw/dispatch。聚合交调用方，设备不支持某计数器属于能力限制，不需恢复固定统计包装。 |
+| `rd.diag.check_render_targets` | 合理 | HEAD:rdc_tool/server_runtime.py:11750 | 输出目标 primitive 提供事实，目标检查由 Skill 或程序化条件完成；无需每个诊断主题一个 Tool。 |
+| `rd.diag.check_depth_stencil` | 合理 | HEAD:rdc_tool/server_runtime.py:11752 | depth_stencil 数据查询加业务条件足以承载检查；诊断规则不必硬编码为独立入口。 |
+| `rd.diag.check_viewport_scissor` | 合理 | HEAD:rdc_tool/server_runtime.py:11756 | viewport/scissor 原始值可查，空范围与越界可由调用方计算；不要求恢复专项诊断 Tool。 |
+| `rd.diag.check_culling` | 合理 | HEAD:rdc_tool/server_runtime.py:11760 | 剔除诊断是流程包装，应留给 Skill。缺失的原始状态只在 get_rasterizer_state 记为删过头，不把其上层诊断也算一次。 |
+| `rd.diag.check_blend` | 合理 | HEAD:rdc_tool/server_runtime.py:11764 | blend 数据可查，结合像素历史与假设进行判断是专业流程。scan 没有同名规则不构成删除过头。 |
+| `rd.diag.check_srgb` | 合理 | HEAD:rdc_tool/server_runtime.py:11768 | 目标格式、纹理和 shader 是事实输入；格式计数及颜色空间推理可编程组合，不需固定诊断入口。 |
+| `rd.diag.check_resource_bindings` | 合理 | HEAD:rdc_tool/server_runtime.py:11772 | 绑定查询后计数、对照反射和验证假设属于组合。sampler 原始数据缺口记在 pipeline，不保留诊断包装。 |
+| `rd.diag.check_constant_buffers` | 合理 | HEAD:rdc_tool/server_runtime.py:11776 | 常量读取与解码 primitive 保留，值是否异常由上下文和方法判断，无需固定检查包装。 |
+| `rd.diag.check_d3d12_resource_states` | 合理 | HEAD:rdc_tool/server_runtime.py:11780 | 状态合法性判断可以组合数据和规则；底层状态缺口记在 get_resource_states，不恢复这个旧 unsupported 包装。 |
+| `rd.diag.check_vk_dynamic_state` | 合理 | HEAD:rdc_tool/server_runtime.py:11782 | 动态状态诊断交 Skill；底层必要状态缺口记在 get_dynamic_state，不重复恢复诊断入口。 |
+| `rd.export.pipeline_state_json` | 合理 | HEAD:rdc_tool/server_runtime.py:11553 | 旧为状态查询后 JSON 写文件；canonical JSON 可由调用方显式保存。输出结构变化不等于数据消失。 |
+| `rd.export.event_tree_json` | 合理 | HEAD:rdc_tool/server_runtime.py:11563 | 旧为树查询后写文件；新查询后保存可承接，但必须遍历分页/核对截断，不能只保存第一页称完整树。 |
+| `rd.export.resource_list_csv` | 合理 | HEAD:rdc_tool/server_runtime.py:11573 | list_all 提供记录，调用方可用标准序列化生成 CSV；格式转换不是 RenderDoc 独立能力。TSV 不等于 CSV，但不需要为转换恢复 Tool。 |
+| `rd.export.pixel_history_json` | 合理 | HEAD:rdc_tool/server_runtime.py:11587 | 旧为像素历史查询后 JSON 写文件；直接查询后显式保存可承接。 |
+| `rd.export.repro_bundle_zip` | 合理 | HEAD:rdc_tool/server_runtime.py:11698 | 选取证据、生成 manifest 和 ZIP 是可编程组织工作；底层导出保留，不需固定复现包布局 Tool。 |
+| `rd.export.markdown_report` | 合理 | HEAD:rdc_tool/server_runtime.py:11705 | 报告组织由 Skill/调用方完成；CLI 提供数据与导出，不要求 CLI 自身具备每一种报告模板。 |
+| `rd.remote.set_overlay_options` | 合理 | HEAD:rdc_tool/server_runtime.py:13044 | 旧仅报无 RPC；未发现它是当前回放分析、观察或捕获链路必需操作。运行中修改目标端 HUD 属于另一个控制需求，不因旧名称存在便要求纳入本轮产品。 |
+| `rd.macro.summarize_frame` | 合理 | HEAD:rdc_tool/server_runtime.py:11809 | 完整事件索引、状态查询加程序化计数和聚合即可；programmable tool calls 可以执行计算，不要求 LLM 心算，也不需固定摘要 Tool。 |
+| `rd.macro.find_pass_by_marker` | 合理 | HEAD:rdc_tool/server_runtime.py:11835 | 事件树/父链提供名称与路径，调用方可做路径正则、大小写与筛选。单次 search 不完全等价，不影响组合足够。 |
+| `rd.macro.explain_pixel` | 合理 | HEAD:rdc_tool/server_runtime.py:11883 | 旧只说修改次数并截前20条；像素历史保留，解释责任迁给专业方法合理，不声称真实模型效果已通过。 |
+| `rd.macro.resource_dependency_graph` | 合理 | HEAD:rdc_tool/server_runtime.py:11893 | 资源使用、事件与绑定提供事实，调用方可程序化建立生产者/消费者关系和图，再区分观察与因果。图构建不是新增底层读取，不应强制留在 Tool。更细状态/范围缺口只记对应 primitive。 |
+| `rd.macro.compare_events_report` | 合理 | HEAD:rdc_tool/server_runtime.py:11973 | 旧 diff_pipeline_state 加 Markdown 排版；原始 diff 仍在，报告由消费者组织，不需固定宏。 |
+| `rd.macro.find_unexpected_clear` | 合理 | HEAD:rdc_tool/server_runtime.py:11989 | 旧仅 search name_contains=clear，没有 unexpected 判定；原始检索保留，是否异常由证据与任务约束判断。 |
+| `rd.macro.quick_triage_missing_draw` | 合理 | HEAD:rdc_tool/server_runtime.py:11993 | 事件、管线、资源、像素和 shader 的排查顺序属于 Skill；原始数据缺口分别修对应 primitive，不能据此恢复整体宏。 |
+| `rd.macro.build_bug_report_pack` | 合理 | HEAD:rdc_tool/server_runtime.py:12003 | 读取摘要/context、选择证据再归档属于可编程流程；无需与其他报告包并存独立宏。 |
+| `rd.macro.shader_hotfix_validate` | 合理 | HEAD:rdc_tool/server_runtime.py:12014 | 观察、替换、测量、差异与恢复 primitive 可组合；身份/审批/回执由执行层保证，流程由 Skill 组织。不能用缺少一键宏代替生命周期缺陷判断。 |
+| `rd.util.compute_hash` | 合理 | HEAD:rdc_tool/server_runtime.py:12106 | 旧通用文件哈希，宿主语言/系统可做；移出 RDC-Tool 专业工具面合理，Agent 的证据哈希仍须由可信代码产生。 |
+| `rd.util.diff_text` | 合理 | HEAD:rdc_tool/server_runtime.py:12123 | 旧通用 unified diff，宿主工具可承接；不是 RenderDoc 专属能力。 |
+| `rd.util.pack_zip` | 合理 | HEAD:rdc_tool/server_runtime.py:12169 | 通用归档可交宿主执行；宿主执行环境的配置与验证不属于 RenderDoc primitive，不因需要另一次调用而恢复 Tool。 |
 
 ### 关键代码证据与验证边界
 
@@ -328,4 +328,4 @@ output-target view/subresource/slot元数据的覆盖纳入既有描述符能力
 
 The approved 18-gap repair keeps the 55 reasonable deletions. Four operations now exist in the canonical definitions: capture thumbnail, event structured calls, resource descriptors and complete replay timing. Other gaps expand pipeline/resource/texture/buffer contracts. Generated reference documents their current arguments; the review table remains historical rationale, not a runtime mapping.
 
-Implementation is not equivalent to full acceptance. Real Vulkan fixture checks cover embedded thumbnail, full pipeline sections, descriptors, structured calls, differing initial/current contents with restoration and GPU frame samples. Android matching-runtime deployment and the original WhiteHair repeat-observation failure remain unverified; see the restoration tasks in [tool-convergence-tasks.md](tool-convergence-tasks.md).
+Implementation is not equivalent to full acceptance. Real Vulkan fixture checks cover embedded thumbnail, full pipeline sections, descriptors, structured calls, differing initial/current contents with restoration and GPU frame samples. For dated Android matching-runtime and repeated-observation evidence, see the restoration tasks in [tool-convergence-tasks.md](https://github.com/haolange/RDC-Tool/blob/main/docs/tool-convergence-tasks.md).

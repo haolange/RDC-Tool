@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Release gate checks for standalone rdx-tools package."""
+"""Release gate checks for standalone rdc-tool package."""
 
 from __future__ import annotations
 
@@ -18,15 +18,15 @@ SCRIPT_ROOT = Path(__file__).resolve().parents[1]
 if str(SCRIPT_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPT_ROOT))
 
-from rdx.python_runtime import validate_bundled_python_layout
-from rdx.runtime_catalog import catalog_payload
+from rdc_tool.python_runtime import validate_bundled_python_layout
+from rdc_tool.runtime_catalog import catalog_payload
 from scripts import package_release as release_packager
 from scripts._shared import run_subprocess, tools_root, write_text
 from scripts.generate_tool_reference import generate_tool_reference
 
 
 REQUIRED_DIRS = [
-    "rdx",
+    "rdc_tool",
     "bin",
     "cli",
     "spec",
@@ -35,7 +35,7 @@ REQUIRED_DIRS = [
     "tests",
     "binaries/windows/x64/python",
     "binaries/windows/x64/pymodules",
-    "intermediate/runtime/rdx_cli",
+    "intermediate/runtime/rdc_tool_cli",
     "intermediate/runtime/worker-state",
     "intermediate/artifacts",
     "intermediate/pytest",
@@ -46,15 +46,15 @@ REQUIRED_FILES = [
     "pyproject.toml",
     "CHANGELOG.md",
     "THIRD_PARTY_NOTICES.md",
-    "docs/rdx-native-agent-playbook.md",
+    "docs/rdc-tool-native-agent-playbook.md",
     "docs/tool-reference.md",
 ]
 
 BASH_SMOKE_LOG = "intermediate/logs/smoke_cli.log"
-PUBLIC_COMMAND = "rdx"
-WINDOWS_LAUNCHER_FILE = "bin/rdx.cmd"
+PUBLIC_COMMAND = "rdc-tool"
+WINDOWS_LAUNCHER_FILE = "bin/rdc-tool.cmd"
 EXPECTED_PUBLIC_COMMANDS = [PUBLIC_COMMAND]
-EXPECTED_ENTRYPOINTS = [WINDOWS_LAUNCHER_FILE, "bin/rdx", "cli/run_cli.py", "install.cmd"]
+EXPECTED_ENTRYPOINTS = [WINDOWS_LAUNCHER_FILE, "bin/rdc-tool", "cli/run_cli.py", "install.cmd"]
 REMOVED_CATALOG_TOOLS = {"rd.resource.rename", "rd.shader.save_binary"}
 
 BANNED_SUFFIXES = {".pdb", ".lib", ".exp", ".ilk", ".h"}
@@ -121,7 +121,7 @@ def _cmd_exe() -> str:
 
 def _launcher_env(root: Path | None = None) -> dict[str, str]:
     env = os.environ.copy()
-    env.pop("RDX_PYTHON", None)
+    env.pop("RDC_TOOL_PYTHON", None)
     if root is not None:
         env["PATH"] = str(root / "bin") + os.pathsep + str(env.get("PATH") or "")
         pathext = str(env.get("PATHEXT") or "")
@@ -306,7 +306,7 @@ def _check_user_docs_no_python_bootstrap(root: Path) -> tuple[bool, str]:
 
 
 def _check_user_docs_no_bat_command_examples(root: Path) -> tuple[bool, str]:
-    command_pattern = re.compile(r"(?i)(?:^|\s)(?:\.\\)?rdx\.bat\s+\S")
+    command_pattern = re.compile(r"(?i)(?:^|\s)(?:\.\\)?rdc_tool\.bat\s+\S")
     for rel in USER_DOCS:
         path = root / rel
         if not path.is_file():
@@ -315,17 +315,17 @@ def _check_user_docs_no_bat_command_examples(root: Path) -> tuple[bool, str]:
         for lineno, line in enumerate(text.splitlines(), start=1):
             if command_pattern.search(line):
                 return False, f"{rel}:{lineno}: use `{PUBLIC_COMMAND}` for user commands: {line.strip()}"
-    return True, "user docs reserve bin/rdx.cmd for launcher-file references only"
+    return True, "user docs reserve bin/rdc-tool.cmd for launcher-file references only"
 
 
 def _check_help_uses_public_command(help_text: str) -> tuple[bool, str]:
     if not help_text.strip():
         return False, "help output is empty"
-    if re.search(r"(?i)(?:^|\s)(?:\.\\)?rdx\.bat\s+\S", help_text):
+    if re.search(r"(?i)(?:^|\s)(?:\.\\)?rdc_tool\.bat\s+\S", help_text):
         return False, "help output contains removed bat command examples"
-    if "usage: rdx" not in help_text:
-        return False, "help output does not advertise usage: rdx"
-    return True, "help output advertises rdx without removed launcher examples"
+    if "usage: rdc-tool" not in help_text:
+        return False, "help output does not advertise usage: rdc-tool"
+    return True, "help output advertises rdc-tool without removed launcher examples"
 
 
 def _check_catalog_public_surface(root: Path) -> tuple[bool, str]:
@@ -421,7 +421,7 @@ def _find_release_package(root: Path, raw_package: str) -> Path | None:
     dist = root / "dist"
     if not dist.is_dir():
         return None
-    packages = sorted(dist.glob("rdx-tools-*-windows-x64.zip"), key=lambda p: p.stat().st_mtime, reverse=True)
+    packages = sorted(dist.glob("rdc-tool-*-windows-x64.zip"), key=lambda p: p.stat().st_mtime, reverse=True)
     return packages[0].resolve() if packages else None
 
 
@@ -435,7 +435,7 @@ def _check_release_package(root: Path, *, raw_package: str, required: bool) -> t
     package_path = _find_release_package(root, raw_package)
     if package_path is None:
         if required:
-            return False, "missing release package under dist/rdx-tools-*-windows-x64.zip"
+            return False, "missing release package under dist/rdc-tool-*-windows-x64.zip"
         return True, "release package check skipped; pass --require-release-package for GA"
     if not package_path.is_file():
         return False, f"release package not found: {package_path}"
@@ -482,7 +482,7 @@ def _release_source_manifest(root: Path) -> list[dict[str, object]]:
 def _check_package_matches_source(root: Path, package_path: Path) -> tuple[bool, str]:
     try:
         with zipfile.ZipFile(package_path, "r") as archive:
-            payload = json.loads(archive.read("rdx-tools/RELEASE_MANIFEST.json").decode("utf-8"))
+            payload = json.loads(archive.read("rdc-tool/RELEASE_MANIFEST.json").decode("utf-8"))
     except Exception as exc:
         return False, f"release package manifest unreadable: {exc}"
 
@@ -528,7 +528,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--require-release-package",
         action="store_true",
-        help="Fail unless a verified rdx-tools Windows x64 release package exists.",
+        help="Fail unless a verified rdc-tool Windows x64 release package exists.",
     )
     parser.add_argument(
         "--release-package",
@@ -571,35 +571,35 @@ def main(argv: list[str] | None = None) -> int:
     results.append(("manifest:bundled-python", ok_bundled_python, bundled_python_detail))
 
     ok_public_help, public_help = _run_public_command(["--help"], cwd=root)
-    results.append(("entry:rdx --help", ok_public_help, public_help))
+    results.append(("entry:rdc-tool --help", ok_public_help, public_help))
     ok_help_contract, help_contract = _check_help_uses_public_command(public_help)
     results.append(("help:public-command", ok_public_help and ok_help_contract, help_contract))
     ok_public_doctor, public_doctor = _run_public_command(["--json", "doctor"], cwd=root)
-    results.append(("entry:rdx --json doctor", ok_public_doctor, public_doctor))
+    results.append(("entry:rdc-tool --json doctor", ok_public_doctor, public_doctor))
     ok_public_version, public_version = _run_public_command(["--version"], cwd=root)
-    results.append(("entry:rdx --version", ok_public_version, public_version))
+    results.append(("entry:rdc-tool --version", ok_public_version, public_version))
     ok_public_version_json, public_version_json = _run_public_command(["version", "--json"], cwd=root)
-    results.append(("entry:rdx version --json", ok_public_version_json, public_version_json))
+    results.append(("entry:rdc-tool version --json", ok_public_version_json, public_version_json))
     ok_public_tools, public_tools = _run_public_command(["tools", "list", "--json"], cwd=root)
-    results.append(("entry:rdx tools list --json", ok_public_tools, public_tools))
+    results.append(("entry:rdc-tool tools list --json", ok_public_tools, public_tools))
     ok_context_status, context_status = _run_public_command(["context", "status", "--json"], cwd=root)
-    results.append(("entry:rdx context status --json", ok_context_status, context_status))
+    results.append(("entry:rdc-tool context status --json", ok_context_status, context_status))
     ok_context_list, context_list = _run_public_command(["context", "list", "--json"], cwd=root)
-    results.append(("entry:rdx context list --json", ok_context_list, context_list))
+    results.append(("entry:rdc-tool context list --json", ok_context_list, context_list))
     ok_context_update, context_update = _run_public_command(
         ["--daemon-context", "release-gate-context", "context", "update", "--key", "notes", "--value", "release-gate", "--json"],
         cwd=root,
     )
-    results.append(("entry:rdx context update --json", ok_context_update, context_update))
+    results.append(("entry:rdc-tool context update --json", ok_context_update, context_update))
     ok_context_clear, context_clear = _run_public_command(
         ["--daemon-context", "release-gate-context", "context", "clear", "--json"],
         cwd=root,
     )
-    results.append(("entry:rdx context clear --json", ok_context_clear, context_clear))
+    results.append(("entry:rdc-tool context clear --json", ok_context_clear, context_clear))
     ok_vfs_tsv, vfs_tsv = _run_public_command(["vfs", "ls", "--path", "/", "--format", "tsv"], cwd=root)
-    results.append(("entry:rdx vfs ls --format tsv", ok_vfs_tsv, vfs_tsv))
+    results.append(("entry:rdc-tool vfs ls --format tsv", ok_vfs_tsv, vfs_tsv))
     ok_physical_launcher, physical_launcher = _run_windows_launcher_file(["--json", "doctor"], cwd=root)
-    results.append(("launcher-file:bin/rdx.cmd --json doctor", ok_physical_launcher, physical_launcher))
+    results.append(("launcher-file:bin/rdc-tool.cmd --json doctor", ok_physical_launcher, physical_launcher))
     ok_vfs_bad_tsv, vfs_bad_tsv = _run_public_command_expect_error(
         ["vfs", "tree", "--path", "/", "--format", "tsv"],
         cwd=root,

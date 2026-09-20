@@ -1,6 +1,6 @@
 schema_version: 1
 module_path: ""
-title: RDX-Tools 单包聚合工程
+title: RDC-Tool 单包聚合工程
 scope:
     - README.md
     - THIRD_PARTY_NOTICES.md
@@ -8,7 +8,7 @@ scope:
     - pyproject.toml
     - .gitignore
     - .gitattributes
-    - rdx.bat
+    - bin/rdc-tool.cmd
     - CHANGELOG.md
     - LICENSE
 source_files: []

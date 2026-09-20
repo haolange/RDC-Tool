@@ -2,14 +2,14 @@
 
 <cite>
 **本文引用的文件**   
-- [rdx/operation_definitions.py](file://rdx/operation_definitions.py)
-- [rdx/cli.py](file://rdx/cli.py)
-- [rdx/handlers/replay.py](file://rdx/handlers/replay.py)
-- [rdx/server_runtime.py](file://rdx/server_runtime.py)
-- [rdx/core/session_manager.py](file://rdx/core/session_manager.py)
-- [rdx/context_snapshot.py](file://rdx/context_snapshot.py)
-- [rdx/runtime_state.py](file://rdx/runtime_state.py)
-- [rdx/replay_observation.py](file://rdx/replay_observation.py)
+- [rdc_tool/operation_definitions.py](file://rdc_tool/operation_definitions.py)
+- [rdc_tool/cli.py](file://rdc_tool/cli.py)
+- [rdc_tool/handlers/replay.py](file://rdc_tool/handlers/replay.py)
+- [rdc_tool/server_runtime.py](file://rdc_tool/server_runtime.py)
+- [rdc_tool/core/session_manager.py](file://rdc_tool/core/session_manager.py)
+- [rdc_tool/context_snapshot.py](file://rdc_tool/context_snapshot.py)
+- [rdc_tool/runtime_state.py](file://rdc_tool/runtime_state.py)
+- [rdc_tool/replay_observation.py](file://rdc_tool/replay_observation.py)
 - [tests/test_cli_capture_open.py](file://tests/test_cli_capture_open.py)
 </cite>
 
@@ -26,49 +26,49 @@
 10. [附录](#附录)
 
 ## 简介
-本文面向RDX工具链中的Replay会话生命周期管理，覆盖从捕获文件打开、回放会话创建与配置、会话切换与销毁，到上下文快照与复用机制的完整流程。重点说明 rd.capture.open_replay 的高级选项（force_api、gpu_id、software_replay、enable_debug、replay_cache_mb）在接口契约中的位置与作用；解释相同捕获文件的会话复用条件、stale session检测与自动清理策略；并系统阐述上下文快照系统的创建、保存、恢复以及多上下文隔离的实现原理。最后给出资源监控、内存优化与错误恢复的最佳实践建议。
+本文面向RDC工具链中的Replay会话生命周期管理，覆盖从捕获文件打开、回放会话创建与配置、会话切换与销毁，到上下文快照与复用机制的完整流程。重点说明 rd.capture.open_replay 的高级选项（force_api、gpu_id、software_replay、enable_debug、replay_cache_mb）在接口契约中的位置与作用；解释相同捕获文件的会话复用条件、stale session检测与自动清理策略；并系统阐述上下文快照系统的创建、保存、恢复以及多上下文隔离的实现原理。最后给出资源监控、内存优化与错误恢复的最佳实践建议。
 
 ## 项目结构
 围绕Replay会话的关键代码分布在以下模块：
-- 操作定义与契约：rdx/operation_definitions.py 定义了 rd.capture.open_replay 的参数、前置条件、返回值与语义约束。
-- CLI入口：rdx/cli.py 负责将命令行参数转换为 open_replay 调用，并在成功后设置帧位置。
-- 分发层：rdx/handlers/replay.py 将 replay 命名空间请求转发至 server_runtime。
-- 运行时调度：rdx/server_runtime.py 集中实现会话、捕获、远程连接、预览、上下文状态等能力。
-- 会话管理：rdx/core/session_manager.py 封装 RenderDoc 本地/远端会话的创建、打开、关闭与清理。
-- 上下文快照：rdx/context_snapshot.py 提供持久化上下文快照的读写、归一化与保留策略。
-- 运行时状态：rdx/runtime_state.py 提供上下文级持久化状态、限制与指标。
-- 观察与事件推进：rdx/replay_observation.py 记录事件推进、后端类型与图像输出信息。
+- 操作定义与契约：rdc_tool/operation_definitions.py 定义了 rd.capture.open_replay 的参数、前置条件、返回值与语义约束。
+- CLI入口：rdc_tool/cli.py 负责将命令行参数转换为 open_replay 调用，并在成功后设置帧位置。
+- 分发层：rdc_tool/handlers/replay.py 将 replay 命名空间请求转发至 server_runtime。
+- 运行时调度：rdc_tool/server_runtime.py 集中实现会话、捕获、远程连接、预览、上下文状态等能力。
+- 会话管理：rdc_tool/core/session_manager.py 封装 RenderDoc 本地/远端会话的创建、打开、关闭与清理。
+- 上下文快照：rdc_tool/context_snapshot.py 提供持久化上下文快照的读写、归一化与保留策略。
+- 运行时状态：rdc_tool/runtime_state.py 提供上下文级持久化状态、限制与指标。
+- 观察与事件推进：rdc_tool/replay_observation.py 记录事件推进、后端类型与图像输出信息。
 - 测试用例：tests/test_cli_capture_open.py 验证CLI端到端调用序列与返回字段。
 
 ```mermaid
 graph TB
-CLI["命令行<br/>rdx/cli.py"] --> Handler["重放处理器<br/>rdx/handlers/replay.py"]
-Handler --> Runtime["服务器运行时<br/>rdx/server_runtime.py"]
-Runtime --> SM["会话管理器<br/>rdx/core/session_manager.py"]
-Runtime --> CS["上下文快照<br/>rdx/context_snapshot.py"]
-Runtime --> RS["运行时状态<br/>rdx/runtime_state.py"]
-Runtime --> RO["回放观察<br/>rdx/replay_observation.py"]
+CLI["命令行<br/>rdc_tool/cli.py"] --> Handler["重放处理器<br/>rdc_tool/handlers/replay.py"]
+Handler --> Runtime["服务器运行时<br/>rdc_tool/server_runtime.py"]
+Runtime --> SM["会话管理器<br/>rdc_tool/core/session_manager.py"]
+Runtime --> CS["上下文快照<br/>rdc_tool/context_snapshot.py"]
+Runtime --> RS["运行时状态<br/>rdc_tool/runtime_state.py"]
+Runtime --> RO["回放观察<br/>rdc_tool/replay_observation.py"]
 SM --> RD["RenderDoc 本地/远端API"]
 ```
 
 **图示来源**
-- [rdx/cli.py:1090-1120](file://rdx/cli.py#L1090-L1120)
-- [rdx/handlers/replay.py:8-10](file://rdx/handlers/replay.py#L8-L10)
-- [rdx/server_runtime.py:120-163](file://rdx/server_runtime.py#L120-L163)
-- [rdx/core/session_manager.py:175-251](file://rdx/core/session_manager.py#L175-L251)
-- [rdx/context_snapshot.py:242-279](file://rdx/context_snapshot.py#L242-L279)
-- [rdx/runtime_state.py:104-149](file://rdx/runtime_state.py#L104-L149)
-- [rdx/replay_observation.py:91-109](file://rdx/replay_observation.py#L91-L109)
+- [rdc_tool/cli.py:1090-1120](file://rdc_tool/cli.py#L1090-L1120)
+- [rdc_tool/handlers/replay.py:8-10](file://rdc_tool/handlers/replay.py#L8-L10)
+- [rdc_tool/server_runtime.py:120-163](file://rdc_tool/server_runtime.py#L120-L163)
+- [rdc_tool/core/session_manager.py:175-251](file://rdc_tool/core/session_manager.py#L175-L251)
+- [rdc_tool/context_snapshot.py:242-279](file://rdc_tool/context_snapshot.py#L242-L279)
+- [rdc_tool/runtime_state.py:104-149](file://rdc_tool/runtime_state.py#L104-L149)
+- [rdc_tool/replay_observation.py:91-109](file://rdc_tool/replay_observation.py#L91-L109)
 
 **章节来源**
-- [rdx/operation_definitions.py:245-277](file://rdx/operation_definitions.py#L245-L277)
-- [rdx/cli.py:1090-1120](file://rdx/cli.py#L1090-L1120)
-- [rdx/handlers/replay.py:8-10](file://rdx/handlers/replay.py#L8-L10)
-- [rdx/server_runtime.py:120-163](file://rdx/server_runtime.py#L120-L163)
-- [rdx/core/session_manager.py:175-251](file://rdx/core/session_manager.py#L175-L251)
-- [rdx/context_snapshot.py:242-279](file://rdx/context_snapshot.py#L242-L279)
-- [rdx/runtime_state.py:104-149](file://rdx/runtime_state.py#L104-L149)
-- [rdx/replay_observation.py:91-109](file://rdx/replay_observation.py#L91-L109)
+- [rdc_tool/operation_definitions.py:245-277](file://rdc_tool/operation_definitions.py#L245-L277)
+- [rdc_tool/cli.py:1090-1120](file://rdc_tool/cli.py#L1090-L1120)
+- [rdc_tool/handlers/replay.py:8-10](file://rdc_tool/handlers/replay.py#L8-L10)
+- [rdc_tool/server_runtime.py:120-163](file://rdc_tool/server_runtime.py#L120-L163)
+- [rdc_tool/core/session_manager.py:175-251](file://rdc_tool/core/session_manager.py#L175-L251)
+- [rdc_tool/context_snapshot.py:242-279](file://rdc_tool/context_snapshot.py#L242-L279)
+- [rdc_tool/runtime_state.py:104-149](file://rdc_tool/runtime_state.py#L104-L149)
+- [rdc_tool/replay_observation.py:91-109](file://rdc_tool/replay_observation.py#L91-L109)
 
 ## 核心组件
 - 操作契约层：定义 rd.capture.open_replay 的输入 schema、前置依赖（已打开的 capture_file_id，可选 remote_id）、返回值（session_id、active_event_id、api_properties、recovery_status、reused_session 等）与错误语义（stale session 清理失败时返回 stale_session_requires_restart）。
@@ -80,13 +80,13 @@ SM --> RD["RenderDoc 本地/远端API"]
 - 回放观察层：记录事件推进、后端类型、图像输出目标等，辅助调试与可视化。
 
 **章节来源**
-- [rdx/operation_definitions.py:245-277](file://rdx/operation_definitions.py#L245-L277)
-- [rdx/cli.py:1090-1120](file://rdx/cli.py#L1090-L1120)
-- [rdx/handlers/replay.py:8-10](file://rdx/handlers/replay.py#L8-L10)
-- [rdx/core/session_manager.py:175-251](file://rdx/core/session_manager.py#L175-L251)
-- [rdx/context_snapshot.py:242-279](file://rdx/context_snapshot.py#L242-L279)
-- [rdx/runtime_state.py:104-149](file://rdx/runtime_state.py#L104-L149)
-- [rdx/replay_observation.py:91-109](file://rdx/replay_observation.py#L91-L109)
+- [rdc_tool/operation_definitions.py:245-277](file://rdc_tool/operation_definitions.py#L245-L277)
+- [rdc_tool/cli.py:1090-1120](file://rdc_tool/cli.py#L1090-L1120)
+- [rdc_tool/handlers/replay.py:8-10](file://rdc_tool/handlers/replay.py#L8-L10)
+- [rdc_tool/core/session_manager.py:175-251](file://rdc_tool/core/session_manager.py#L175-L251)
+- [rdc_tool/context_snapshot.py:242-279](file://rdc_tool/context_snapshot.py#L242-L279)
+- [rdc_tool/runtime_state.py:104-149](file://rdc_tool/runtime_state.py#L104-L149)
+- [rdc_tool/replay_observation.py:91-109](file://rdc_tool/replay_observation.py#L91-L109)
 
 ## 架构总览
 下图展示了从CLI到渲染后端的完整调用链，包括会话复用、远端处理与上下文快照交互。
@@ -115,11 +115,11 @@ R-->>CLI : "active_event_id"
 ```
 
 **图示来源**
-- [rdx/cli.py:1090-1120](file://rdx/cli.py#L1090-L1120)
-- [rdx/handlers/replay.py:8-10](file://rdx/handlers/replay.py#L8-L10)
-- [rdx/core/session_manager.py:175-251](file://rdx/core/session_manager.py#L175-L251)
-- [rdx/context_snapshot.py:242-279](file://rdx/context_snapshot.py#L242-L279)
-- [rdx/runtime_state.py:104-149](file://rdx/runtime_state.py#L104-L149)
+- [rdc_tool/cli.py:1090-1120](file://rdc_tool/cli.py#L1090-L1120)
+- [rdc_tool/handlers/replay.py:8-10](file://rdc_tool/handlers/replay.py#L8-L10)
+- [rdc_tool/core/session_manager.py:175-251](file://rdc_tool/core/session_manager.py#L175-L251)
+- [rdc_tool/context_snapshot.py:242-279](file://rdc_tool/context_snapshot.py#L242-L279)
+- [rdc_tool/runtime_state.py:104-149](file://rdc_tool/runtime_state.py#L104-L149)
 
 ## 详细组件分析
 
@@ -145,14 +145,14 @@ Return --> End(["结束"])
 ```
 
 **图示来源**
-- [rdx/operation_definitions.py:245-277](file://rdx/operation_definitions.py#L245-L277)
-- [rdx/core/session_manager.py:175-251](file://rdx/core/session_manager.py#L175-L251)
-- [rdx/context_snapshot.py:242-279](file://rdx/context_snapshot.py#L242-L279)
-- [rdx/runtime_state.py:104-149](file://rdx/runtime_state.py#L104-L149)
+- [rdc_tool/operation_definitions.py:245-277](file://rdc_tool/operation_definitions.py#L245-L277)
+- [rdc_tool/core/session_manager.py:175-251](file://rdc_tool/core/session_manager.py#L175-L251)
+- [rdc_tool/context_snapshot.py:242-279](file://rdc_tool/context_snapshot.py#L242-L279)
+- [rdc_tool/runtime_state.py:104-149](file://rdc_tool/runtime_state.py#L104-L149)
 
 **章节来源**
-- [rdx/operation_definitions.py:245-277](file://rdx/operation_definitions.py#L245-L277)
-- [rdx/core/session_manager.py:175-251](file://rdx/core/session_manager.py#L175-L251)
+- [rdc_tool/operation_definitions.py:245-277](file://rdc_tool/operation_definitions.py#L245-L277)
+- [rdc_tool/core/session_manager.py:175-251](file://rdc_tool/core/session_manager.py#L175-L251)
 
 ### 会话复用与Stale Session清理
 - 复用条件：同一捕获文件在同一上下文内可复用已有会话，open_replay 返回 reused_session=true 表示命中复用。
@@ -181,12 +181,12 @@ end
 ```
 
 **图示来源**
-- [rdx/operation_definitions.py:245-277](file://rdx/operation_definitions.py#L245-L277)
-- [rdx/cli.py:1090-1120](file://rdx/cli.py#L1090-L1120)
+- [rdc_tool/operation_definitions.py:245-277](file://rdc_tool/operation_definitions.py#L245-L277)
+- [rdc_tool/cli.py:1090-1120](file://rdc_tool/cli.py#L1090-L1120)
 
 **章节来源**
-- [rdx/operation_definitions.py:245-277](file://rdx/operation_definitions.py#L245-L277)
-- [rdx/cli.py:1090-1120](file://rdx/cli.py#L1090-L1120)
+- [rdc_tool/operation_definitions.py:245-277](file://rdc_tool/operation_definitions.py#L245-L277)
+- [rdc_tool/cli.py:1090-1120](file://rdc_tool/cli.py#L1090-L1120)
 
 ### 会话切换与销毁
 - 切换：通过 rd.replay.set_frame 改变当前活动事件/帧，从而切换回放位置；该操作会影响 active_event_id 并可能触发观察记录。
@@ -213,12 +213,12 @@ SessionManager --> SessionState : "维护生命周期"
 ```
 
 **图示来源**
-- [rdx/core/session_manager.py:175-251](file://rdx/core/session_manager.py#L175-L251)
-- [rdx/core/session_manager.py:517-569](file://rdx/core/session_manager.py#L517-L569)
+- [rdc_tool/core/session_manager.py:175-251](file://rdc_tool/core/session_manager.py#L175-L251)
+- [rdc_tool/core/session_manager.py:517-569](file://rdc_tool/core/session_manager.py#L517-L569)
 
 **章节来源**
-- [rdx/core/session_manager.py:175-251](file://rdx/core/session_manager.py#L175-L251)
-- [rdx/core/session_manager.py:517-569](file://rdx/core/session_manager.py#L517-L569)
+- [rdc_tool/core/session_manager.py:175-251](file://rdc_tool/core/session_manager.py#L175-L251)
+- [rdc_tool/core/session_manager.py:517-569](file://rdc_tool/core/session_manager.py#L517-L569)
 
 ### 上下文快照系统
 - 创建与保存：默认上下文快照包含 context_id、backend、runtime（session_id、capture_file_id、frame_index、active_event_id、backend_type）、remote（state、remote_id、endpoint、reuse_policy等）、focus、notes、last_artifacts、preview、updated_at_ms。保存时使用原子写入与文件锁保证并发安全。
@@ -235,14 +235,14 @@ Update --> Isolate["按context_id隔离存储"]
 ```
 
 **图示来源**
-- [rdx/context_snapshot.py:242-279](file://rdx/context_snapshot.py#L242-L279)
-- [rdx/context_snapshot.py:447-475](file://rdx/context_snapshot.py#L447-L475)
-- [rdx/context_snapshot.py:335-364](file://rdx/context_snapshot.py#L335-L364)
+- [rdc_tool/context_snapshot.py:242-279](file://rdc_tool/context_snapshot.py#L242-L279)
+- [rdc_tool/context_snapshot.py:447-475](file://rdc_tool/context_snapshot.py#L447-L475)
+- [rdc_tool/context_snapshot.py:335-364](file://rdc_tool/context_snapshot.py#L335-L364)
 
 **章节来源**
-- [rdx/context_snapshot.py:242-279](file://rdx/context_snapshot.py#L242-L279)
-- [rdx/context_snapshot.py:447-475](file://rdx/context_snapshot.py#L447-L475)
-- [rdx/context_snapshot.py:335-364](file://rdx/context_snapshot.py#L335-L364)
+- [rdc_tool/context_snapshot.py:242-279](file://rdc_tool/context_snapshot.py#L242-L279)
+- [rdc_tool/context_snapshot.py:447-475](file://rdc_tool/context_snapshot.py#L447-L475)
+- [rdc_tool/context_snapshot.py:335-364](file://rdc_tool/context_snapshot.py#L335-L364)
 
 ### 回放观察与事件推进
 - 事件推进：通过控制器 SetFrameEvent 推进到指定事件，并记录 context_id、session_id、revision、event_id、modification_state、display_parameters、is_final_output、final_output_error、image_path 等。
@@ -263,10 +263,10 @@ Obs-->>App : "返回观察结果(含图像/错误/后端状态)"
 ```
 
 **图示来源**
-- [rdx/replay_observation.py:91-109](file://rdx/replay_observation.py#L91-L109)
+- [rdc_tool/replay_observation.py:91-109](file://rdc_tool/replay_observation.py#L91-L109)
 
 **章节来源**
-- [rdx/replay_observation.py:91-109](file://rdx/replay_observation.py#L91-L109)
+- [rdc_tool/replay_observation.py:91-109](file://rdc_tool/replay_observation.py#L91-L109)
 
 ## 依赖关系分析
 - CLI依赖 operation_definitions 定义的 open_replay 契约，并通过 handlers/replay 转发到 server_runtime。
@@ -287,22 +287,22 @@ SM --> RD["RenderDoc"]
 ```
 
 **图示来源**
-- [rdx/operation_definitions.py:245-277](file://rdx/operation_definitions.py#L245-L277)
-- [rdx/handlers/replay.py:8-10](file://rdx/handlers/replay.py#L8-L10)
-- [rdx/server_runtime.py:120-163](file://rdx/server_runtime.py#L120-L163)
-- [rdx/core/session_manager.py:175-251](file://rdx/core/session_manager.py#L175-L251)
-- [rdx/context_snapshot.py:242-279](file://rdx/context_snapshot.py#L242-L279)
-- [rdx/runtime_state.py:104-149](file://rdx/runtime_state.py#L104-L149)
-- [rdx/replay_observation.py:91-109](file://rdx/replay_observation.py#L91-L109)
+- [rdc_tool/operation_definitions.py:245-277](file://rdc_tool/operation_definitions.py#L245-L277)
+- [rdc_tool/handlers/replay.py:8-10](file://rdc_tool/handlers/replay.py#L8-L10)
+- [rdc_tool/server_runtime.py:120-163](file://rdc_tool/server_runtime.py#L120-L163)
+- [rdc_tool/core/session_manager.py:175-251](file://rdc_tool/core/session_manager.py#L175-L251)
+- [rdc_tool/context_snapshot.py:242-279](file://rdc_tool/context_snapshot.py#L242-L279)
+- [rdc_tool/runtime_state.py:104-149](file://rdc_tool/runtime_state.py#L104-L149)
+- [rdc_tool/replay_observation.py:91-109](file://rdc_tool/replay_observation.py#L91-L109)
 
 **章节来源**
-- [rdx/operation_definitions.py:245-277](file://rdx/operation_definitions.py#L245-L277)
-- [rdx/handlers/replay.py:8-10](file://rdx/handlers/replay.py#L8-L10)
-- [rdx/server_runtime.py:120-163](file://rdx/server_runtime.py#L120-L163)
-- [rdx/core/session_manager.py:175-251](file://rdx/core/session_manager.py#L175-L251)
-- [rdx/context_snapshot.py:242-279](file://rdx/context_snapshot.py#L242-L279)
-- [rdx/runtime_state.py:104-149](file://rdx/runtime_state.py#L104-L149)
-- [rdx/replay_observation.py:91-109](file://rdx/replay_observation.py#L91-L109)
+- [rdc_tool/operation_definitions.py:245-277](file://rdc_tool/operation_definitions.py#L245-L277)
+- [rdc_tool/handlers/replay.py:8-10](file://rdc_tool/handlers/replay.py#L8-L10)
+- [rdc_tool/server_runtime.py:120-163](file://rdc_tool/server_runtime.py#L120-L163)
+- [rdc_tool/core/session_manager.py:175-251](file://rdc_tool/core/session_manager.py#L175-L251)
+- [rdc_tool/context_snapshot.py:242-279](file://rdc_tool/context_snapshot.py#L242-L279)
+- [rdc_tool/runtime_state.py:104-149](file://rdc_tool/runtime_state.py#L104-L149)
+- [rdc_tool/replay_observation.py:91-109](file://rdc_tool/replay_observation.py#L91-L109)
 
 ## 性能考虑
 - 会话复用：优先复用同捕获的活跃会话以减少重复初始化开销；当 reused_session=true 时可跳过部分重建步骤。
@@ -321,13 +321,13 @@ SM --> RD["RenderDoc"]
 - 事件推进异常：核对 event_id 是否在范围内；检查后端类型与输出目标资源ID是否正确。
 
 **章节来源**
-- [rdx/operation_definitions.py:245-277](file://rdx/operation_definitions.py#L245-L277)
-- [rdx/core/session_manager.py:347-440](file://rdx/core/session_manager.py#L347-L440)
-- [rdx/context_snapshot.py:447-475](file://rdx/context_snapshot.py#L447-L475)
-- [rdx/replay_observation.py:91-109](file://rdx/replay_observation.py#L91-L109)
+- [rdc_tool/operation_definitions.py:245-277](file://rdc_tool/operation_definitions.py#L245-L277)
+- [rdc_tool/core/session_manager.py:347-440](file://rdc_tool/core/session_manager.py#L347-L440)
+- [rdc_tool/context_snapshot.py:447-475](file://rdc_tool/context_snapshot.py#L447-L475)
+- [rdc_tool/replay_observation.py:91-109](file://rdc_tool/replay_observation.py#L91-L109)
 
 ## 结论
-RDX的Replay会话管理以操作契约为核心，结合CLI编排、运行时调度、会话管理与上下文快照，形成了完整的生命周期闭环。通过高级选项灵活控制API后端、GPU、渲染模式与调试级别；通过会话复用与stale清理提升效率与稳定性；通过上下文快照与运行时状态保障多上下文隔离与恢复能力。遵循最佳实践可有效监控资源、优化内存并快速恢复错误。
+RDC的Replay会话管理以操作契约为核心，结合CLI编排、运行时调度、会话管理与上下文快照，形成了完整的生命周期闭环。通过高级选项灵活控制API后端、GPU、渲染模式与调试级别；通过会话复用与stale清理提升效率与稳定性；通过上下文快照与运行时状态保障多上下文隔离与恢复能力。遵循最佳实践可有效监控资源、优化内存并快速恢复错误。
 
 ## 附录
 - CLI端到端验证：测试用例覆盖了 open_file → open_replay → set_frame → get_context 的调用序列与返回字段，可用于回归验证。
@@ -335,4 +335,4 @@ RDX的Replay会话管理以操作契约为核心，结合CLI编排、运行时�
 
 **章节来源**
 - [tests/test_cli_capture_open.py:67-100](file://tests/test_cli_capture_open.py#L67-L100)
-- [rdx/server_runtime.py:6052-6165](file://rdx/server_runtime.py#L6052-L6165)
+- [rdc_tool/server_runtime.py:6052-6165](file://rdc_tool/server_runtime.py#L6052-L6165)

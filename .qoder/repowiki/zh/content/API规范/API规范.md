@@ -2,19 +2,19 @@
 
 <cite>
 **本文引用的文件**
-- [operation_definitions.py](file://rdx/operation_definitions.py)
-- [contracts.py](file://rdx/core/contracts.py)
-- [engine.py](file://rdx/core/engine.py)
-- [errors.py](file://rdx/core/errors.py)
-- [tool_router.py](file://rdx/tool_router.py)
-- [server.py](file://rdx/server.py)
-- [handlers/core.py](file://rdx/handlers/core.py)
-- [handlers/mesh.py](file://rdx/handlers/mesh.py)
-- [handlers/session.py](file://rdx/handlers/session.py)
-- [core/mesh_data.py](file://rdx/core/mesh_data.py)
-- [replay_observation.py](file://rdx/replay_observation.py)
-- [daemon/client.py](file://rdx/daemon/client.py)
-- [cli.py](file://rdx/cli.py)
+- [operation_definitions.py](file://rdc_tool/operation_definitions.py)
+- [contracts.py](file://rdc_tool/core/contracts.py)
+- [engine.py](file://rdc_tool/core/engine.py)
+- [errors.py](file://rdc_tool/core/errors.py)
+- [tool_router.py](file://rdc_tool/tool_router.py)
+- [server.py](file://rdc_tool/server.py)
+- [handlers/core.py](file://rdc_tool/handlers/core.py)
+- [handlers/mesh.py](file://rdc_tool/handlers/mesh.py)
+- [handlers/session.py](file://rdc_tool/handlers/session.py)
+- [core/mesh_data.py](file://rdc_tool/core/mesh_data.py)
+- [replay_observation.py](file://rdc_tool/replay_observation.py)
+- [daemon/client.py](file://rdc_tool/daemon/client.py)
+- [cli.py](file://rdc_tool/cli.py)
 - [public-contract.md](file://docs/public-contract.md)
 </cite>
 
@@ -43,7 +43,7 @@
 **更新** 本次更新重点增强了网格数据API的着色器输入空间支持和Android原生呈现集成能力。
 
 ## 项目结构
-RDX工具通过CLI调用守护进程，再由守护进程调度到统一执行引擎，最终路由到各域处理器并执行业务逻辑。关键路径如下：
+RDC工具通过CLI调用守护进程，再由守护进程调度到统一执行引擎，最终路由到各域处理器并执行业务逻辑。关键路径如下：
 - CLI负责解析参数、启动/连接守护进程、发送方法调用并输出结果
 - 守护进程通过命名管道接收请求，维护上下文状态，转发到内部执行器
 - 统一执行引擎负责操作注册、参数校验、前置条件检查、异常归一化、产物发布和标准信封封装
@@ -51,7 +51,7 @@ RDX工具通过CLI调用守护进程，再由守护进程调度到统一执行�
 
 ```mermaid
 graph TB
-CLI["命令行 rdx"] --> DaemonClient["守护进程客户端<br/>named pipe"]
+CLI["命令行 rdc"] --> DaemonClient["守护进程客户端<br/>named pipe"]
 DaemonClient --> Daemon["守护进程"]
 Daemon --> ServerRuntime["服务器运行时"]
 ServerRuntime --> CoreEngine["统一执行引擎"]
@@ -61,16 +61,16 @@ Handlers --> Services["业务服务/后端"]
 ```
 
 **图表来源**
-- [server.py:62-145](file://rdx/server.py#L62-L145)
-- [tool_router.py:131-154](file://rdx/tool_router.py#L131-L154)
-- [engine.py:40-75](file://rdx/core/engine.py#L40-L75)
-- [daemon/client.py:467-515](file://rdx/daemon/client.py#L467-L515)
+- [server.py:62-145](file://rdc_tool/server.py#L62-L145)
+- [tool_router.py:131-154](file://rdc_tool/tool_router.py#L131-L154)
+- [engine.py:40-75](file://rdc_tool/core/engine.py#L40-L75)
+- [daemon/client.py:467-515](file://rdc_tool/daemon/client.py#L467-L515)
 
 **章节来源**
-- [server.py:62-145](file://rdx/server.py#L62-L145)
-- [tool_router.py:131-154](file://rdx/tool_router.py#L131-L154)
-- [engine.py:40-75](file://rdx/core/engine.py#L40-L75)
-- [daemon/client.py:467-515](file://rdx/daemon/client.py#L467-L515)
+- [server.py:62-145](file://rdc_tool/server.py#L62-L145)
+- [tool_router.py:131-154](file://rdc_tool/tool_router.py#L131-L154)
+- [engine.py:40-75](file://rdc_tool/core/engine.py#L40-L75)
+- [daemon/client.py:467-515](file://rdc_tool/daemon/client.py#L467-L515)
 
 ## 核心组件
 - 统一信封与产物契约：成功/失败响应结构、schema_version、tool_version、artifacts、meta、projections
@@ -82,14 +82,14 @@ Handlers --> Services["业务服务/后端"]
 **更新** 新增了网格数据处理和Android原生呈现的核心组件支持。
 
 **章节来源**
-- [contracts.py:98-164](file://rdx/core/contracts.py#L98-L164)
-- [errors.py:9-121](file://rdx/core/errors.py#L9-L121)
-- [tool_router.py:34-154](file://rdx/tool_router.py#L34-L154)
-- [engine.py:30-75](file://rdx/core/engine.py#L30-L75)
-- [daemon/client.py:467-515](file://rdx/daemon/client.py#L467-L515)
+- [contracts.py:98-164](file://rdc_tool/core/contracts.py#L98-L164)
+- [errors.py:9-121](file://rdc_tool/core/errors.py#L9-L121)
+- [tool_router.py:34-154](file://rdc_tool/tool_router.py#L34-L154)
+- [engine.py:30-75](file://rdc_tool/core/engine.py#L30-L75)
+- [daemon/client.py:467-515](file://rdc_tool/daemon/client.py#L467-L515)
 
 ## 架构总览
-RDX采用"CLI + 守护进程 + 统一引擎"的三层架构。CLI仅负责用户交互与参数装载；守护进程负责长驻运行、上下文隔离与资源管理；统一引擎提供跨传输一致的执行语义与响应格式。
+RDC采用"CLI + 守护进程 + 统一引擎"的三层架构。CLI仅负责用户交互与参数装载；守护进程负责长驻运行、上下文隔离与资源管理；统一引擎提供跨传输一致的执行语义与响应格式。
 
 ```mermaid
 sequenceDiagram
@@ -98,7 +98,7 @@ participant C as "CLI"
 participant D as "守护进程"
 participant E as "执行引擎"
 participant H as "域处理器"
-U->>C : 调用 rdx call rd.*
+U->>C : 调用 rdc-tool call rd.*
 C->>D : named pipe 请求 {method,params}
 D->>E : execute(operation,args,context)
 E->>H : 路由到具体处理器
@@ -109,10 +109,10 @@ C-->>U : JSON输出
 ```
 
 **图表来源**
-- [daemon/client.py:467-515](file://rdx/daemon/client.py#L467-L515)
-- [server.py:62-145](file://rdx/server.py#L62-L145)
-- [engine.py:40-75](file://rdx/core/engine.py#L40-L75)
-- [tool_router.py:131-154](file://rdx/tool_router.py#L131-L154)
+- [daemon/client.py:467-515](file://rdc_tool/daemon/client.py#L467-L515)
+- [server.py:62-145](file://rdc_tool/server.py#L62-L145)
+- [engine.py:40-75](file://rdc_tool/core/engine.py#L40-L75)
+- [tool_router.py:131-154](file://rdc_tool/tool_router.py#L131-L154)
 
 ## 详细组件分析
 
@@ -139,8 +139,8 @@ C-->>U : JSON输出
 - 提供详细的顶点行数据和属性值
 
 **章节来源**
-- [core/mesh_data.py:46-148](file://rdx/core/mesh_data.py#L46-L148)
-- [operation_definitions.py:1539-1559](file://rdx/operation_definitions.py#L1539-L1559)
+- [core/mesh_data.py:46-148](file://rdc_tool/core/mesh_data.py#L46-L148)
+- [operation_definitions.py:1539-1559](file://rdc_tool/operation_definitions.py#L1539-L1559)
 
 ### Android原生呈现集成
 
@@ -165,8 +165,8 @@ C-->>U : JSON输出
 - 清晰的错误原因描述
 
 **章节来源**
-- [replay_observation.py:40-174](file://rdx/replay_observation.py#L40-L174)
-- [operation_definitions.py:2680-2723](file://rdx/operation_definitions.py#L2680-L2723)
+- [replay_observation.py:40-174](file://rdc_tool/replay_observation.py#L40-L174)
+- [operation_definitions.py:2680-2723](file://rdc_tool/operation_definitions.py#L2680-L2723)
 
 ### 处理器路由增强
 
@@ -183,8 +183,8 @@ C-->>U : JSON输出
 - 其他session操作继续使用默认分发逻辑
 
 **章节来源**
-- [handlers/mesh.py:8-10](file://rdx/handlers/mesh.py#L8-L10)
-- [handlers/session.py:8-13](file://rdx/handlers/session.py#L8-L13)
+- [handlers/mesh.py:8-10](file://rdc_tool/handlers/mesh.py#L8-L10)
+- [handlers/session.py:8-13](file://rdc_tool/handlers/session.py#L8-L13)
 
 ### 统一响应信封与产物
 - 成功信封字段：schema_version、tool_version、result_kind、ok=true、data、artifacts、error=null、meta、projections
@@ -193,8 +193,8 @@ C-->>U : JSON输出
 - 元数据：trace_id、transport、duration_ms等
 
 **章节来源**
-- [contracts.py:98-164](file://rdx/core/contracts.py#L98-L164)
-- [contracts.py:46-95](file://rdx/core/contracts.py#L46-L95)
+- [contracts.py:98-164](file://rdc_tool/core/contracts.py#L98-L164)
+- [contracts.py:46-95](file://rdc_tool/core/contracts.py#L46-L95)
 
 ### 错误分类与映射
 - 分类：validation、not_found、assertion_failed、runtime、permission、io、internal
@@ -204,7 +204,7 @@ C-->>U : JSON输出
 **更新** 新增了网格数据读取错误和Android呈现错误的专门处理。
 
 **章节来源**
-- [errors.py:9-121](file://rdx/core/errors.py#L9-L121)
+- [errors.py:9-121](file://rdc_tool/core/errors.py#L9-L121)
 
 ### 操作注册与前置条件校验
 - 操作名规范：rd.<domain>.<action>，如 rd.capture.open_file
@@ -213,8 +213,8 @@ C-->>U : JSON输出
 - 参数校验：使用目录中的input_schema进行严格校验，未知参数拒绝
 
 **章节来源**
-- [tool_router.py:34-154](file://rdx/tool_router.py#L34-L154)
-- [operation_definitions.py:1-800](file://rdx/operation_definitions.py#L1-L800)
+- [tool_router.py:34-154](file://rdc_tool/tool_router.py#L34-L154)
+- [operation_definitions.py:1-800](file://rdc_tool/operation_definitions.py#L1-L800)
 
 ### 执行引擎与输出规范化
 - 执行流程：解析操作→查找处理器→执行→捕获异常→生成标准信封
@@ -223,7 +223,7 @@ C-->>U : JSON输出
 - 追踪与计时：注入trace_id、记录duration_ms
 
 **章节来源**
-- [engine.py:40-204](file://rdx/core/engine.py#L40-L204)
+- [engine.py:40-204](file://rdc_tool/core/engine.py#L40-L204)
 
 ### 守护进程通信协议（类JSON-RPC）
 - 请求格式：{token, method, params}
@@ -232,8 +232,8 @@ C-->>U : JSON输出
 - 上下文隔离：每个上下文独立状态文件，支持多实例并行
 
 **章节来源**
-- [daemon/client.py:467-515](file://rdx/daemon/client.py#L467-L515)
-- [daemon/client.py:623-733](file://rdx/daemon/client.py#L623-L733)
+- [daemon/client.py:467-515](file://rdc_tool/daemon/client.py#L467-L515)
+- [daemon/client.py:623-733](file://rdc_tool/daemon/client.py#L623-L733)
 
 ### 处理器与域操作
 - 处理器入口：每个域模块提供handle(action, args, env)异步函数
@@ -243,8 +243,8 @@ C-->>U : JSON输出
 **更新** mesh和session处理器现在支持新的操作类型。
 
 **章节来源**
-- [handlers/core.py:8-10](file://rdx/handlers/core.py#L8-L10)
-- [tool_router.py:34-54](file://rdx/tool_router.py#L34-L54)
+- [handlers/core.py:8-10](file://rdc_tool/handlers/core.py#L8-L10)
+- [tool_router.py:34-54](file://rdc_tool/tool_router.py#L34-L54)
 
 ## 依赖关系分析
 ```mermaid
@@ -262,21 +262,21 @@ K["replay_observation.py"] --> C
 ```
 
 **图表来源**
-- [operation_definitions.py:1-800](file://rdx/operation_definitions.py#L1-L800)
-- [tool_router.py:131-154](file://rdx/tool_router.py#L131-L154)
-- [engine.py:40-75](file://rdx/core/engine.py#L40-L75)
-- [server.py:62-145](file://rdx/server.py#L62-L145)
-- [daemon/client.py:467-515](file://rdx/daemon/client.py#L467-L515)
-- [cli.py:1-200](file://rdx/cli.py#L1-L200)
-- [core/mesh_data.py:1-148](file://rdx/core/mesh_data.py#L1-L148)
-- [replay_observation.py:1-174](file://rdx/replay_observation.py#L1-L174)
+- [operation_definitions.py:1-800](file://rdc_tool/operation_definitions.py#L1-L800)
+- [tool_router.py:131-154](file://rdc_tool/tool_router.py#L131-L154)
+- [engine.py:40-75](file://rdc_tool/core/engine.py#L40-L75)
+- [server.py:62-145](file://rdc_tool/server.py#L62-L145)
+- [daemon/client.py:467-515](file://rdc_tool/daemon/client.py#L467-L515)
+- [cli.py:1-200](file://rdc_tool/cli.py#L1-L200)
+- [core/mesh_data.py:1-148](file://rdc_tool/core/mesh_data.py#L1-L148)
+- [replay_observation.py:1-174](file://rdc_tool/replay_observation.py#L1-L174)
 
 **章节来源**
-- [tool_router.py:131-154](file://rdx/tool_router.py#L131-L154)
-- [engine.py:40-75](file://rdx/core/engine.py#L40-L75)
-- [server.py:62-145](file://rdx/server.py#L62-L145)
-- [daemon/client.py:467-515](file://rdx/daemon/client.py#L467-L515)
-- [cli.py:1-200](file://rdx/cli.py#L1-L200)
+- [tool_router.py:131-154](file://rdc_tool/tool_router.py#L131-L154)
+- [engine.py:40-75](file://rdc_tool/core/engine.py#L40-L75)
+- [server.py:62-145](file://rdc_tool/server.py#L62-L145)
+- [daemon/client.py:467-515](file://rdc_tool/daemon/client.py#L467-L515)
+- [cli.py:1-200](file://rdc_tool/cli.py#L1-L200)
 
 ## 性能与并发特性
 - 单上下文串行执行：同一上下文内操作顺序执行，避免竞争
@@ -297,13 +297,13 @@ K["replay_observation.py"] --> C
 **更新** 新增了网格数据读取错误和Android呈现问题的专门排查指南。
 
 **章节来源**
-- [cli.py:107-125](file://rdx/cli.py#L107-L125)
-- [tool_router.py:64-128](file://rdx/tool_router.py#L64-L128)
-- [daemon/client.py:467-515](file://rdx/daemon/client.py#L467-L515)
-- [operation_definitions.py:245-282](file://rdx/operation_definitions.py#L245-L282)
+- [cli.py:107-125](file://rdc_tool/cli.py#L107-L125)
+- [tool_router.py:64-128](file://rdc_tool/tool_router.py#L64-L128)
+- [daemon/client.py:467-515](file://rdc_tool/daemon/client.py#L467-L515)
+- [operation_definitions.py:245-282](file://rdc_tool/operation_definitions.py#L245-L282)
 
 ## 结论
-RDX的rd.*操作通过统一的目录驱动定义、严格的参数校验、稳定的错误分类与信封格式，提供了高可靠性的API接口。守护进程与执行引擎分离确保了可扩展性与可维护性。建议客户端遵循公共契约，使用标准信封处理成功与失败，并利用artifacts机制管理大对象。
+RDC的rd.*操作通过统一的目录驱动定义、严格的参数校验、稳定的错误分类与信封格式，提供了高可靠性的API接口。守护进程与执行引擎分离确保了可扩展性与可维护性。建议客户端遵循公共契约，使用标准信封处理成功与失败，并利用artifacts机制管理大对象。
 
 **更新** 本次更新显著增强了网格数据分析和Android原生呈现能力，为移动设备调试和复杂图形分析提供了更强大的工具支持。
 
@@ -324,7 +324,7 @@ RDX的rd.*操作通过统一的目录驱动定义、严格的参数校验、稳�
 - rd.core.shutdown：关闭运行时并释放资源
 
 **章节来源**
-- [operation_definitions.py:283-596](file://rdx/operation_definitions.py#L283-L596)
+- [operation_definitions.py:283-596](file://rdc_tool/operation_definitions.py#L283-L596)
 
 ### 捕获与回放 (rd.capture.*)
 - rd.capture.open_file：打开捕获文件，返回句柄
@@ -334,7 +334,7 @@ RDX的rd.*操作通过统一的目录驱动定义、严格的参数校验、稳�
 - rd.capture.get_info：获取捕获元数据
 
 **章节来源**
-- [operation_definitions.py:161-282](file://rdx/operation_definitions.py#L161-L282)
+- [operation_definitions.py:161-282](file://rdc_tool/operation_definitions.py#L161-L282)
 
 ### 缓冲区与网格数据访问 (rd.buffer.*)
 - rd.buffer.get_data：读取原始字节，支持offset/size/base64
@@ -344,7 +344,7 @@ RDX的rd.*操作通过统一的目录驱动定义、严格的参数校验、稳�
 **更新** 网格数据访问现在支持更丰富的顶点属性解析。
 
 **章节来源**
-- [operation_definitions.py:4-160](file://rdx/operation_definitions.py#L4-L160)
+- [operation_definitions.py:4-160](file://rdc_tool/operation_definitions.py#L4-L160)
 
 ### 网格数据操作 (rd.mesh.*)
 - rd.mesh.get_drawcall_mesh_config：获取当前drawcall的mesh配置，包括顶点输入布局、绑定信息和属性状态
@@ -352,7 +352,7 @@ RDX的rd.*操作通过统一的目录驱动定义、严格的参数校验、稳�
 **新增** 这是网格数据分析的核心操作，支持着色器输入空间的完整属性导出。
 
 **章节来源**
-- [operation_definitions.py:1539-1559](file://rdx/operation_definitions.py#L1539-L1559)
+- [operation_definitions.py:1539-1559](file://rdc_tool/operation_definitions.py#L1539-L1559)
 
 ### Shader调试 (rd.debug.*)
 - rd.debug.clear_breakpoints：清除断点
@@ -365,7 +365,7 @@ RDX的rd.*操作通过统一的目录驱动定义、严格的参数校验、稳�
 - rd.debug.set_breakpoints：设置断点
 
 **章节来源**
-- [operation_definitions.py:597-800](file://rdx/operation_definitions.py#L597-L800)
+- [operation_definitions.py:597-800](file://rdc_tool/operation_definitions.py#L597-L800)
 
 ### 导出与报告 (rd.export.*)
 - rd.export.buffer：导出缓冲区数据
@@ -378,7 +378,7 @@ RDX的rd.*操作通过统一的目录驱动定义、严格的参数校验、稳�
 **更新** `rd.export.mesh`现在支持完整的着色器输入空间属性导出，包括位置、法线和UV坐标。
 
 **章节来源**
-- [operation_definitions.py:1247-1265](file://rdx/operation_definitions.py#L1247-L1265)
+- [operation_definitions.py:1247-1265](file://rdc_tool/operation_definitions.py#L1247-L1265)
 
 ### 上下文快照工具 (rd.session.*)
 - rd.session.clear_context：清除上下文
@@ -397,7 +397,7 @@ RDX的rd.*操作通过统一的目录驱动定义、严格的参数校验、稳�
 **更新** `rd.session.observe`现在支持Android设备的原生GPU呈现，提供完整的呈现状态报告。
 
 **章节来源**
-- [operation_definitions.py:2680-2879](file://rdx/operation_definitions.py#L2680-L2879)
+- [operation_definitions.py:2680-2879](file://rdc_tool/operation_definitions.py#L2680-L2879)
 
 ### JSON-RPC通信协议实现
 - 请求格式：{token, method, params}
@@ -406,8 +406,8 @@ RDX的rd.*操作通过统一的目录驱动定义、严格的参数校验、稳�
 - 上下文管理：每个上下文独立状态文件，支持多实例
 
 **章节来源**
-- [daemon/client.py:467-515](file://rdx/daemon/client.py#L467-L515)
-- [daemon/client.py:623-733](file://rdx/daemon/client.py#L623-L733)
+- [daemon/client.py:467-515](file://rdc_tool/daemon/client.py#L467-L515)
+- [daemon/client.py:623-733](file://rdc_tool/daemon/client.py#L623-L733)
 
 ### 幂等性、事务性与并发安全
 - 幂等性：读操作（如get_data、get_info）通常幂等；写操作（如set_config）需谨慎
@@ -425,8 +425,8 @@ RDX的rd.*操作通过统一的目录驱动定义、严格的参数校验、稳�
 **更新** Android原生呈现操作具有独立的资源管理和清理机制。
 
 **章节来源**
-- [operation_definitions.py:161-282](file://rdx/operation_definitions.py#L161-L282)
-- [daemon/client.py:554-607](file://rdx/daemon/client.py#L554-L607)
+- [operation_definitions.py:161-282](file://rdc_tool/operation_definitions.py#L161-L282)
+- [daemon/client.py:554-607](file://rdc_tool/daemon/client.py#L554-L607)
 
 ### 向后兼容性保证与版本迁移
 - 公共契约稳定：schema_version固定，未知操作/参数拒绝
@@ -437,10 +437,10 @@ RDX的rd.*操作通过统一的目录驱动定义、严格的参数校验、稳�
 
 **章节来源**
 - [public-contract.md:1-26](file://docs/public-contract.md#L1-L26)
-- [operation_definitions.py:283-306](file://rdx/operation_definitions.py#L283-L306)
+- [operation_definitions.py:283-306](file://rdc_tool/operation_definitions.py#L283-L306)
 
 ### 客户端集成示例与最佳实践
-- 使用rdx CLI调用：rdx call rd.* --args-json ...
+- 使用rdc CLI调用：rdc-tool call rd.* --args-json ...
 - 处理标准信封：检查ok字段，读取data或error
 - 管理上下文：使用--daemon-context隔离多任务
 - 错误重试：对timeout错误实施指数退避
@@ -449,5 +449,5 @@ RDX的rd.*操作通过统一的目录驱动定义、严格的参数校验、稳�
 **更新** 建议使用新的网格数据API和Android呈现功能进行高级图形分析。
 
 **章节来源**
-- [cli.py:62-104](file://rdx/cli.py#L62-L104)
-- [daemon/client.py:467-515](file://rdx/daemon/client.py#L467-L515)
+- [cli.py:62-104](file://rdc_tool/cli.py#L62-L104)
+- [daemon/client.py:467-515](file://rdc_tool/daemon/client.py#L467-L515)

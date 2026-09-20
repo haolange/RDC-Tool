@@ -2,16 +2,16 @@
 
 <cite>
 **本文引用的文件**
-- [rdx/handlers/remote.py](file://rdx/handlers/remote.py)
-- [rdx/tool_router.py](file://rdx/tool_router.py)
-- [rdx/server.py](file://rdx/server.py)
-- [rdx/daemon/client.py](file://rdx/daemon/client.py)
-- [rdx/daemon/server.py](file://rdx/daemon/server.py)
-- [rdx/operation_definitions.py](file://rdx/operation_definitions.py)
-- [rdx/remote_bootstrap.py](file://rdx/remote_bootstrap.py)
-- [rdx/cli.py](file://rdx/cli.py)
+- [rdc_tool/handlers/remote.py](file://rdc_tool/handlers/remote.py)
+- [rdc_tool/tool_router.py](file://rdc_tool/tool_router.py)
+- [rdc_tool/server.py](file://rdc_tool/server.py)
+- [rdc_tool/daemon/client.py](file://rdc_tool/daemon/client.py)
+- [rdc_tool/daemon/server.py](file://rdc_tool/daemon/server.py)
+- [rdc_tool/operation_definitions.py](file://rdc_tool/operation_definitions.py)
+- [rdc_tool/remote_bootstrap.py](file://rdc_tool/remote_bootstrap.py)
+- [rdc_tool/cli.py](file://rdc_tool/cli.py)
 - [docs/troubleshooting.md](file://docs/troubleshooting.md)
-- [docs/rdx-native-agent-playbook.md](file://docs/rdx-native-agent-playbook.md)
+- [docs/rdc-native-agent-playbook.md](file://docs/rdc-native-agent-playbook.md)
 </cite>
 
 ## 目录
@@ -52,20 +52,20 @@ Bootstrap --> ADB["ADB/设备"]
 ```
 
 图表来源
-- [rdx/tool_router.py:34-54](file://rdx/tool_router.py#L34-L54)
-- [rdx/handlers/remote.py:8-9](file://rdx/handlers/remote.py#L8-L9)
-- [rdx/server.py:62-145](file://rdx/server.py#L62-L145)
-- [rdx/daemon/client.py:467-515](file://rdx/daemon/client.py#L467-L515)
-- [rdx/daemon/server.py:572-643](file://rdx/daemon/server.py#L572-L643)
-- [rdx/remote_bootstrap.py:495-698](file://rdx/remote_bootstrap.py#L495-L698)
+- [rdc_tool/tool_router.py:34-54](file://rdc_tool/tool_router.py#L34-L54)
+- [rdc_tool/handlers/remote.py:8-9](file://rdc_tool/handlers/remote.py#L8-L9)
+- [rdc_tool/server.py:62-145](file://rdc_tool/server.py#L62-L145)
+- [rdc_tool/daemon/client.py:467-515](file://rdc_tool/daemon/client.py#L467-L515)
+- [rdc_tool/daemon/server.py:572-643](file://rdc_tool/daemon/server.py#L572-L643)
+- [rdc_tool/remote_bootstrap.py:495-698](file://rdc_tool/remote_bootstrap.py#L495-L698)
 
 章节来源
-- [rdx/tool_router.py:1-156](file://rdx/tool_router.py#L1-L156)
-- [rdx/handlers/remote.py:1-11](file://rdx/handlers/remote.py#L1-L11)
-- [rdx/server.py:1-150](file://rdx/server.py#L1-L150)
-- [rdx/daemon/client.py:1-800](file://rdx/daemon/client.py#L1-L800)
-- [rdx/daemon/server.py:1-728](file://rdx/daemon/server.py#L1-L728)
-- [rdx/remote_bootstrap.py:1-785](file://rdx/remote_bootstrap.py#L1-L785)
+- [rdc_tool/tool_router.py:1-156](file://rdc_tool/tool_router.py#L1-L156)
+- [rdc_tool/handlers/remote.py:1-11](file://rdc_tool/handlers/remote.py#L1-L11)
+- [rdc_tool/server.py:1-150](file://rdc_tool/server.py#L1-L150)
+- [rdc_tool/daemon/client.py:1-800](file://rdc_tool/daemon/client.py#L1-L800)
+- [rdc_tool/daemon/server.py:1-728](file://rdc_tool/daemon/server.py#L1-L728)
+- [rdc_tool/remote_bootstrap.py:1-785](file://rdc_tool/remote_bootstrap.py#L1-L785)
 
 ## 核心组件
 - 操作定义与路由
@@ -84,14 +84,14 @@ Bootstrap --> ADB["ADB/设备"]
   - cli.py 将 capture open 等流程与 --remote-id 结合，确保 open_replay 严格走远程后端。
 
 章节来源
-- [rdx/operation_definitions.py:1960-2300](file://rdx/operation_definitions.py#L1960-L2300)
-- [rdx/tool_router.py:1-156](file://rdx/tool_router.py#L1-L156)
-- [rdx/handlers/remote.py:1-11](file://rdx/handlers/remote.py#L1-L11)
-- [rdx/server.py:62-145](file://rdx/server.py#L62-L145)
-- [rdx/daemon/server.py:102-169](file://rdx/daemon/server.py#L102-L169)
-- [rdx/daemon/client.py:467-515](file://rdx/daemon/client.py#L467-L515)
-- [rdx/remote_bootstrap.py:495-698](file://rdx/remote_bootstrap.py#L495-L698)
-- [rdx/cli.py:1090-1171](file://rdx/cli.py#L1090-L1171)
+- [rdc_tool/operation_definitions.py:1960-2300](file://rdc_tool/operation_definitions.py#L1960-L2300)
+- [rdc_tool/tool_router.py:1-156](file://rdc_tool/tool_router.py#L1-L156)
+- [rdc_tool/handlers/remote.py:1-11](file://rdc_tool/handlers/remote.py#L1-L11)
+- [rdc_tool/server.py:62-145](file://rdc_tool/server.py#L62-L145)
+- [rdc_tool/daemon/server.py:102-169](file://rdc_tool/daemon/server.py#L102-L169)
+- [rdc_tool/daemon/client.py:467-515](file://rdc_tool/daemon/client.py#L467-L515)
+- [rdc_tool/remote_bootstrap.py:495-698](file://rdc_tool/remote_bootstrap.py#L495-L698)
+- [rdc_tool/cli.py:1090-1171](file://rdc_tool/cli.py#L1090-L1171)
 
 ## 架构总览
 下图展示一次典型远程捕获打开流程：CLI 发起 capture open，若指定 --remote-id，则 open_replay 必须走远程后端；底层通过守护进程与工作进程协作，必要时触发 Android 引导以建立连接。
@@ -120,11 +120,11 @@ S-->>C : 输出结构化结果
 ```
 
 图表来源
-- [rdx/cli.py:1090-1171](file://rdx/cli.py#L1090-L1171)
-- [rdx/tool_router.py:131-154](file://rdx/tool_router.py#L131-L154)
-- [rdx/server.py:62-145](file://rdx/server.py#L62-L145)
-- [rdx/daemon/server.py:452-493](file://rdx/daemon/server.py#L452-L493)
-- [rdx/remote_bootstrap.py:495-698](file://rdx/remote_bootstrap.py#L495-L698)
+- [rdc_tool/cli.py:1090-1171](file://rdc_tool/cli.py#L1090-L1171)
+- [rdc_tool/tool_router.py:131-154](file://rdc_tool/tool_router.py#L131-L154)
+- [rdc_tool/server.py:62-145](file://rdc_tool/server.py#L62-L145)
+- [rdc_tool/daemon/server.py:452-493](file://rdc_tool/daemon/server.py#L452-L493)
+- [rdc_tool/remote_bootstrap.py:495-698](file://rdc_tool/remote_bootstrap.py#L495-L698)
 
 ## 详细组件分析
 
@@ -160,17 +160,17 @@ Forward --> Done(["连接成功"])
 ```
 
 图表来源
-- [rdx/remote_bootstrap.py:294-338](file://rdx/remote_bootstrap.py#L294-L338)
-- [rdx/remote_bootstrap.py:401-422](file://rdx/remote_bootstrap.py#L401-L422)
-- [rdx/remote_bootstrap.py:563-698](file://rdx/remote_bootstrap.py#L563-L698)
-- [rdx/daemon/server.py:166-169](file://rdx/daemon/server.py#L166-L169)
-- [rdx/daemon/server.py:181-211](file://rdx/daemon/server.py#L181-L211)
+- [rdc_tool/remote_bootstrap.py:294-338](file://rdc_tool/remote_bootstrap.py#L294-L338)
+- [rdc_tool/remote_bootstrap.py:401-422](file://rdc_tool/remote_bootstrap.py#L401-L422)
+- [rdc_tool/remote_bootstrap.py:563-698](file://rdc_tool/remote_bootstrap.py#L563-L698)
+- [rdc_tool/daemon/server.py:166-169](file://rdc_tool/daemon/server.py#L166-L169)
+- [rdc_tool/daemon/server.py:181-211](file://rdc_tool/daemon/server.py#L181-L211)
 
 章节来源
-- [rdx/remote_bootstrap.py:294-338](file://rdx/remote_bootstrap.py#L294-L338)
-- [rdx/remote_bootstrap.py:401-422](file://rdx/remote_bootstrap.py#L401-L422)
-- [rdx/remote_bootstrap.py:495-698](file://rdx/remote_bootstrap.py#L495-L698)
-- [rdx/daemon/server.py:166-211](file://rdx/daemon/server.py#L166-L211)
+- [rdc_tool/remote_bootstrap.py:294-338](file://rdc_tool/remote_bootstrap.py#L294-L338)
+- [rdc_tool/remote_bootstrap.py:401-422](file://rdc_tool/remote_bootstrap.py#L401-L422)
+- [rdc_tool/remote_bootstrap.py:495-698](file://rdc_tool/remote_bootstrap.py#L495-L698)
+- [rdc_tool/daemon/server.py:166-211](file://rdc_tool/daemon/server.py#L166-L211)
 
 ### 远程捕获控制
 - 启动/停止捕获
@@ -196,14 +196,14 @@ Local-->>App : 提供回放/事件/截图等能力
 ```
 
 图表来源
-- [rdx/operation_definitions.py:2193-2285](file://rdx/operation_definitions.py#L2193-L2285)
-- [rdx/operation_definitions.py:2221-2251](file://rdx/operation_definitions.py#L2221-L2251)
-- [rdx/operation_definitions.py:245-282](file://rdx/operation_definitions.py#L245-L282)
+- [rdc_tool/operation_definitions.py:2193-2285](file://rdc_tool/operation_definitions.py#L2193-L2285)
+- [rdc_tool/operation_definitions.py:2221-2251](file://rdc_tool/operation_definitions.py#L2221-L2251)
+- [rdc_tool/operation_definitions.py:245-282](file://rdc_tool/operation_definitions.py#L245-L282)
 
 章节来源
-- [rdx/operation_definitions.py:2193-2285](file://rdx/operation_definitions.py#L2193-L2285)
-- [rdx/operation_definitions.py:2221-2251](file://rdx/operation_definitions.py#L2221-L2251)
-- [rdx/operation_definitions.py:245-282](file://rdx/operation_definitions.py#L245-L282)
+- [rdc_tool/operation_definitions.py:2193-2285](file://rdc_tool/operation_definitions.py#L2193-L2285)
+- [rdc_tool/operation_definitions.py:2221-2251](file://rdc_tool/operation_definitions.py#L2221-L2251)
+- [rdc_tool/operation_definitions.py:245-282](file://rdc_tool/operation_definitions.py#L245-L282)
 
 ### 远程会话管理
 - 会话创建
@@ -227,15 +227,15 @@ stateDiagram-v2
 ```
 
 图表来源
-- [rdx/operation_definitions.py:245-282](file://rdx/operation_definitions.py#L245-L282)
-- [rdx/daemon/server.py:334-357](file://rdx/daemon/server.py#L334-L357)
-- [rdx/daemon/server.py:532-570](file://rdx/daemon/server.py#L532-L570)
+- [rdc_tool/operation_definitions.py:245-282](file://rdc_tool/operation_definitions.py#L245-L282)
+- [rdc_tool/daemon/server.py:334-357](file://rdc_tool/daemon/server.py#L334-L357)
+- [rdc_tool/daemon/server.py:532-570](file://rdc_tool/daemon/server.py#L532-L570)
 - [docs/troubleshooting.md:13-19](file://docs/troubleshooting.md#L13-L19)
 
 章节来源
-- [rdx/operation_definitions.py:245-282](file://rdx/operation_definitions.py#L245-L282)
-- [rdx/daemon/server.py:334-357](file://rdx/daemon/server.py#L334-L357)
-- [rdx/daemon/server.py:532-570](file://rdx/daemon/server.py#L532-L570)
+- [rdc_tool/operation_definitions.py:245-282](file://rdc_tool/operation_definitions.py#L245-L282)
+- [rdc_tool/daemon/server.py:334-357](file://rdc_tool/daemon/server.py#L334-L357)
+- [rdc_tool/daemon/server.py:532-570](file://rdc_tool/daemon/server.py#L532-L570)
 - [docs/troubleshooting.md:13-19](file://docs/troubleshooting.md#L13-L19)
 
 ### 数据传输协议与优化
@@ -254,10 +254,10 @@ stateDiagram-v2
   - 连接预算：Android 引导使用 ConnectionBudget 控制整体超时与取消信号，避免长时间阻塞。
 
 章节来源
-- [rdx/daemon/client.py:467-515](file://rdx/daemon/client.py#L467-L515)
-- [rdx/daemon/server.py:452-493](file://rdx/daemon/server.py#L452-L493)
-- [rdx/remote_bootstrap.py:37-58](file://rdx/remote_bootstrap.py#L37-L58)
-- [rdx/operation_definitions.py:245-282](file://rdx/operation_definitions.py#L245-L282)
+- [rdc_tool/daemon/client.py:467-515](file://rdc_tool/daemon/client.py#L467-L515)
+- [rdc_tool/daemon/server.py:452-493](file://rdc_tool/daemon/server.py#L452-L493)
+- [rdc_tool/remote_bootstrap.py:37-58](file://rdc_tool/remote_bootstrap.py#L37-L58)
+- [rdc_tool/operation_definitions.py:245-282](file://rdc_tool/operation_definitions.py#L245-L282)
 
 ## 依赖关系分析
 - 模块耦合
@@ -281,17 +281,17 @@ DaemonSrv --> Bootstrap["remote_bootstrap"]
 ```
 
 图表来源
-- [rdx/tool_router.py:1-156](file://rdx/tool_router.py#L1-L156)
-- [rdx/handlers/remote.py:1-11](file://rdx/handlers/remote.py#L1-L11)
-- [rdx/server.py:62-145](file://rdx/server.py#L62-L145)
-- [rdx/daemon/client.py:467-515](file://rdx/daemon/client.py#L467-L515)
-- [rdx/daemon/server.py:572-643](file://rdx/daemon/server.py#L572-L643)
-- [rdx/remote_bootstrap.py:495-698](file://rdx/remote_bootstrap.py#L495-L698)
+- [rdc_tool/tool_router.py:1-156](file://rdc_tool/tool_router.py#L1-L156)
+- [rdc_tool/handlers/remote.py:1-11](file://rdc_tool/handlers/remote.py#L1-L11)
+- [rdc_tool/server.py:62-145](file://rdc_tool/server.py#L62-L145)
+- [rdc_tool/daemon/client.py:467-515](file://rdc_tool/daemon/client.py#L467-L515)
+- [rdc_tool/daemon/server.py:572-643](file://rdc_tool/daemon/server.py#L572-L643)
+- [rdc_tool/remote_bootstrap.py:495-698](file://rdc_tool/remote_bootstrap.py#L495-L698)
 
 章节来源
-- [rdx/tool_router.py:1-156](file://rdx/tool_router.py#L1-L156)
-- [rdx/server.py:62-145](file://rdx/server.py#L62-L145)
-- [rdx/daemon/server.py:572-643](file://rdx/daemon/server.py#L572-L643)
+- [rdc_tool/tool_router.py:1-156](file://rdc_tool/tool_router.py#L1-L156)
+- [rdc_tool/server.py:62-145](file://rdc_tool/server.py#L62-L145)
+- [rdc_tool/daemon/server.py:572-643](file://rdc_tool/daemon/server.py#L572-L643)
 
 ## 性能与传输特性
 - 连接建立耗时
@@ -319,13 +319,13 @@ DaemonSrv --> Bootstrap["remote_bootstrap"]
   - 若状态显示 remote_handle_consumed，请重新 connect 再 open_replay，不要复用旧句柄。
   - 若 stale session 清理失败，按返回的恢复命令执行。
 - 日志与诊断
-  - 使用 rdx --json doctor 与环境自检；查看 context status 与操作历史定位问题。
+  - 使用 rdc-tool --json doctor 与环境自检；查看 context status 与操作历史定位问题。
 
 章节来源
 - [docs/troubleshooting.md:1-58](file://docs/troubleshooting.md#L1-L58)
-- [docs/rdx-native-agent-playbook.md:117-144](file://docs/rdx-native-agent-playbook.md#L117-L144)
-- [rdx/daemon/client.py:467-515](file://rdx/daemon/client.py#L467-L515)
-- [rdx/remote_bootstrap.py:495-698](file://rdx/remote_bootstrap.py#L495-L698)
+- [docs/rdc-native-agent-playbook.md:117-144](file://docs/rdc-native-agent-playbook.md#L117-L144)
+- [rdc_tool/daemon/client.py:467-515](file://rdc_tool/daemon/client.py#L467-L515)
+- [rdc_tool/remote_bootstrap.py:495-698](file://rdc_tool/remote_bootstrap.py#L495-L698)
 
 ## 结论
 rd.remote.* 提供了从设备发现、连接建立、认证到捕获控制与会话管理的完整闭环。通过守护进程与工作进程的解耦设计，以及 Android 引导层的健壮性保障，上层工具可在本地与远程后端之间无缝切换。遵循“显式连接—严格回放—及时释放—按需重连”的最佳实践，可获得稳定高效的远程调试体验。
@@ -353,6 +353,6 @@ rd.remote.* 提供了从设备发现、连接建立、认证到捕获控制与�
   - 捕获完成后如需再次使用，应重新 connect 获取新句柄。
 
 章节来源
-- [rdx/operation_definitions.py:1960-2300](file://rdx/operation_definitions.py#L1960-L2300)
-- [rdx/cli.py:1090-1171](file://rdx/cli.py#L1090-L1171)
-- [docs/rdx-native-agent-playbook.md:117-144](file://docs/rdx-native-agent-playbook.md#L117-L144)
+- [rdc_tool/operation_definitions.py:1960-2300](file://rdc_tool/operation_definitions.py#L1960-L2300)
+- [rdc_tool/cli.py:1090-1171](file://rdc_tool/cli.py#L1090-L1171)
+- [docs/rdc-native-agent-playbook.md:117-144](file://docs/rdc-native-agent-playbook.md#L117-L144)

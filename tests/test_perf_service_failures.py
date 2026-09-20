@@ -5,8 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from rdx.core import perf_service
-from rdx.core.perf_service import PerfService
+from rdc_tool.core import perf_service
+from rdc_tool.core.perf_service import PerfService
 
 
 class _SessionManager:

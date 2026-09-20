@@ -7,9 +7,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from rdx import server
-from rdx.core import patch_engine as patch_engine_mod
-from rdx.models import PatchOp, PatchResult, PatchSpec, ShaderStage
+from rdc_tool import server
+from rdc_tool.core import patch_engine as patch_engine_mod
+from rdc_tool.models import PatchOp, PatchResult, PatchSpec, ShaderStage
 
 
 class _FakePipe:

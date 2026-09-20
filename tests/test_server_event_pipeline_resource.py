@@ -7,9 +7,9 @@ from typing import Any
 
 import pytest
 
-from rdx import server
-from rdx.context_snapshot import clear_context_snapshot
-from rdx.core import pipeline_service as pipeline_module
+from rdc_tool import server
+from rdc_tool.context_snapshot import clear_context_snapshot
+from rdc_tool.core import pipeline_service as pipeline_module
 
 
 class _FakeActionFlags:

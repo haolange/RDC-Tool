@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from rdx import cli
-from rdx.daemon import client as daemon_client
+from rdc_tool import cli
+from rdc_tool.daemon import client as daemon_client
 
 
 def _configure_runtime_dir(monkeypatch, tmp_path: Path) -> None:
@@ -180,7 +180,7 @@ def test_stop_daemon_uses_loaded_state_before_cleanup(monkeypatch, tmp_path: Pat
 
 def test_daemon_stop_cli_confirms_exact_context_and_completion(monkeypatch, capsys) -> None:
     monkeypatch.setattr(cli, "stop_daemon", lambda context="default": (True, "daemon stopped"))
-    monkeypatch.setattr(sys, "argv", ["rdx", "--json", "--daemon-context", "ctx-live", "daemon", "stop"])
+    monkeypatch.setattr(sys, "argv", ["rdc-tool", "--json", "--daemon-context", "ctx-live", "daemon", "stop"])
 
     with pytest.raises(SystemExit) as exit_info:
         cli.main()
@@ -188,7 +188,7 @@ def test_daemon_stop_cli_confirms_exact_context_and_completion(monkeypatch, caps
     assert exit_info.value.code == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["ok"] is True
-    assert payload["result_kind"] == "rdx.daemon.stop"
+    assert payload["result_kind"] == "rdc_tool.daemon.stop"
     assert payload["data"] == {
         "message": "daemon stopped",
         "context_id": "ctx-live",
@@ -344,16 +344,16 @@ def test_dead_owner_exits_live_daemon_process(monkeypatch, tmp_path: Path) -> No
     import time
 
     try:
-        from rdx.daemon import server as _daemon_server
+        from rdc_tool.daemon import server as _daemon_server
     except Exception as exc:
         pytest.skip(f"daemon server import unavailable: {exc}")
     del _daemon_server
 
-    intermediate = tmp_path / "rdx-intermediate"
-    state_dir = intermediate / "runtime" / "rdx_cli"
+    intermediate = tmp_path / "rdc-tool-intermediate"
+    state_dir = intermediate / "runtime" / "rdc_tool_cli"
     state_dir.mkdir(parents=True)
-    monkeypatch.setenv("RDX_INTERMEDIATE_ROOT", str(intermediate))
-    monkeypatch.setenv("RDX_TOOLS_ROOT", str(Path(__file__).resolve().parents[1]))
+    monkeypatch.setenv("RDC_TOOL_INTERMEDIATE_ROOT", str(intermediate))
+    monkeypatch.setenv("RDC_TOOL_ROOT", str(Path(__file__).resolve().parents[1]))
     monkeypatch.setattr(daemon_client, "STATE_DIR", state_dir)
     monkeypatch.setattr(daemon_client, "DAEMON_STATE_FILE", state_dir / "daemon_state.json")
     monkeypatch.setattr(daemon_client, "SESSION_STATE_FILE", state_dir / "session_state.json")

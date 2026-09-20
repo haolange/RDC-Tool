@@ -1,0 +1,18 @@
+#!/usr/bin/env sh
+set -eu
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+tools_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
+python_cmd="$tools_root/binaries/windows/x64/python/python.exe"
+python_script="$tools_root/cli/run_cli.py"
+if [ ! -f "$python_cmd" ]; then
+  echo "Bundled Python is missing. Repair this RDC-Tool installation." >&2
+  exit 2
+fi
+if command -v cygpath >/dev/null 2>&1; then
+  python_cmd=$(cygpath -w "$python_cmd")
+  python_script=$(cygpath -w "$python_script")
+  tools_root=$(cygpath -w "$tools_root")
+fi
+export RDC_TOOL_ROOT="$tools_root"
+export RDC_TOOL_LAUNCHER_PROG=rdc-tool
+exec "$python_cmd" "$python_script" "$@"

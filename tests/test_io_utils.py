@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from rdx.io_utils import safe_json_text
+from rdc_tool.io_utils import safe_json_text
 
 
 def test_safe_json_text_sanitizes_unpaired_surrogates() -> None:

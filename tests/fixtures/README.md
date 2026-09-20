@@ -6,9 +6,9 @@ Current fixture set:
 
 | File | Size | SHA256 | Source |
 | --- | ---: | --- | --- |
-| `hello_triangle.rdc` | 75478 | `00797a27e6316a0cf4369327f9db30a21635fa757673b3f9712af07989145ba8` | `rdx-third/rdc-cli/tests/fixtures/hello_triangle.rdc` |
-| `vkcube.rdc` | 75478 | `00797a27e6316a0cf4369327f9db30a21635fa757673b3f9712af07989145ba8` | `rdx-third/rdc-cli/tests/fixtures/vkcube.rdc` |
-| `vkcube_validation.rdc` | 65913 | `c50cd1e7c29241c64fd33faf07cb35e802f9dc85692a8512aa36db01c956b385` | `rdx-third/rdc-cli/tests/fixtures/vkcube_validation.rdc` |
+| `hello_triangle.rdc` | 75478 | `00797a27e6316a0cf4369327f9db30a21635fa757673b3f9712af07989145ba8` | `rdc-tool-third/rdc-cli/tests/fixtures/hello_triangle.rdc` |
+| `vkcube.rdc` | 75478 | `00797a27e6316a0cf4369327f9db30a21635fa757673b3f9712af07989145ba8` | `rdc-tool-third/rdc-cli/tests/fixtures/vkcube.rdc` |
+| `vkcube_validation.rdc` | 65913 | `c50cd1e7c29241c64fd33faf07cb35e802f9dc85692a8512aa36db01c956b385` | `rdc-tool-third/rdc-cli/tests/fixtures/vkcube_validation.rdc` |
 
 Policy:
 

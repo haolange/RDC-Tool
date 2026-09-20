@@ -21,7 +21,7 @@ def test_catalog_has_unique_tools_and_declared_count() -> None:
 def test_catalog_uses_repo_relative_source_path_and_readable_groups() -> None:
     catalog = ROOT / "spec" / "tool_catalog.json"
     payload = json.loads(catalog.read_text(encoding="utf-8"))
-    assert payload.get("source_path") == "rdx/operation_definitions.py"
+    assert payload.get("source_path") == "rdc_tool/operation_definitions.py"
     assert isinstance(payload.get("fingerprint"), str) and len(payload["fingerprint"]) == 64
     groups = payload.get("groups", {})
     assert isinstance(groups, dict)
@@ -38,7 +38,7 @@ def test_catalog_boundaries_remove_pre_ga_surfaces_and_expand_export_params() ->
     payload = json.loads(catalog.read_text(encoding="utf-8"))
     tools = payload.get("tools", [])
     names = {str(t.get("name", "")).strip() for t in tools}
-    from rdx.operation_definitions import OPERATIONS
+    from rdc_tool.operation_definitions import OPERATIONS
     assert int(payload.get("tool_count") or 0) == len(OPERATIONS)
     assert names == {item["name"] for item in OPERATIONS}
 
@@ -159,7 +159,7 @@ def test_catalog_boundaries_remove_pre_ga_surfaces_and_expand_export_params() ->
 
 def test_required_directories_exist() -> None:
     required = [
-        ROOT / "rdx",
+        ROOT / "rdc_tool",
         ROOT / "bin",
         ROOT / "cli",
         ROOT / "spec",
@@ -168,7 +168,7 @@ def test_required_directories_exist() -> None:
         ROOT / "tests",
         ROOT / "binaries" / "windows" / "x64" / "python",
         ROOT / "binaries" / "windows" / "x64" / "pymodules",
-        ROOT / "intermediate" / "runtime" / "rdx_cli",
+        ROOT / "intermediate" / "runtime" / "rdc_tool_cli",
         ROOT / "intermediate" / "runtime" / "worker-state",
         ROOT / "intermediate" / "artifacts",
         ROOT / "intermediate" / "pytest",
@@ -176,7 +176,7 @@ def test_required_directories_exist() -> None:
     ]
     for p in required:
         assert p.is_dir(), str(p)
-    assert (ROOT / "bin" / "rdx").is_file()
+    assert (ROOT / "bin" / "rdc-tool").is_file()
 
 
 def test_runtime_manifest_declares_bundled_python_and_required_runtime_files() -> None:

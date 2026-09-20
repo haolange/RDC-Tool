@@ -3,13 +3,13 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "rdx-tools"
+name = "rdc-tool"
 version = "1.0.0"
-description = "Local-first RenderDoc tools runtime for CLI and GPU debugging hosts."
+description = "Local-first RenderDoc CLI runtime for .rdc replay and agent hosts."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Apache-2.0" }
-authors = [{ name = "RDX" }]
+authors = [{ name = "CGBull" }]
 dependencies = [
   "aiofiles>=23.0",
   "jinja2>=3.1",
@@ -19,7 +19,7 @@ dependencies = [
 ]
 
 [project.scripts]
-rdx = "rdx.cli:main"
+rdc-tool = "rdc_tool.cli:main"
 
 [project.optional-dependencies]
 dev = [
@@ -31,7 +31,7 @@ package-dir = { "" = "." }
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["rdx*"]
+include = ["rdc_tool*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

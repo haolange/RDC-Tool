@@ -16,7 +16,7 @@ def powershell(code):
 
 
 def installer_functions():
-    script = str(ROOT / "scripts/rdx_install.ps1").replace("'", "''")
+    script = str(ROOT / "scripts/rdc_tool_install.ps1").replace("'", "''")
     return f"$ErrorActionPreference='Stop'; $ast=[System.Management.Automation.Language.Parser]::ParseFile('{script}',[ref]$null,[ref]$null); $ast.FindAll({{param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst]}},$false) | ForEach-Object {{. ([scriptblock]::Create($_.Extent.Text))}}; $DryRun=$false; "
 
 
@@ -25,9 +25,9 @@ def test_path_convergence_preserves_other_installations():
 $script:entries=@('C:\other\bin','C:\chosen','C:\chosen\bin','C:\custom');
 function Get-UserPathEntries { return $script:entries }
 function Set-UserPathEntries { param([string[]]$Entries) $script:entries=$Entries }
-Add-RdxToPath -TargetRoot 'C:\chosen' | Out-Null
+Add-RdcToolToPath -TargetRoot 'C:\chosen' | Out-Null
 if (($script:entries -join ';') -ne 'C:\other\bin;C:\custom;C:\chosen\bin') {throw 'bad upgrade PATH'}
-Remove-RdxFromPath -TargetRoot 'C:\chosen' | Out-Null
+Remove-RdcToolFromPath -TargetRoot 'C:\chosen' | Out-Null
 if (($script:entries -join ';') -ne 'C:\other\bin;C:\custom') {throw 'bad uninstall PATH'}
 """
     result = powershell(code)
@@ -40,13 +40,13 @@ def test_upgrade_removes_owned_launchers_and_preserves_unrelated_files(tmp_path)
         (root / 'cli').mkdir(parents=True)
         (root / 'cli/run_cli.py').write_text('entry', encoding='utf-8')
     (target / 'scripts').mkdir()
-    (target / 'rdx.bat').write_text('obsolete')
-    (target / 'scripts/rdx_bat_launcher.ps1').write_text('obsolete')
+    (target / 'rdc-tool.bat').write_text('obsolete')
+    (target / 'scripts/rdc_tool_bat_launcher.ps1').write_text('obsolete')
     (target / 'notes.txt').write_text('keep')
-    result = powershell(installer_functions() + f"Copy-RdxTools -SourceRoot '{source}' -TargetRoot '{target}'")
+    result = powershell(installer_functions() + f"Copy-RdcToolTools -SourceRoot '{source}' -TargetRoot '{target}'")
     assert result.returncode == 0, result.stderr
-    assert not (target / 'rdx.bat').exists()
-    assert not (target / 'scripts/rdx_bat_launcher.ps1').exists()
+    assert not (target / 'rdc-tool.bat').exists()
+    assert not (target / 'scripts/rdc_tool_bat_launcher.ps1').exists()
     assert (target / 'notes.txt').read_text() == 'keep'
 
 
@@ -55,19 +55,19 @@ def test_thin_launcher_forwards_unicode_json_cwd_and_exit(tmp_path):
     (root / 'bin').mkdir(parents=True)
     (root / 'cli').mkdir()
     (root / 'binaries/windows/x64').mkdir(parents=True)
-    shutil.copyfile(ROOT / 'bin/rdx.cmd', root / 'bin/rdx.cmd')
+    shutil.copyfile(ROOT / 'bin/rdc-tool.cmd', root / 'bin/rdc-tool.cmd')
     junction = root / 'binaries/windows/x64/python'
     made = subprocess.run(['cmd.exe','/d','/c','mklink','/J',str(junction),str(ROOT/'binaries/windows/x64/python')],capture_output=True)
     assert made.returncode == 0
     try:
         (root / 'cli/run_cli.py').write_text('import sys,json,os\nprint(json.dumps({"args":sys.argv[1:],"cwd":os.getcwd()}))\nsys.exit(7)\n',encoding='utf-8')
         args = ['space 中文', '{"text":"a b"}']
-        result = subprocess.run('cmd.exe /d /s /c "' + subprocess.list2cmdline([str(root/'bin/rdx.cmd'), *args]) + '"',cwd=tmp_path,capture_output=True,text=True,timeout=20)
+        result = subprocess.run('cmd.exe /d /s /c "' + subprocess.list2cmdline([str(root/'bin/rdc-tool.cmd'), *args]) + '"',cwd=tmp_path,capture_output=True,text=True,timeout=20)
         assert result.returncode == 7, result.stderr
         payload=json.loads(result.stdout)
         assert payload['args'] == args
         assert Path(payload['cwd']) == tmp_path
     finally:
         os.rmdir(junction)
-    result = subprocess.run('cmd.exe /d /s /c "' + subprocess.list2cmdline([str(root/'bin/rdx.cmd'), 'version']) + '"',capture_output=True,text=True,timeout=20)
+    result = subprocess.run('cmd.exe /d /s /c "' + subprocess.list2cmdline([str(root/'bin/rdc-tool.cmd'), 'version']) + '"',capture_output=True,text=True,timeout=20)
     assert result.returncode == 2 and 'Python' in result.stderr

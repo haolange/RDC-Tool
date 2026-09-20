@@ -19,6 +19,7 @@ def test_package_runtime_bundles_python_and_excludes_dev_only_packages(tmp_path:
     renderdoc_src = tools_root / "staging"
     python_home = tmp_path / "python-home"
     site_packages = tools_root / ".venv" / "Lib" / "site-packages"
+    _write(tools_root / 'pyproject.toml', (Path(__file__).resolve().parents[1] / 'pyproject.toml').read_text(encoding='utf-8'))
 
     _write(renderdoc_src / "renderdoc.dll", b"renderdoc")
     _write(renderdoc_src / "renderdoc.json", "{}")
@@ -67,6 +68,10 @@ def test_package_runtime_bundles_python_and_excludes_dev_only_packages(tmp_path:
     indexed = {item["path"]: item for item in manifest["files"]}
     assert "python/python.exe" in indexed
     assert "renderdoc.dll" in indexed
+    metadata = out_root / 'python/Lib/site-packages/rdc_tool-1.0.0.dist-info'
+    assert 'Name: rdc-tool' in (metadata / 'METADATA').read_text(encoding='utf-8')
+    assert not (metadata / 'direct_url.json').exists()
+    assert 'rdc-tool = rdc_tool.cli:main' in (metadata / 'entry_points.txt').read_text(encoding='utf-8')
     removed_field = "worker_" + "materialize"
     assert all(removed_field not in item for item in manifest["files"])
 

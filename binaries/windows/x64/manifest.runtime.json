@@ -1,5 +1,5 @@
 {
-  "file_count": 2964,
+  "file_count": 2962,
   "files": [
     {
       "path": "d3dcompiler_47.dll",
@@ -2440,11 +2440,6 @@
       "path": "python/Lib/signal.py",
       "size": 2495,
       "sha256": "0363c964c90ac0b3e515de5749205e6e6454051a1211058375d84d91eab6071a"
-    },
-    {
-      "path": "python/Lib/site-packages/__editable___rdx_tools_1_0_0_finder.py",
-      "size": 3408,
-      "sha256": "32cee91adaf183bd7094046fe27d73b21e856fabd9368ed2b79154a01a4a2834"
     },
     {
       "path": "python/Lib/site-packages/_cffi_backend.cp314-win_amd64.pyd",
@@ -11192,39 +11187,34 @@
       "sha256": "ee4e96732e7cf222587b995fe4ad3de4d2e0faea014e713e4fc78727dd86e3fe"
     },
     {
-      "path": "python/Lib/site-packages/rdx_tools-1.0.0.dist-info/direct_url.json",
-      "size": 100,
-      "sha256": "6166afe3b659c3c259899e7f398ac7a6e8e9e246b8e0d44dce5295cb12dabe09"
+      "path": "python/Lib/site-packages/rdc_tool-1.0.0.dist-info/entry_points.txt",
+      "size": 47,
+      "sha256": "2720680c99ec405e86f241519dee9fc6c4d53791a51e40a5d9cccbebf3fd339b"
     },
     {
-      "path": "python/Lib/site-packages/rdx_tools-1.0.0.dist-info/INSTALLER",
-      "size": 4,
-      "sha256": "ceebae7b8927a3227e5303cf5e0f1f7b34bb542ad7250ac03fbcde36ec2f1508"
+      "path": "python/Lib/site-packages/rdc_tool-1.0.0.dist-info/INSTALLER",
+      "size": 17,
+      "sha256": "51365a5cdacc8aeb2d13f6cdd78ea872a335ff02436e3de3eb286f68a2379b7d"
     },
     {
-      "path": "python/Lib/site-packages/rdx_tools-1.0.0.dist-info/METADATA",
-      "size": 436,
-      "sha256": "48938703b9852839062151140f587f70ffb6508cd58df8a71d247d619c05d919"
+      "path": "python/Lib/site-packages/rdc_tool-1.0.0.dist-info/METADATA",
+      "size": 313,
+      "sha256": "8c4d733a4aa1a469d181331b049ef8868cb3011774cc7d7d92c175098c908d97"
     },
     {
-      "path": "python/Lib/site-packages/rdx_tools-1.0.0.dist-info/RECORD",
-      "size": 827,
-      "sha256": "fa13186d00840ff57621a63b3511ea36ef8755ff34bb7c16f59eb65bd03bbc07"
+      "path": "python/Lib/site-packages/rdc_tool-1.0.0.dist-info/RECORD",
+      "size": 491,
+      "sha256": "891368e8e6965f3a95d1f0551e6ce3b7fc459516904d9916a50a098f29601aee"
     },
     {
-      "path": "python/Lib/site-packages/rdx_tools-1.0.0.dist-info/REQUESTED",
-      "size": 0,
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      "path": "python/Lib/site-packages/rdc_tool-1.0.0.dist-info/top_level.txt",
+      "size": 9,
+      "sha256": "efff3c2c8328c68e5b94f4e3698c5467e4bfa9c2644221bbab900e6d374a797a"
     },
     {
-      "path": "python/Lib/site-packages/rdx_tools-1.0.0.dist-info/top_level.txt",
-      "size": 4,
-      "sha256": "8de826f510d5db8d41ef57143e0c4bbfed50cb3be5281352819df4b133365e1b"
-    },
-    {
-      "path": "python/Lib/site-packages/rdx_tools-1.0.0.dist-info/WHEEL",
-      "size": 91,
-      "sha256": "6027f0606398322e49870d9f538c8d83012bc9b6f6217e4f13004a57865b741a"
+      "path": "python/Lib/site-packages/rdc_tool-1.0.0.dist-info/WHEEL",
+      "size": 97,
+      "sha256": "463175fe3af4c31caf91a5c8fa35f9163d3b2586f93311450718453bf2217f7c"
     },
     {
       "path": "python/Lib/site-packages/README.txt",
@@ -14813,8 +14803,8 @@
     },
     {
       "path": "renderdoc.json",
-      "size": 1625,
-      "sha256": "305517548c962eb7d65addea87514ae3a4754e99cf0b10875e192ca6dbd1669d"
+      "size": 1586,
+      "sha256": "ada66a10a9557097a0a755f096f2a5593d0902fe1e7de91056548fd0ac203c7a"
     },
     {
       "path": "symsrv.dll",

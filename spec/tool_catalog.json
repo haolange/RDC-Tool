@@ -1,6 +1,6 @@
 {
   "schema_version": "1",
-  "source_path": "rdx/operation_definitions.py",
+  "source_path": "rdc_tool/operation_definitions.py",
   "fingerprint": "4eefd77d649bef8a03d53ab408f097314c781c33ff01b0eec436c5c1562caf4f",
   "tool_count": 128,
   "groups": {

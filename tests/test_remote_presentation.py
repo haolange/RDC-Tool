@@ -1,8 +1,8 @@
 import asyncio
 from types import SimpleNamespace
 import pytest
-from rdx.core import session_manager as module
-from rdx.models import BackendType
+from rdc_tool.core import session_manager as module
+from rdc_tool.models import BackendType
 
 @pytest.fixture
 def manager(monkeypatch):

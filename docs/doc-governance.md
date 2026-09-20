@@ -6,7 +6,7 @@ Keep navigation links current and follow [../AGENTS.md](../AGENTS.md). User-faci
 
 User-facing installation and quickstart docs must not tell users to run package managers, create virtual environments, or restore dependencies from a lock file. GA artifacts are self-contained; dependency provenance is tracked through `pyproject.toml`, the bundled runtime manifest, license inventory, and SBOM.
 
-`rdx/operation_definitions.py` is the only operation-definition source. `spec/tool_catalog.json` and `docs/tool-reference.md` are generated outputs; neither may be patched with a second metadata overlay. Regenerate the catalog with `python -B spec/build_catalog.py`, regenerate the reference with `python -B scripts/generate_tool_reference.py`, and verify both with their `--check` modes. Counts and fingerprints come from the code-owned definition set.
+`rdc_tool/operation_definitions.py` is the only operation-definition source. `spec/tool_catalog.json` and `docs/tool-reference.md` are generated outputs; neither may be patched with a second metadata overlay. Regenerate the catalog with `python -B spec/build_catalog.py`, regenerate the reference with `python -B scripts/generate_tool_reference.py`, and verify both with their `--check` modes. Counts and fingerprints come from the code-owned definition set.
 
 An interface removal may be explained in `tool-interface-upgrade.md`, but that table must not become an alias map or runtime input. Examples, generated references, smoke scripts, and tests must use current names and parameters. Workflow advice and expert judgment belong in agent Skills rather than operation descriptions.
 

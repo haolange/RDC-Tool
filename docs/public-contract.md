@@ -1,8 +1,8 @@
 ﻿# Public Contract
 
-The public user surface is the `rdx` CLI command. Release packages also include platform launcher files such as `bin/rdx.cmd`, `bin/rdx`, and `bundled-python cli/run_cli.py` for installation diagnostics and maintainer use.
+The public user surface is the `rdc-tool` CLI command. Release packages also include platform launcher files such as `bin/rdc-tool.cmd`, `bin/rdc-tool`, and `bundled-python cli/run_cli.py` for installation diagnostics and maintainer use.
 
-`rdx-tools` keeps the canonical JSON envelope stable while replacing the public operation set. Use `rdx version --json` to inspect the tool version, schema version, platform, entrypoints, and public contract metadata.
+`rdc-tool` keeps the canonical JSON envelope stable while replacing the public operation set. Use `rdc-tool version --json` to inspect the tool version, schema version, platform, entrypoints, and public contract metadata.
 
 The current contract removes obsolete and misleading operations without aliases or forwarding handlers. The code-owned definitions, generated catalog, generated reference, registry, and CLI discovery must describe the same operation set and content fingerprint, derived from code. The migration table in [tool-interface-upgrade.md](tool-interface-upgrade.md) explains replacements; it is documentation and is never consulted at runtime.
 

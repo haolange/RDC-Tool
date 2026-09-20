@@ -3,14 +3,14 @@
 <cite>
 **本文引用的文件**
 - [tests/conftest.py](file://tests/conftest.py)
-- [rdx/runtime_paths.py](file://rdx/runtime_paths.py)
-- [rdx/context_snapshot.py](file://rdx/context_snapshot.py)
+- [rdc_tool/runtime_paths.py](file://rdc_tool/runtime_paths.py)
+- [rdc_tool/context_snapshot.py](file://rdc_tool/context_snapshot.py)
 - [tests/fixtures/README.md](file://tests/fixtures/README.md)
 - [docs/fixture-strategy.md](file://docs/fixture-strategy.md)
 - [tests/test_docs_and_fixtures.py](file://tests/test_docs_and_fixtures.py)
 - [tests/test_frame_timing.py](file://tests/test_frame_timing.py)
 - [tests/test_replay_read.py](file://tests/test_replay_read.py)
-- [rdx/config.py](file://rdx/config.py)
+- [rdc_tool/config.py](file://rdc_tool/config.py)
 </cite>
 
 ## 目录
@@ -30,17 +30,17 @@
 
 ## 项目结构
 - 全局夹具与环境初始化位于 tests/conftest.py，负责：
-  - 设置 RDX_INTERMEDIATE_ROOT、RDX_TOOLS_ROOT、RDX_ARTIFACT_DIR、RDX_RENDERDOC_PATH、RDX_RUNTIME_DLL_DIR 等关键环境变量
+  - 设置 RDC_TOOL_INTERMEDIATE_ROOT、RDC_TOOL_ROOT、RDC_TOOL_ARTIFACT_DIR、RDC_TOOL_RENDERDOC_PATH、RDC_TOOL_RUNTIME_DLL_DIR 等关键环境变量
   - 通过 autouse fixture 在每个测试前后清理运行时状态与快照文件，保证测试隔离
-- 运行时路径由 rdx/runtime_paths.py 提供统一解析，所有中间产物、日志、工件、pytest输出均落在 intermediate 下
-- 上下文快照与清理逻辑在 rdx/context_snapshot.py，支持按context隔离、原子写入、锁保护与保留策略
+- 运行时路径由 rdc_tool/runtime_paths.py 提供统一解析，所有中间产物、日志、工件、pytest输出均落在 intermediate 下
+- 上下文快照与清理逻辑在 rdc_tool/context_snapshot.py，支持按context隔离、原子写入、锁保护与保留策略
 - 测试专用捕获文件位于 tests/fixtures/*.rdc，并通过 docs/fixture-strategy.md 与 tests/fixtures/README.md 约束其来源、许可证与发布排除策略
 - 验证类测试确保 fixtures 的大小与哈希一致，并校验第三方声明覆盖
 
 ```mermaid
 graph TB
-A["tests/conftest.py<br/>全局夹具与环境"] --> B["rdx/runtime_paths.py<br/>路径解析与目录创建"]
-A --> C["rdx/context_snapshot.py<br/>上下文快照与清理"]
+A["tests/conftest.py<br/>全局夹具与环境"] --> B["rdc_tool/runtime_paths.py<br/>路径解析与目录创建"]
+A --> C["rdc_tool/context_snapshot.py<br/>上下文快照与清理"]
 D["tests/fixtures/*.rdc<br/>公共捕获文件"] --> E["tests/test_docs_and_fixtures.py<br/>大小/哈希校验"]
 F["docs/fixture-strategy.md<br/>捕获策略与发布规则"] --> E
 G["tests/test_frame_timing.py<br/>轻量模拟控制器"] --> H["测试用例"]
@@ -49,15 +49,15 @@ I["tests/test_replay_read.py<br/>内建初始内容构造器"] --> H
 
 **图示来源**
 - [tests/conftest.py:10-27](file://tests/conftest.py#L10-L27)
-- [rdx/runtime_paths.py:83-123](file://rdx/runtime_paths.py#L83-L123)
-- [rdx/context_snapshot.py:214-240](file://rdx/context_snapshot.py#L214-L240)
+- [rdc_tool/runtime_paths.py:83-123](file://rdc_tool/runtime_paths.py#L83-L123)
+- [rdc_tool/context_snapshot.py:214-240](file://rdc_tool/context_snapshot.py#L214-L240)
 - [tests/fixtures/README.md:1-26](file://tests/fixtures/README.md#L1-L26)
 - [docs/fixture-strategy.md:1-28](file://docs/fixture-strategy.md#L1-L28)
 - [tests/test_docs_and_fixtures.py:60-83](file://tests/test_docs_and_fixtures.py#L60-L83)
 
 **章节来源**
 - [tests/conftest.py:10-46](file://tests/conftest.py#L10-L46)
-- [rdx/runtime_paths.py:83-123](file://rdx/runtime_paths.py#L83-L123)
+- [rdc_tool/runtime_paths.py:83-123](file://rdc_tool/runtime_paths.py#L83-L123)
 - [tests/fixtures/README.md:1-26](file://tests/fixtures/README.md#L1-L26)
 - [docs/fixture-strategy.md:1-28](file://docs/fixture-strategy.md#L1-L28)
 
@@ -66,7 +66,7 @@ I["tests/test_replay_read.py<br/>内建初始内容构造器"] --> H
   - 自动运行于每个测试前后，清理运行时状态目录中的 runtime_state*.json、runtime_logs*.jsonl、context_snapshot*.json，并调用 clear_context_state/clear_context_snapshot，避免跨测试污染
   - 通过 setdefault 注入关键环境变量，使工具链在测试中始终指向仓库根与中间目录
 - 运行时路径与目录
-  - 通过 RDX_INTERMEDIATE_ROOT 或默认 intermediate 作为工作区；cli_runtime_dir、artifacts_dir、pytest_dir、logs_dir 等子目录按需创建
+  - 通过 RDC_TOOL_INTERMEDIATE_ROOT 或默认 intermediate 作为工作区；cli_runtime_dir、artifacts_dir、pytest_dir、logs_dir 等子目录按需创建
 - 上下文快照
   - 提供默认快照结构、规范化、持久化、锁定与清理能力；支持按 context 隔离与保留策略裁剪
 - 捕获文件策略
@@ -74,8 +74,8 @@ I["tests/test_replay_read.py<br/>内建初始内容构造器"] --> H
 
 **章节来源**
 - [tests/conftest.py:29-46](file://tests/conftest.py#L29-L46)
-- [rdx/runtime_paths.py:83-123](file://rdx/runtime_paths.py#L83-L123)
-- [rdx/context_snapshot.py:214-240](file://rdx/context_snapshot.py#L214-L240)
+- [rdc_tool/runtime_paths.py:83-123](file://rdc_tool/runtime_paths.py#L83-L123)
+- [rdc_tool/context_snapshot.py:214-240](file://rdc_tool/context_snapshot.py#L214-L240)
 - [tests/fixtures/README.md:13-26](file://tests/fixtures/README.md#L13-L26)
 - [docs/fixture-strategy.md:13-28](file://docs/fixture-strategy.md#L13-L28)
 
@@ -102,14 +102,14 @@ CF->>CS : 再次清理上下文快照
 
 **图示来源**
 - [tests/conftest.py:29-46](file://tests/conftest.py#L29-L46)
-- [rdx/runtime_paths.py:92-94](file://rdx/runtime_paths.py#L92-L94)
-- [rdx/context_snapshot.py:478-484](file://rdx/context_snapshot.py#L478-L484)
+- [rdc_tool/runtime_paths.py:92-94](file://rdc_tool/runtime_paths.py#L92-L94)
+- [rdc_tool/context_snapshot.py:478-484](file://rdc_tool/context_snapshot.py#L478-L484)
 
 ## 详细组件分析
 
 ### 全局夹具与环境隔离（autouse fixture）
 - 职责
-  - 设置 RDX_INTERMEDIATE_ROOT、RDX_TOOLS_ROOT、RDX_ARTIFACT_DIR、RDX_RENDERDOC_PATH、RDX_RUNTIME_DLL_DIR
+  - 设置 RDC_TOOL_INTERMEDIATE_ROOT、RDC_TOOL_ROOT、RDC_TOOL_ARTIFACT_DIR、RDC_TOOL_RENDERDOC_PATH、RDC_TOOL_RUNTIME_DLL_DIR
   - 在每个测试前后清理运行时状态与快照，确保测试间完全隔离
 - 关键点
   - 使用 setdefault 避免覆盖外部显式设置
@@ -135,8 +135,8 @@ PostClean --> End(["测试结束"])
 
 ### 运行时路径与目录管理
 - 路径解析优先级
-  - tools_root() 优先读取 RDX_TOOLS_ROOT，否则回退到包根
-  - intermediate_root() 优先读取 RDX_INTERMEDIATE_ROOT，否则使用 {tools_root}/intermediate
+  - tools_root() 优先读取 RDC_TOOL_ROOT，否则回退到包根
+  - intermediate_root() 优先读取 RDC_TOOL_INTERMEDIATE_ROOT，否则使用 {tools_root}/intermediate
 - 常用目录
   - cli_runtime_dir()、artifacts_dir()、pytest_dir()、logs_dir() 等均在 ensure_runtime_dirs() 中创建
 - 建议
@@ -144,8 +144,8 @@ PostClean --> End(["测试结束"])
   - 避免硬编码绝对路径，统一通过 runtime_paths 获取
 
 **章节来源**
-- [rdx/runtime_paths.py:14-57](file://rdx/runtime_paths.py#L14-L57)
-- [rdx/runtime_paths.py:83-123](file://rdx/runtime_paths.py#L83-L123)
+- [rdc_tool/runtime_paths.py:14-57](file://rdc_tool/runtime_paths.py#L14-L57)
+- [rdc_tool/runtime_paths.py:83-123](file://rdc_tool/runtime_paths.py#L83-L123)
 
 ### 上下文快照与保留策略
 - 功能要点
@@ -172,14 +172,14 @@ ContextSnapshot --> RetentionPolicy : "应用裁剪策略"
 ```
 
 **图示来源**
-- [rdx/context_snapshot.py:214-240](file://rdx/context_snapshot.py#L214-L240)
-- [rdx/context_snapshot.py:335-364](file://rdx/context_snapshot.py#L335-L364)
-- [rdx/context_snapshot.py:447-484](file://rdx/context_snapshot.py#L447-L484)
+- [rdc_tool/context_snapshot.py:214-240](file://rdc_tool/context_snapshot.py#L214-L240)
+- [rdc_tool/context_snapshot.py:335-364](file://rdc_tool/context_snapshot.py#L335-L364)
+- [rdc_tool/context_snapshot.py:447-484](file://rdc_tool/context_snapshot.py#L447-L484)
 
 **章节来源**
-- [rdx/context_snapshot.py:214-240](file://rdx/context_snapshot.py#L214-L240)
-- [rdx/context_snapshot.py:335-364](file://rdx/context_snapshot.py#L335-L364)
-- [rdx/context_snapshot.py:447-484](file://rdx/context_snapshot.py#L447-L484)
+- [rdc_tool/context_snapshot.py:214-240](file://rdc_tool/context_snapshot.py#L214-L240)
+- [rdc_tool/context_snapshot.py:335-364](file://rdc_tool/context_snapshot.py#L335-L364)
+- [rdc_tool/context_snapshot.py:447-484](file://rdc_tool/context_snapshot.py#L447-L484)
 
 ### 捕获文件（.rdc）策略与管理
 - 原则
@@ -225,14 +225,14 @@ PS-->>U : 返回采样结果与范围信息
 
 #### 环境与配置相关
 - 通过环境变量注入配置
-  - RDX_RENDERDOC_PATH、RDX_DATA_DIR、RDX_REPORT_DIR、RDX_GPU_VENDOR、RDX_SPIRV_TOOLS_PATH、RDX_HEADLESS 等
+  - RDC_TOOL_RENDERDOC_PATH、RDC_TOOL_DATA_DIR、RDC_TOOL_REPORT_DIR、RDC_TOOL_GPU_VENDOR、RDC_TOOL_SPIRV_TOOLS_PATH、RDC_TOOL_HEADLESS 等
   - 通过 from_env() 加载配置，测试可通过 monkeypatch 或 setenv 切换行为
 - 推荐做法
   - 对需要真实渲染环境的用例使用标记或可选夹具，默认不强制依赖GPU
-  - 对无头回放设置 RDX_HEADLESS=1，避免UI阻塞
+  - 对无头回放设置 RDC_TOOL_HEADLESS=1，避免UI阻塞
 
 **章节来源**
-- [rdx/config.py:136-186](file://rdx/config.py#L136-L186)
+- [rdc_tool/config.py:136-186](file://rdc_tool/config.py#L136-L186)
 
 ### Fixture的作用域与生命周期控制
 - 作用域建议
@@ -250,8 +250,8 @@ PS-->>U : 返回采样结果与范围信息
   - conftest 依赖 runtime_paths 与 context_snapshot，形成“环境→路径→状态”的单向依赖
   - 测试用例依赖 fixtures 与模拟控制器，保持被测代码与测试数据的解耦
 - 外部依赖
-  - RenderDoc模块路径通过 RDX_RENDERDOC_PATH 注入，避免硬编码
-  - Android/ADB路径通过 RDX_ANDROID_ADB_PATH 注入（在远程引导中使用）
+  - RenderDoc模块路径通过 RDC_TOOL_RENDERDOC_PATH 注入，避免硬编码
+  - Android/ADB路径通过 RDC_TOOL_ANDROID_ADB_PATH 注入（在远程引导中使用）
 
 ```mermaid
 graph LR
@@ -264,13 +264,13 @@ CFG["config.py(from_env)"] --> CF
 
 **图示来源**
 - [tests/conftest.py:10-27](file://tests/conftest.py#L10-L27)
-- [rdx/runtime_paths.py:83-123](file://rdx/runtime_paths.py#L83-L123)
-- [rdx/context_snapshot.py:214-240](file://rdx/context_snapshot.py#L214-L240)
-- [rdx/config.py:136-186](file://rdx/config.py#L136-L186)
+- [rdc_tool/runtime_paths.py:83-123](file://rdc_tool/runtime_paths.py#L83-L123)
+- [rdc_tool/context_snapshot.py:214-240](file://rdc_tool/context_snapshot.py#L214-L240)
+- [rdc_tool/config.py:136-186](file://rdc_tool/config.py#L136-L186)
 
 **章节来源**
 - [tests/conftest.py:10-46](file://tests/conftest.py#L10-L46)
-- [rdx/config.py:136-186](file://rdx/config.py#L136-L186)
+- [rdc_tool/config.py:136-186](file://rdc_tool/config.py#L136-L186)
 
 ## 性能考虑
 - 减少I/O
@@ -281,14 +281,14 @@ CFG["config.py(from_env)"] --> CF
 - 数据复用
   - 对只读捕获文件使用固定路径与校验，避免重复下载或生成
 - 并行执行
-  - 通过 RDX_INTERMEDIATE_ROOT 为每个进程分配独立目录，确保并行安全
+  - 通过 RDC_TOOL_INTERMEDIATE_ROOT 为每个进程分配独立目录，确保并行安全
 
 [本节为通用指导，不直接分析具体文件]
 
 ## 故障排查指南
 - 常见问题
   - 测试间状态污染：确认 autouse fixture 是否成功清理 runtime_state/logs/snapshot
-  - RenderDoc模块未找到：检查 RDX_RENDERDOC_PATH 是否正确指向 pymodules
+  - RenderDoc模块未找到：检查 RDC_TOOL_RENDERDOC_PATH 是否正确指向 pymodules
   - 捕获文件不一致：核对 tests/fixtures/README.md 中的大小与SHA256，必要时重新生成
   - 并发写冲突：确认上下文快照写入是否走原子写入与锁保护
 - 定位步骤
@@ -298,7 +298,7 @@ CFG["config.py(from_env)"] --> CF
 
 **章节来源**
 - [tests/conftest.py:29-46](file://tests/conftest.py#L29-L46)
-- [rdx/context_snapshot.py:214-240](file://rdx/context_snapshot.py#L214-L240)
+- [rdc_tool/context_snapshot.py:214-240](file://rdc_tool/context_snapshot.py#L214-L240)
 - [tests/test_docs_and_fixtures.py:60-83](file://tests/test_docs_and_fixtures.py#L60-L83)
 
 ## 结论
@@ -314,10 +314,10 @@ CFG["config.py(from_env)"] --> CF
   - 新增模拟控制器：尽量使用 SimpleNamespace 与工厂函数，保持最小接口
 - 参考路径
   - 全局夹具与环境：[tests/conftest.py](file://tests/conftest.py)
-  - 路径与目录：[rdx/runtime_paths.py](file://rdx/runtime_paths.py)
-  - 上下文快照：[rdx/context_snapshot.py](file://rdx/context_snapshot.py)
+  - 路径与目录：[rdc_tool/runtime_paths.py](file://rdc_tool/runtime_paths.py)
+  - 上下文快照：[rdc_tool/context_snapshot.py](file://rdc_tool/context_snapshot.py)
   - 捕获策略：[docs/fixture-strategy.md](file://docs/fixture-strategy.md)、[tests/fixtures/README.md](file://tests/fixtures/README.md)
-  - 配置注入：[rdx/config.py](file://rdx/config.py)
+  - 配置注入：[rdc_tool/config.py](file://rdc_tool/config.py)
   - 示例测试：[tests/test_frame_timing.py](file://tests/test_frame_timing.py)、[tests/test_replay_read.py](file://tests/test_replay_read.py)
 
 [本节为索引与指引，不直接分析具体文件]

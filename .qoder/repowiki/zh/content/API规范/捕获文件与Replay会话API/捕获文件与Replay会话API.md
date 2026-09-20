@@ -2,11 +2,11 @@
 
 <cite>
 **本文引用的文件**
-- [capture.py](file://rdx/handlers/capture.py)
-- [replay.py](file://rdx/handlers/replay.py)
-- [server_runtime.py](file://rdx/server_runtime.py)
-- [session_manager.py](file://rdx/core/session_manager.py)
-- [replay_read.py](file://rdx/core/replay_read.py)
+- [capture.py](file://rdc_tool/handlers/capture.py)
+- [replay.py](file://rdc_tool/handlers/replay.py)
+- [server_runtime.py](file://rdc_tool/server_runtime.py)
+- [session_manager.py](file://rdc_tool/core/session_manager.py)
+- [replay_read.py](file://rdc_tool/core/replay_read.py)
 - [test_cli_capture_open.py](file://tests/test_cli_capture_open.py)
 </cite>
 
@@ -49,16 +49,16 @@ C --> G["回放读取辅助<br/>core/replay_read.py"]
 ```
 
 **图示来源**
-- [capture.py:8-9](file://rdx/handlers/capture.py#L8-L9)
-- [replay.py:8-9](file://rdx/handlers/replay.py#L8-L9)
-- [server_runtime.py:120-238](file://rdx/server_runtime.py#L120-L238)
-- [session_manager.py:148-259](file://rdx/core/session_manager.py#L148-L259)
+- [capture.py:8-9](file://rdc_tool/handlers/capture.py#L8-L9)
+- [replay.py:8-9](file://rdc_tool/handlers/replay.py#L8-L9)
+- [server_runtime.py:120-238](file://rdc_tool/server_runtime.py#L120-L238)
+- [session_manager.py:148-259](file://rdc_tool/core/session_manager.py#L148-L259)
 
 **章节来源**
-- [capture.py:8-9](file://rdx/handlers/capture.py#L8-L9)
-- [replay.py:8-9](file://rdx/handlers/replay.py#L8-L9)
-- [server_runtime.py:120-238](file://rdx/server_runtime.py#L120-L238)
-- [session_manager.py:148-259](file://rdx/core/session_manager.py#L148-L259)
+- [capture.py:8-9](file://rdc_tool/handlers/capture.py#L8-L9)
+- [replay.py:8-9](file://rdc_tool/handlers/replay.py#L8-L9)
+- [server_runtime.py:120-238](file://rdc_tool/server_runtime.py#L120-L238)
+- [session_manager.py:148-259](file://rdc_tool/core/session_manager.py#L148-L259)
 
 ## 核心组件
 - 捕获文件句柄 CaptureFileHandle：记录 capture_file_id、文件路径、是否只读、驱动信息、打开时间戳。用于上下文状态中的 captures 映射。
@@ -68,10 +68,10 @@ C --> G["回放读取辅助<br/>core/replay_read.py"]
 - 回放读取辅助 replay_read：在回放过程中确保初始内容可用，并在读取后恢复事件位置。
 
 **章节来源**
-- [server_runtime.py:120-162](file://rdx/server_runtime.py#L120-L162)
-- [server_runtime.py:196-238](file://rdx/server_runtime.py#L196-L238)
-- [session_manager.py:118-259](file://rdx/core/session_manager.py#L118-L259)
-- [replay_read.py:9-132](file://rdx/core/replay_read.py#L9-L132)
+- [server_runtime.py:120-162](file://rdc_tool/server_runtime.py#L120-L162)
+- [server_runtime.py:196-238](file://rdc_tool/server_runtime.py#L196-L238)
+- [session_manager.py:118-259](file://rdc_tool/core/session_manager.py#L118-L259)
+- [replay_read.py:9-132](file://rdc_tool/core/replay_read.py#L9-L132)
 
 ## 架构总览
 rd.capture.* 操作通过 handlers 统一转发至 server_runtime，再由 server_runtime 协调 SessionManager 完成底层回放控制。上下文状态与快照贯穿整个流程，用于会话/捕获句柄的选择、复用与展示。
@@ -96,9 +96,9 @@ R-->>U : "返回 {ok,data : {session_id,capture_file_id,active_event_id,recovery
 ```
 
 **图示来源**
-- [capture.py:8-9](file://rdx/handlers/capture.py#L8-L9)
-- [server_runtime.py:1214-1267](file://rdx/server_runtime.py#L1214-L1267)
-- [session_manager.py:175-251](file://rdx/core/session_manager.py#L175-L251)
+- [capture.py:8-9](file://rdc_tool/handlers/capture.py#L8-L9)
+- [server_runtime.py:1214-1267](file://rdc_tool/server_runtime.py#L1214-L1267)
+- [session_manager.py:175-251](file://rdc_tool/core/session_manager.py#L175-L251)
 
 ## 详细组件分析
 
@@ -124,14 +124,14 @@ Meta --> End
 ```
 
 **图示来源**
-- [server_runtime.py:120-127](file://rdx/server_runtime.py#L120-L127)
-- [server_runtime.py:694-710](file://rdx/server_runtime.py#L694-L710)
-- [server_runtime.py:807-829](file://rdx/server_runtime.py#L807-L829)
+- [server_runtime.py:120-127](file://rdc_tool/server_runtime.py#L120-L127)
+- [server_runtime.py:694-710](file://rdc_tool/server_runtime.py#L694-L710)
+- [server_runtime.py:807-829](file://rdc_tool/server_runtime.py#L807-L829)
 
 **章节来源**
-- [server_runtime.py:120-127](file://rdx/server_runtime.py#L120-L127)
-- [server_runtime.py:694-710](file://rdx/server_runtime.py#L694-L710)
-- [server_runtime.py:807-829](file://rdx/server_runtime.py#L807-L829)
+- [server_runtime.py:120-127](file://rdc_tool/server_runtime.py#L120-L127)
+- [server_runtime.py:694-710](file://rdc_tool/server_runtime.py#L694-L710)
+- [server_runtime.py:807-829](file://rdc_tool/server_runtime.py#L807-L829)
 - [test_cli_capture_open.py:9-93](file://tests/test_cli_capture_open.py#L9-L93)
 
 ### Replay 会话生命周期
@@ -173,16 +173,16 @@ SessionManager --> RenderDocController : "调用底层API"
 ```
 
 **图示来源**
-- [session_manager.py:175-251](file://rdx/core/session_manager.py#L175-L251)
-- [session_manager.py:347-383](file://rdx/core/session_manager.py#L347-L383)
-- [session_manager.py:509-515](file://rdx/core/session_manager.py#L509-L515)
-- [server_runtime.py:1224-1286](file://rdx/server_runtime.py#L1224-L1286)
+- [session_manager.py:175-251](file://rdc_tool/core/session_manager.py#L175-L251)
+- [session_manager.py:347-383](file://rdc_tool/core/session_manager.py#L347-L383)
+- [session_manager.py:509-515](file://rdc_tool/core/session_manager.py#L509-L515)
+- [server_runtime.py:1224-1286](file://rdc_tool/server_runtime.py#L1224-L1286)
 
 **章节来源**
-- [session_manager.py:175-251](file://rdx/core/session_manager.py#L175-L251)
-- [session_manager.py:347-383](file://rdx/core/session_manager.py#L347-L383)
-- [session_manager.py:509-515](file://rdx/core/session_manager.py#L509-L515)
-- [server_runtime.py:1224-1286](file://rdx/server_runtime.py#L1224-L1286)
+- [session_manager.py:175-251](file://rdc_tool/core/session_manager.py#L175-L251)
+- [session_manager.py:347-383](file://rdc_tool/core/session_manager.py#L347-L383)
+- [session_manager.py:509-515](file://rdc_tool/core/session_manager.py#L509-L515)
+- [server_runtime.py:1224-1286](file://rdc_tool/server_runtime.py#L1224-L1286)
 - [test_cli_capture_open.py:9-93](file://tests/test_cli_capture_open.py#L9-L93)
 
 ### 回放选项与会话复用
@@ -211,16 +211,16 @@ SR-->>C : "{session_id, capture_file_id, active_event_id, recovery_status}"
 ```
 
 **图示来源**
-- [server_runtime.py:987-992](file://rdx/server_runtime.py#L987-L992)
-- [session_manager.py:309-345](file://rdx/core/session_manager.py#L309-L345)
-- [session_manager.py:373-440](file://rdx/core/session_manager.py#L373-L440)
-- [server_runtime.py:1224-1267](file://rdx/server_runtime.py#L1224-L1267)
+- [server_runtime.py:987-992](file://rdc_tool/server_runtime.py#L987-L992)
+- [session_manager.py:309-345](file://rdc_tool/core/session_manager.py#L309-L345)
+- [session_manager.py:373-440](file://rdc_tool/core/session_manager.py#L373-L440)
+- [server_runtime.py:1224-1267](file://rdc_tool/server_runtime.py#L1224-L1267)
 
 **章节来源**
-- [server_runtime.py:987-992](file://rdx/server_runtime.py#L987-L992)
-- [session_manager.py:309-345](file://rdx/core/session_manager.py#L309-L345)
-- [session_manager.py:373-440](file://rdx/core/session_manager.py#L373-L440)
-- [server_runtime.py:1224-1267](file://rdx/server_runtime.py#L1224-L1267)
+- [server_runtime.py:987-992](file://rdc_tool/server_runtime.py#L987-L992)
+- [session_manager.py:309-345](file://rdc_tool/core/session_manager.py#L309-L345)
+- [session_manager.py:373-440](file://rdc_tool/core/session_manager.py#L373-L440)
+- [server_runtime.py:1224-1267](file://rdc_tool/server_runtime.py#L1224-L1267)
 - [test_cli_capture_open.py:95-157](file://tests/test_cli_capture_open.py#L95-L157)
 
 ### 帧切换与事件导航
@@ -239,12 +239,12 @@ D --> E["返回新状态"]
 ```
 
 **图示来源**
-- [server_runtime.py:1280-1286](file://rdx/server_runtime.py#L1280-L1286)
-- [server_runtime.py:1271-1276](file://rdx/server_runtime.py#L1271-L1276)
+- [server_runtime.py:1280-1286](file://rdc_tool/server_runtime.py#L1280-L1286)
+- [server_runtime.py:1271-1276](file://rdc_tool/server_runtime.py#L1271-L1276)
 - [test_cli_capture_open.py:9-93](file://tests/test_cli_capture_open.py#L9-L93)
 
 **章节来源**
-- [server_runtime.py:1271-1286](file://rdx/server_runtime.py#L1271-L1286)
+- [server_runtime.py:1271-1286](file://rdc_tool/server_runtime.py#L1271-L1286)
 - [test_cli_capture_open.py:9-93](file://tests/test_cli_capture_open.py#L9-L93)
 
 ### 资源访问与初始内容恢复
@@ -266,12 +266,12 @@ Restore --> End(["结束"])
 ```
 
 **图示来源**
-- [replay_read.py:17-100](file://rdx/core/replay_read.py#L17-L100)
-- [replay_read.py:103-132](file://rdx/core/replay_read.py#L103-L132)
+- [replay_read.py:17-100](file://rdc_tool/core/replay_read.py#L17-L100)
+- [replay_read.py:103-132](file://rdc_tool/core/replay_read.py#L103-L132)
 
 **章节来源**
-- [replay_read.py:17-100](file://rdx/core/replay_read.py#L17-L100)
-- [replay_read.py:103-132](file://rdx/core/replay_read.py#L103-L132)
+- [replay_read.py:17-100](file://rdc_tool/core/replay_read.py#L17-L100)
+- [replay_read.py:103-132](file://rdc_tool/core/replay_read.py#L103-L132)
 
 ### 会话状态转换图
 ```mermaid
@@ -285,8 +285,8 @@ stateDiagram-v2
 ```
 
 **图示来源**
-- [session_manager.py:175-259](file://rdx/core/session_manager.py#L175-L259)
-- [server_runtime.py:1224-1286](file://rdx/server_runtime.py#L1224-L1286)
+- [session_manager.py:175-259](file://rdc_tool/core/session_manager.py#L175-L259)
+- [server_runtime.py:1224-1286](file://rdc_tool/server_runtime.py#L1224-L1286)
 
 ## 依赖关系分析
 - 处理器依赖 server_runtime 的分发函数。
@@ -303,16 +303,16 @@ SM --> RD["RenderDoc 控制器"]
 ```
 
 **图示来源**
-- [capture.py:8-9](file://rdx/handlers/capture.py#L8-L9)
-- [server_runtime.py:120-238](file://rdx/server_runtime.py#L120-L238)
-- [session_manager.py:148-259](file://rdx/core/session_manager.py#L148-L259)
-- [replay_read.py:9-132](file://rdx/core/replay_read.py#L9-L132)
+- [capture.py:8-9](file://rdc_tool/handlers/capture.py#L8-L9)
+- [server_runtime.py:120-238](file://rdc_tool/server_runtime.py#L120-L238)
+- [session_manager.py:148-259](file://rdc_tool/core/session_manager.py#L148-L259)
+- [replay_read.py:9-132](file://rdc_tool/core/replay_read.py#L9-L132)
 
 **章节来源**
-- [capture.py:8-9](file://rdx/handlers/capture.py#L8-L9)
-- [server_runtime.py:120-238](file://rdx/server_runtime.py#L120-L238)
-- [session_manager.py:148-259](file://rdx/core/session_manager.py#L148-L259)
-- [replay_read.py:9-132](file://rdx/core/replay_read.py#L9-L132)
+- [capture.py:8-9](file://rdc_tool/handlers/capture.py#L8-L9)
+- [server_runtime.py:120-238](file://rdc_tool/server_runtime.py#L120-L238)
+- [session_manager.py:148-259](file://rdc_tool/core/session_manager.py#L148-L259)
+- [replay_read.py:9-132](file://rdc_tool/core/replay_read.py#L9-L132)
 
 ## 性能考量
 - 回放内存估计：基于文件大小与 multiplier 估算回放所需内存，避免资源不足。
@@ -336,9 +336,9 @@ SM --> RD["RenderDoc 控制器"]
   - CLI 测试用例展示了 open_replay 超时或异常时，错误会被包装并附加 failed_step、daemon_state、context_snapshot 等信息，便于定位问题。
 
 **章节来源**
-- [server_runtime.py:846-897](file://rdx/server_runtime.py#L846-L897)
-- [server_runtime.py:427-447](file://rdx/server_runtime.py#L427-L447)
-- [session_manager.py:384-440](file://rdx/core/session_manager.py#L384-L440)
+- [server_runtime.py:846-897](file://rdc_tool/server_runtime.py#L846-L897)
+- [server_runtime.py:427-447](file://rdc_tool/server_runtime.py#L427-L447)
+- [session_manager.py:384-440](file://rdc_tool/core/session_manager.py#L384-L440)
 - [test_cli_capture_open.py:160-367](file://tests/test_cli_capture_open.py#L160-L367)
 
 ## 结论
@@ -358,7 +358,7 @@ rd.capture.* 操作组通过统一的处理器与运行时调度，结合 Sessio
   - initial_provenance/preserving_event：回放读取保护与初始内容定位。
 
 **章节来源**
-- [server_runtime.py:120-162](file://rdx/server_runtime.py#L120-L162)
-- [server_runtime.py:1224-1286](file://rdx/server_runtime.py#L1224-L1286)
-- [session_manager.py:175-259](file://rdx/core/session_manager.py#L175-L259)
-- [replay_read.py:17-132](file://rdx/core/replay_read.py#L17-L132)
+- [server_runtime.py:120-162](file://rdc_tool/server_runtime.py#L120-L162)
+- [server_runtime.py:1224-1286](file://rdc_tool/server_runtime.py#L1224-L1286)
+- [session_manager.py:175-259](file://rdc_tool/core/session_manager.py#L175-L259)
+- [replay_read.py:17-132](file://rdc_tool/core/replay_read.py#L17-L132)

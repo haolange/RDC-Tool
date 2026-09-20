@@ -1,12 +1,12 @@
 ﻿# Tool Reference
 
-This file is generated from the structured definitions in `rdx/operation_definitions.py`. Do not edit it by hand; run `python -B scripts/generate_tool_reference.py`.
+This file is generated from the structured definitions in `rdc_tool/operation_definitions.py`. Do not edit it by hand; run `python -B scripts/generate_tool_reference.py`.
 
 - Tool count: 128
 - Group count: 18
 - Catalog fingerprint: `4eefd77d649bef8a03d53ab408f097314c781c33ff01b0eec436c5c1562caf4f`
-- Canonical transport: `rdx call <rd.*> --format json`
-- Discovery: `rdx tools list`, `rdx tools search <query>`, and `rdx tools describe <rd.*>`
+- Canonical transport: `rdc-tool call <rd.*> --format json`
+- Discovery: `rdc-tool tools list`, `rdc-tool tools search <query>`, and `rdc-tool tools describe <rd.*>`
 
 The catalog declares what an operation accepts and what it can affect. Authorization is still enforced by the embedding host; a catalog entry does not grant access.
 

@@ -5,8 +5,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TOOLS_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 RDC_PATH=""
 CTX="cli-smoke-$(date +%Y%m%d%H%M%S)"
-STEP_TIMEOUT="${RDX_SMOKE_TIMEOUT:-120}"
-OPEN_TIMEOUT="${RDX_SMOKE_OPEN_TIMEOUT:-600}"
+STEP_TIMEOUT="${RDC_TOOL_SMOKE_TIMEOUT:-120}"
+OPEN_TIMEOUT="${RDC_TOOL_SMOKE_OPEN_TIMEOUT:-600}"
 LOG_FILE=""
 FINDINGS_FILE=""
 TIMEOUT_CMD=""
@@ -20,7 +20,7 @@ usage() {
 Usage: bash scripts/smoke_cli.sh [options]
 
 Options:
-  --tools-root <path>  rdx-tools root. Defaults to this script's parent directory.
+  --tools-root <path>  rdc-tool root. Defaults to this script's parent directory.
   --rdc <path>         optional .rdc capture used for daemon-backed smoke.
   --context <id>       daemon context id. Defaults to cli-smoke-<timestamp>.
   --timeout <seconds>  default timeout for daemon-backed CLI commands.
@@ -69,11 +69,11 @@ while [[ $# -gt 0 ]]; do
 done
 
 TOOLS_ROOT="$(cd "$TOOLS_ROOT" && pwd)"
-RDX="$TOOLS_ROOT/bin/rdx"
-INTERMEDIATE_ROOT="${RDX_INTERMEDIATE_ROOT:-$TOOLS_ROOT/intermediate}"
+RDC-Tool="$TOOLS_ROOT/bin/rdc-tool"
+INTERMEDIATE_ROOT="${RDC_TOOL_INTERMEDIATE_ROOT:-$TOOLS_ROOT/intermediate}"
 LOG_FILE="$INTERMEDIATE_ROOT/logs/smoke_cli.log"
 FINDINGS_FILE="$INTERMEDIATE_ROOT/logs/tool_smoke_findings.md"
-STATE_FILE="$INTERMEDIATE_ROOT/runtime/rdx_cli/daemon_state_${CTX}.json"
+STATE_FILE="$INTERMEDIATE_ROOT/runtime/rdc_tool_cli/daemon_state_${CTX}.json"
 mkdir -p "$(dirname "$LOG_FILE")"
 : > "$LOG_FILE"
 : > "$FINDINGS_FILE"
@@ -81,8 +81,8 @@ mkdir -p "$(dirname "$LOG_FILE")"
 export MSYS_NO_PATHCONV="${MSYS_NO_PATHCONV:-1}"
 export MSYS2_ARG_CONV_EXCL="${MSYS2_ARG_CONV_EXCL:-*}"
 
-if [[ ! -f "$RDX" ]]; then
-  echo "[smoke] ERROR: missing bash launcher: $RDX" | tee -a "$LOG_FILE"
+if [[ ! -f "$RDC-Tool" ]]; then
+  echo "[smoke] ERROR: missing bash launcher: $RDC-Tool" | tee -a "$LOG_FILE"
   exit 2
 fi
 
@@ -108,8 +108,8 @@ format_command() {
   local rendered=""
   local display_arg=""
   for arg in "$@"; do
-    if [[ "$arg" == "$RDX" ]]; then
-      display_arg="bin/rdx"
+    if [[ "$arg" == "$RDC-Tool" ]]; then
+      display_arg="bin/rdc-tool"
     elif [[ -n "$RDC_PATH" && "$arg" == "$RDC_PATH" ]]; then
       display_arg="<rdc_path>"
     else
@@ -123,7 +123,7 @@ format_command() {
 write_findings() {
   local status="$1"
   {
-    echo '# rdx-tools Local Smoke Findings'
+    echo '# rdc-tool Local Smoke Findings'
     echo ''
     echo "- status: $status"
     echo "- context: $CTX"
@@ -177,7 +177,7 @@ run_raw() {
 
 print_context_state() {
   echo "[smoke] daemon status for context: $CTX" | tee -a "$LOG_FILE"
-  "$RDX" --daemon-context "$CTX" daemon status 2>&1 | tee -a "$LOG_FILE" || true
+  "$RDC-Tool" --daemon-context "$CTX" daemon status 2>&1 | tee -a "$LOG_FILE" || true
   if [[ -f "$STATE_FILE" ]]; then
     echo "[smoke] state file summary: $STATE_FILE" | tee -a "$LOG_FILE"
     grep -E '"(session_id|capture_file_id|capture_path|active_event_id|recovery_status)"' "$STATE_FILE" 2>/dev/null | tee -a "$LOG_FILE" || true
@@ -191,9 +191,9 @@ cleanup_context() {
     return 0
   fi
   echo "[smoke] cleanup: context clear" | tee -a "$LOG_FILE"
-  "$RDX" --daemon-context "$CTX" context clear 2>&1 | tee -a "$LOG_FILE" || true
+  "$RDC-Tool" --daemon-context "$CTX" context clear 2>&1 | tee -a "$LOG_FILE" || true
   echo "[smoke] cleanup: daemon stop" | tee -a "$LOG_FILE"
-  "$RDX" --daemon-context "$CTX" daemon stop 2>&1 | tee -a "$LOG_FILE" || true
+  "$RDC-Tool" --daemon-context "$CTX" daemon stop 2>&1 | tee -a "$LOG_FILE" || true
 }
 
 run_step() {
@@ -227,7 +227,7 @@ run_step() {
 }
 
 echo "[smoke] tools root: $TOOLS_ROOT" | tee -a "$LOG_FILE"
-echo "[smoke] launcher: $RDX" | tee -a "$LOG_FILE"
+echo "[smoke] launcher: $RDC-Tool" | tee -a "$LOG_FILE"
 echo "[smoke] context: $CTX" | tee -a "$LOG_FILE"
 if [[ -n "$TIMEOUT_CMD" ]]; then
   echo "[smoke] timeout: $TIMEOUT_CMD" | tee -a "$LOG_FILE"
@@ -235,9 +235,9 @@ else
   echo "[smoke] timeout: unavailable" | tee -a "$LOG_FILE"
 fi
 
-run_step "doctor JSON" "$STEP_TIMEOUT" "$RDX" --json doctor
-run_step "tools list" "$STEP_TIMEOUT" "$RDX" tools list --json --limit 5
-run_step "tools search" "$STEP_TIMEOUT" "$RDX" tools search pipeline --json
+run_step "doctor JSON" "$STEP_TIMEOUT" "$RDC-Tool" --json doctor
+run_step "tools list" "$STEP_TIMEOUT" "$RDC-Tool" tools list --json --limit 5
+run_step "tools search" "$STEP_TIMEOUT" "$RDC-Tool" tools search pipeline --json
 
 if [[ -z "$RDC_PATH" ]]; then
   echo "" | tee -a "$LOG_FILE"
@@ -246,17 +246,17 @@ if [[ -z "$RDC_PATH" ]]; then
   exit 0
 fi
 
-run_step "context clear" "$STEP_TIMEOUT" "$RDX" --daemon-context "$CTX" context clear
-run_step "context status empty" "$STEP_TIMEOUT" "$RDX" --daemon-context "$CTX" context status --json
-run_step "capture open" "$OPEN_TIMEOUT" "$RDX" --daemon-context "$CTX" capture open --file "$RDC_PATH" --frame-index 0
-run_step "capture status" "$STEP_TIMEOUT" "$RDX" --daemon-context "$CTX" capture status
-run_step "context status" "$STEP_TIMEOUT" "$RDX" --daemon-context "$CTX" context status --json
-run_step "context update notes" "$STEP_TIMEOUT" "$RDX" --daemon-context "$CTX" context update --key notes --value "smoke-triaged" --json
-run_step "vfs root tsv" "$STEP_TIMEOUT" "$RDX" --daemon-context "$CTX" vfs ls --path / --format tsv
-run_step "vfs context tree json" "$STEP_TIMEOUT" "$RDX" --daemon-context "$CTX" vfs tree --path /context --depth 1 --format json
-run_step "daemon tools list" "$STEP_TIMEOUT" "$RDX" --daemon-context "$CTX" tools list --json --limit 5
-run_step "cleanup context clear" "$STEP_TIMEOUT" "$RDX" --daemon-context "$CTX" context clear
-run_step "cleanup daemon stop" "$STEP_TIMEOUT" "$RDX" --daemon-context "$CTX" daemon stop
+run_step "context clear" "$STEP_TIMEOUT" "$RDC-Tool" --daemon-context "$CTX" context clear
+run_step "context status empty" "$STEP_TIMEOUT" "$RDC-Tool" --daemon-context "$CTX" context status --json
+run_step "capture open" "$OPEN_TIMEOUT" "$RDC-Tool" --daemon-context "$CTX" capture open --file "$RDC_PATH" --frame-index 0
+run_step "capture status" "$STEP_TIMEOUT" "$RDC-Tool" --daemon-context "$CTX" capture status
+run_step "context status" "$STEP_TIMEOUT" "$RDC-Tool" --daemon-context "$CTX" context status --json
+run_step "context update notes" "$STEP_TIMEOUT" "$RDC-Tool" --daemon-context "$CTX" context update --key notes --value "smoke-triaged" --json
+run_step "vfs root tsv" "$STEP_TIMEOUT" "$RDC-Tool" --daemon-context "$CTX" vfs ls --path / --format tsv
+run_step "vfs context tree json" "$STEP_TIMEOUT" "$RDC-Tool" --daemon-context "$CTX" vfs tree --path /context --depth 1 --format json
+run_step "daemon tools list" "$STEP_TIMEOUT" "$RDC-Tool" --daemon-context "$CTX" tools list --json --limit 5
+run_step "cleanup context clear" "$STEP_TIMEOUT" "$RDC-Tool" --daemon-context "$CTX" context clear
+run_step "cleanup daemon stop" "$STEP_TIMEOUT" "$RDC-Tool" --daemon-context "$CTX" daemon stop
 
 echo "" | tee -a "$LOG_FILE"
 echo "[smoke] PASS: CLI smoke completed" | tee -a "$LOG_FILE"

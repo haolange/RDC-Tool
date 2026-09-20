@@ -1,6 +1,6 @@
 ﻿# Capture Fixture Strategy
 
-`rdx-tools` allows small public `.rdc` captures in `tests/fixtures/` for deterministic repository tests. Release packages must not include `.rdc` captures.
+`rdc-tool` allows small public `.rdc` captures in `tests/fixtures/` for deterministic repository tests. Release packages must not include `.rdc` captures.
 
 Use test layers this way:
 

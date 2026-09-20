@@ -1,7 +1,7 @@
 from types import SimpleNamespace as NS
 import hashlib
 import struct
-from rdx.core.replay_facts import mesh_attributes, shader_content_hash, usage_access
+from rdc_tool.core.replay_facts import mesh_attributes, shader_content_hash, usage_access
 
 
 def test_shader_hash_is_content_based_and_missing_is_null():

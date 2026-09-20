@@ -4,9 +4,9 @@ import asyncio
 import json
 from types import SimpleNamespace
 
-from rdx import cli, server
-from rdx.context_snapshot import clear_context_snapshot, save_context_snapshot
-from rdx.timeout_policy import (
+from rdc_tool import cli, server
+from rdc_tool.context_snapshot import clear_context_snapshot, save_context_snapshot
+from rdc_tool.timeout_policy import (
     DAEMON_RESPONSE_BUFFER_S,
     DEFAULT_DAEMON_REQUEST_TIMEOUT_S,
     HEAVY_DAEMON_REQUEST_TIMEOUT_S,
@@ -107,7 +107,7 @@ def test_cli_daemon_exec_passes_policy_timeout(monkeypatch) -> None:
 
 def test_dispatch_remote_connect_uses_default_timeout_when_missing(monkeypatch) -> None:
     # Freeze the clock so this assertion checks the default, not scheduler time.
-    monkeypatch.setattr("rdx.remote_bootstrap.time.monotonic", lambda: 100.0)
+    monkeypatch.setattr("rdc_tool.remote_bootstrap.time.monotonic", lambda: 100.0)
     original_remotes = dict(server._runtime.remotes)
     original_enable_remote = server._runtime.enable_remote
     captured: dict[str, object] = {}
