@@ -1,9 +1,0 @@
-schema_version: 1
-module_path: tests
-title: rdc-tool CLI/运行时/重放/预览集成测试套件
-scope:
-    - tests/
-source_files: []
-depends_on: []
-related_to:
-    - path: rdc_tool

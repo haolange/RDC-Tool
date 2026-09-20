@@ -16,14 +16,18 @@
 - [daemon/client.py](file://rdc_tool/daemon/client.py)
 - [cli.py](file://rdc_tool/cli.py)
 - [public-contract.md](file://docs/public-contract.md)
+- [tool-reference.md](file://docs/tool-reference.md)
+- [session-model.md](file://docs/session-model.md)
+- [tool-interface-upgrade.md](file://docs/tool-interface-upgrade.md)
 </cite>
 
 ## 更新摘要
 **变更内容**
-- 网格数据API增强：支持着色器输入空间、法线和UV属性导出，新增`rd.mesh.get_drawcall_mesh_config`操作
-- Android原生呈现集成：`rd.session.observe`操作新增远程设备呈现能力，支持Android远端GPU呈现确认
-- 更新操作定义和处理器路由以支持新功能
-- 增强错误处理和状态报告机制
+- API.md独立文档已从代码库中移除，相关内容已整合到核心概念和CLI参考手册中
+- API规范现在通过统一的`rdc_tool/operation_definitions.py`源文件管理
+- 生成的工具参考文档位于`docs/tool-reference.md`，包含完整的操作清单
+- 公共契约定义在`docs/public-contract.md`中，提供稳定的接口保证
+- 会话模型和Android原生呈现功能在`docs/session-model.md`中详细说明
 
 ## 目录
 1. [简介](#简介)
@@ -40,14 +44,18 @@
 ## 简介
 本规范聚焦于 rd.* 操作的标准化接口，覆盖参数校验、返回值结构、错误码、JSON-RPC通信协议实现（请求/响应/错误处理）、幂等性、事务性与并发安全、生命周期与资源清理、向后兼容与版本迁移、客户端集成最佳实践。所有说明均基于代码仓库中的公开契约与实现。
 
-**更新** 本次更新重点增强了网格数据API的着色器输入空间支持和Android原生呈现集成能力。
+**重要更新** API.md独立文档已移除，API规范内容现已整合到以下位置：
+- 公共契约：`docs/public-contract.md` - 定义稳定的用户界面和Android连接所有权
+- 工具参考：`docs/tool-reference.md` - 自动生成完整操作清单和参数详情
+- 会话模型：`docs/session-model.md` - 详细说明会话生命周期和观察机制
+- 接口升级：`docs/tool-interface-upgrade.md` - 记录删除的入口和替代方案
 
 ## 项目结构
 RDC工具通过CLI调用守护进程，再由守护进程调度到统一执行引擎，最终路由到各域处理器并执行业务逻辑。关键路径如下：
 - CLI负责解析参数、启动/连接守护进程、发送方法调用并输出结果
 - 守护进程通过命名管道接收请求，维护上下文状态，转发到内部执行器
 - 统一执行引擎负责操作注册、参数校验、前置条件检查、异常归一化、产物发布和标准信封封装
-- 操作定义集中声明在操作目录中，按命名空间分组
+- 操作定义集中声明在`rdc_tool/operation_definitions.py`中，按命名空间分组
 
 ```mermaid
 graph TB
@@ -79,7 +87,7 @@ Handlers --> Services["业务服务/后端"]
 - 执行引擎：统一执行入口，规范化输出，统计耗时，追踪ID注入
 - 守护进程通信：命名管道请求/响应，超时与诊断信息，上下文状态持久化
 
-**更新** 新增了网格数据处理和Android原生呈现的核心组件支持。
+**更新** API文档结构已重新组织，现在通过单一源文件`rdc_tool/operation_definitions.py`管理所有操作定义，并通过生成脚本创建参考文档。
 
 **章节来源**
 - [contracts.py:98-164](file://rdc_tool/core/contracts.py#L98-L164)
@@ -115,6 +123,39 @@ C-->>U : JSON输出
 - [tool_router.py:131-154](file://rdc_tool/tool_router.py#L131-L154)
 
 ## 详细组件分析
+
+### API文档结构重组
+
+**重大变更** API.md独立文档已移除，API规范内容已重新组织到多个专门文档中：
+
+#### 公共契约层
+- `docs/public-contract.md`：定义稳定的用户界面和Android连接所有权
+- 明确Android连接的所有权管理和原生呈现能力
+- 规定捕获缩略图读取和结构化API查询的能力边界
+- 定义网格数据和着色器溯源的精确语义
+
+#### 工具参考层  
+- `docs/tool-reference.md`：自动生成完整操作清单
+- 包含128个工具的详细描述和参数规格
+- 按功能域分组：缓冲区访问、捕获回放、核心管理等18个组
+- 每个操作都有详细的输入输出描述和前置条件
+
+#### 会话模型层
+- `docs/session-model.md`：详细说明会话生命周期
+- 涵盖Replay生命周期、预览状态和嵌入式观察机制
+- 解释Android辅助程序的生命周期管理
+- 定义临时Replay读取和远程传输行为
+
+#### 接口升级层
+- `docs/tool-interface-upgrade.md`：记录删除的入口和替代方案
+- 详细说明73个删除入口的产品能力复审
+- 提供新旧接口的映射关系和迁移指导
+
+**章节来源**
+- [public-contract.md:1-34](file://docs/public-contract.md#L1-L34)
+- [tool-reference.md:1-253](file://docs/tool-reference.md#L1-L253)
+- [session-model.md:1-91](file://docs/session-model.md#L1-L91)
+- [tool-interface-upgrade.md:1-332](file://docs/tool-interface-upgrade.md#L1-L332)
 
 ### 网格数据API增强
 
@@ -305,7 +346,7 @@ K["replay_observation.py"] --> C
 ## 结论
 RDC的rd.*操作通过统一的目录驱动定义、严格的参数校验、稳定的错误分类与信封格式，提供了高可靠性的API接口。守护进程与执行引擎分离确保了可扩展性与可维护性。建议客户端遵循公共契约，使用标准信封处理成功与失败，并利用artifacts机制管理大对象。
 
-**更新** 本次更新显著增强了网格数据分析和Android原生呈现能力，为移动设备调试和复杂图形分析提供了更强大的工具支持。
+**重要更新** API文档结构的重组提高了文档的可维护性和一致性。通过单一源文件管理操作定义，配合自动化生成工具，确保了API规范的准确性和时效性。新增的网格数据分析和Android原生呈现能力为移动设备调试和复杂图形分析提供了更强大的工具支持。
 
 ## 附录：操作清单与示例
 

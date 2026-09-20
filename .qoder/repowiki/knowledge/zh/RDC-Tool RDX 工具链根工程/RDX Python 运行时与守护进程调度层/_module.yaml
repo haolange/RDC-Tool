@@ -1,0 +1,10 @@
+schema_version: 1
+module_path: rdx_runtime
+title: RDX Python 运行时与守护进程调度层
+scope:
+    - rdx/
+source_files: []
+depends_on: []
+related_to:
+    - path: spec_catalog
+    - path: tests

@@ -3,11 +3,11 @@ schema_version: 1
 locale: zh-CN
 branch: main
 nodes_managed: true
-exported_at: "2026-09-19T14:48:53Z"
+exported_at: "2026-09-20T08:47:07Z"
 modules:
     "":
-        dir_name: RDC-Tool 单包聚合工程
-        title: RDC-Tool 单包聚合工程
+        dir_name: RDC-Tool RDX 工具链根工程
+        title: RDC-Tool RDX 工具链根工程
         scope:
             - README.md
             - THIRD_PARTY_NOTICES.md
@@ -15,22 +15,22 @@ modules:
             - pyproject.toml
             - .gitignore
             - .gitattributes
-            - bin/rdc-tool.cmd
+            - rdx.bat
             - CHANGELOG.md
             - LICENSE
         source_files: []
         children:
             - docs
             - platform_binaries
-            - rdc_tool
+            - rdx_runtime
             - scripts_and_packaging
             - spec_catalog
             - tests
         depends_on: []
         related_to: []
     docs:
-        dir_name: rdc-tools CLI 文档集
-        title: rdc-tools CLI 文档集
+        dir_name: rdx-tools 文档集（用户与开发者指南）
+        title: rdx-tools 文档集（用户与开发者指南）
         scope:
             - docs/
         source_files: []
@@ -40,8 +40,8 @@ modules:
             - path: scripts_and_packaging
             - path: spec_catalog
     platform_binaries:
-        dir_name: 平台二进制产物分发目录（Windows x64 与 Android APK）
-        title: 平台二进制产物分发目录（Windows x64 与 Android APK）
+        dir_name: RenderDoc 平台二进制分发产物
+        title: RenderDoc 平台二进制分发产物
         scope:
             - binaries/
         source_files: []
@@ -49,11 +49,11 @@ modules:
         depends_on: []
         related_to:
             - path: scripts_and_packaging
-    rdc_tool:
-        dir_name: RDC Python 运行时与操作调度层
-        title: RDC Python 运行时与操作调度层
+    rdx_runtime:
+        dir_name: RDX Python 运行时与守护进程调度层
+        title: RDX Python 运行时与守护进程调度层
         scope:
-            - rdc_tool/
+            - rdx/
         source_files: []
         children: []
         depends_on: []
@@ -61,8 +61,8 @@ modules:
             - path: spec_catalog
             - path: tests
     scripts_and_packaging:
-        dir_name: rdc-tools 发布与冒烟测试脚本集
-        title: rdc-tools 发布与冒烟测试脚本集
+        dir_name: rdc-tool 发布、打包与冒烟测试脚本集
+        title: rdc-tool 发布、打包与冒烟测试脚本集
         scope:
             - scripts/
         source_files: []
@@ -72,8 +72,8 @@ modules:
             - path: docs
             - path: platform_binaries
     spec_catalog:
-        dir_name: 工具目录构建与校验（spec_catalog）
-        title: 工具目录构建与校验（spec_catalog）
+        dir_name: 工具目录生成与校验（spec_catalog）
+        title: 工具目录生成与校验（spec_catalog）
         scope:
             - spec/
         source_files: []
@@ -81,14 +81,14 @@ modules:
         depends_on: []
         related_to:
             - path: docs
-            - path: rdc_tool
+            - path: rdx_runtime
     tests:
-        dir_name: rdc-tool CLI_运行时_重放_预览集成测试套件
-        title: rdc-tool CLI/运行时/重放/预览集成测试套件
+        dir_name: RDC-Tool 测试套件（pytest 端到端与单元测试）
+        title: RDC-Tool 测试套件（pytest 端到端与单元测试）
         scope:
             - tests/
         source_files: []
         children: []
         depends_on: []
         related_to:
-            - path: rdc_tool
+            - path: rdx_runtime

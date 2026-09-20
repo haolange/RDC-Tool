@@ -1,0 +1,10 @@
+schema_version: 1
+module_path: spec_catalog
+title: 工具目录生成与校验（spec_catalog）
+scope:
+    - spec/
+source_files: []
+depends_on: []
+related_to:
+    - path: docs
+    - path: rdx_runtime

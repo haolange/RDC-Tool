@@ -1,22 +1,22 @@
 ---
 kind: error_handling
-name: RDC 错误处理体系：CoreError 分类、SessionError 与统一响应信封
+name: RDX 错误处理体系：CoreError 分类、SessionError 与统一响应信封
 category: error_handling
 scope:
     - '**'
 source_files:
-    - rdc_tool/core/errors.py
-    - rdc_tool/core/session_manager.py
-    - rdc_tool/core/contracts.py
-    - rdc_tool/tool_router.py
-    - rdc_tool/server_runtime.py
-    - rdc_tool/daemon/server.py
-    - rdc_tool/handlers/util.py
+    - rdx/core/errors.py
+    - rdx/core/session_manager.py
+    - rdx/core/contracts.py
+    - rdx/tool_router.py
+    - rdx/server_runtime.py
+    - rdx/daemon/server.py
+    - rdx/handlers/util.py
 ---
 
 ## 1. 整体方案
 
-RDC 采用“领域异常 + 统一信封”的分层错误处理模型：
+RDX 采用“领域异常 + 统一信封”的分层错误处理模型：
 - 业务/运行时层抛出结构化异常（`CoreError` 及其子类、`SessionError`）。
 - 调用栈顶层通过 `map_exception` 把任意 Python 异常归一化为 `CoreError`，再经由 `canonical_error` / `canonical_success` 输出统一的 JSON 信封 `{ok, data, error: {code, category, message, details}, meta}`。
 - 守护进程（named pipe）和工具路由层在协议边界处捕获异常并转换为 `{ok: False, error: {code, message}}` 的 RPC 响应。
@@ -27,13 +27,13 @@ RDC 采用“领域异常 + 统一信封”的分层错误处理模型：
 
 | 文件 | 职责 |
 |---|---|
-| `rdc_tool/core/errors.py` | 定义 `CoreError` 基类及 `ValidationError` / `NotFoundError` / `AssertionFailedError` / `RuntimeToolError` / `PermissionToolError` / `IOToolError` / `InternalToolError` 七种分类；提供 `map_exception(exc)` 将任意 `Exception` 映射为 `CoreError`。 |
-| `rdc_tool/core/session_manager.py` | 定义 `SessionError(Exception)`，其 `detail` 字段为 `ErrorDetail(code, message, details)`；所有 RenderDoc 会话/回放相关失败均抛此异常。 |
-| `rdc_tool/core/contracts.py` | 定义成功/失败统一信封构造器 `canonical_success` / `canonical_error`，以及 schema_version、tool_version、artifact 等契约常量。 |
-| `rdc_tool/tool_router.py` | 基于 catalog 注册操作，在执行前做参数校验（`validate_operation_arguments`）与前置依赖检查（`_enforce_prerequisites`），失败时返回带 `code`/`category`/`details` 的结构化错误字典。 |
-| `rdc_tool/server_runtime.py` | 运行时核心：记录操作阶段、上下文快照、最近操作历史；多处直接 raise `CoreError`（如上下文容量超限、session_not_found）；捕获 `SessionError` 并转为上层错误。 |
-| `rdc_tool/daemon/server.py` | named-pipe 守护进程：每个请求经 `_auth` 鉴权后分派到 `_handle_*`；所有 handler 返回 `{ok, result/error}`；连接级 try/except 兜底为 `{ok: False, error: {code: "daemon_error", ...}}`。 |
-| `rdc_tool/handlers/util.py` | 最薄透的 handler 转发层，实际逻辑委托给 `server_runtime._dispatch_util`。 |
+| `rdx/core/errors.py` | 定义 `CoreError` 基类及 `ValidationError` / `NotFoundError` / `AssertionFailedError` / `RuntimeToolError` / `PermissionToolError` / `IOToolError` / `InternalToolError` 七种分类；提供 `map_exception(exc)` 将任意 `Exception` 映射为 `CoreError`。 |
+| `rdx/core/session_manager.py` | 定义 `SessionError(Exception)`，其 `detail` 字段为 `ErrorDetail(code, message, details)`；所有 RenderDoc 会话/回放相关失败均抛此异常。 |
+| `rdx/core/contracts.py` | 定义成功/失败统一信封构造器 `canonical_success` / `canonical_error`，以及 schema_version、tool_version、artifact 等契约常量。 |
+| `rdx/tool_router.py` | 基于 catalog 注册操作，在执行前做参数校验（`validate_operation_arguments`）与前置依赖检查（`_enforce_prerequisites`），失败时返回带 `code`/`category`/`details` 的结构化错误字典。 |
+| `rdx/server_runtime.py` | 运行时核心：记录操作阶段、上下文快照、最近操作历史；多处直接 raise `CoreError`（如上下文容量超限、session_not_found）；捕获 `SessionError` 并转为上层错误。 |
+| `rdx/daemon/server.py` | named-pipe 守护进程：每个请求经 `_auth` 鉴权后分派到 `_handle_*`；所有 handler 返回 `{ok, result/error}`；连接级 try/except 兜底为 `{ok: False, error: {code: "daemon_error", ...}}`。 |
+| `rdx/handlers/util.py` | 最薄透的 handler 转发层，实际逻辑委托给 `server_runtime._dispatch_util`。 |
 
 ## 3. 架构与约定
 
@@ -49,7 +49,7 @@ RDC 采用“领域异常 + 统一信封”的分层错误处理模型：
 
 ### 3.2 异常归一化（`map_exception`）
 
-位于 `rdc_tool/core/errors.py` 的 `map_exception` 是**唯一**的异常→结构化错误转换点，规则如下（按顺序匹配）：
+位于 `rdx/core/errors.py` 的 `map_exception` 是**唯一**的异常→结构化错误转换点，规则如下（按顺序匹配）：
 1. 已是 `CoreError` → 原样返回。
 2. 捕获 `SessionError`（延迟 import 避免循环依赖）→ 取其 `detail.code`/`detail.message`/`detail.details`，并按 `code` 是否以 `_not_found` 结尾或等于 `session_not_found` 推断 `category` 为 `not_found` 或 `runtime`。
 3. `FileNotFoundError` → `NotFoundError`。

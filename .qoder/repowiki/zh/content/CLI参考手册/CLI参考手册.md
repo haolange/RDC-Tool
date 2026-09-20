@@ -2,29 +2,22 @@
 
 <cite>
 **本文引用的文件**
-- [cli.py](file://rdc_tool/cli.py)
-- [run_cli.py](file://cli/run_cli.py)
-- [tool_router.py](file://rdc_tool/tool_router.py)
-- [capture.py](file://rdc_tool/handlers/capture.py)
-- [session.py](file://rdc_tool/handlers/session.py)
-- [event.py](file://rdc_tool/handlers/event.py)
-- [resource.py](file://rdc_tool/handlers/resource.py)
-- [pipeline.py](file://rdc_tool/handlers/pipeline.py)
-- [shader.py](file://rdc_tool/handlers/shader.py)
-- [cli_batch.py](file://rdc_tool/cli_batch.py)
-- [test_cli_batch.py](file://tests/test_cli_batch.py)
-- [runtime_catalog.py](file://rdc_tool/runtime_catalog.py)
-- [tool-reference.md](file://docs/tool-reference.md)
-- [tool_catalog.json](file://spec/tool_catalog.json)
+- [bin/rdc-tool.cmd](file://bin/rdc-tool.cmd)
+- [cli/run_cli.py](file://cli/run_cli.py)
+- [rdc_tool/cli.py](file://rdc_tool/cli.py)
+- [install.cmd](file://install.cmd)
+- [scripts/rdc_tool_install.ps1](file://scripts/rdc_tool_install.ps1)
+- [README.md](file://README.md)
+- [tests/test_cli_launcher.py](file://tests/test_cli_launcher.py)
 </cite>
 
 ## 更新摘要
 **所做更改**
-- 新增批处理命令（batch）完整参考文档
-- 添加JSONL顺序处理接口的详细说明
-- 更新错误处理和退出码说明
-- 增强故障排查章节以包含批处理相关错误
-- 添加批处理工作流示例
+- 更新了CLI入口点从rdx到rdc-tool的迁移说明
+- 更新了所有命令示例和引用，使用新的rdc-tool命令
+- 更新了Windows启动器脚本路径和配置
+- 更新了安装和部署相关的命令示例
+- 修正了所有文档中的命令引用以保持一致性
 
 ## 目录
 1. [简介](#简介)
@@ -39,88 +32,78 @@
 10. [附录：常用工作流示例](#附录：常用工作流示例)
 
 ## 简介
-本手册面向使用 rdc 命令行工具的用户，提供完整的命令参考、参数说明、返回值约定、错误处理策略、JSON/TSV 输出格式说明、命令间依赖关系与执行顺序、以及命令补全配置方法。文档内容严格基于仓库中的实际实现与结构化操作目录生成。
+本手册面向使用 rdc-tool 命令行工具的用户，提供完整的命令参考、参数说明、返回值约定、错误处理策略、JSON/TSV 输出格式说明、命令间依赖关系与执行顺序、以及命令补全配置方法。文档内容严格基于仓库中的实际实现与结构化操作目录生成。
+
+**重要更新**：CLI入口点已从`rdx`迁移到`rdc-tool`。Windows平台现在使用`bin/rdc-tool.cmd`作为主要命令行接口，替代了之前的`bin/rdx.cmd`。所有CLI命令和引用都已相应更新。
 
 ## 项目结构
-rdc 的 CLI 由启动器与主解析器组成：
-- 启动器负责环境初始化、依赖检查、版本快速输出，并委托给主 CLI。
-- 主 CLI 负责参数解析、子命令分发、与守护进程通信、结果渲染（JSON/TSV）。
+rdc-tool 的 CLI 由启动器与主解析器组成：
+- **Windows启动器**：`bin/rdc-tool.cmd`负责环境初始化、Python运行时检查和版本快速输出，并委托给主CLI。
+- **主CLI解析器**：`cli/run_cli.py`负责参数解析、子命令分发、与守护进程通信、结果渲染（JSON/TSV）。
+- **核心CLI模块**：`rdc_tool/cli.py`提供完整的命令实现和功能。
 - 操作路由将 rd.* 操作按命名空间分派到对应处理器模块，再由运行时调度具体实现。
-- **新增** 批处理模块提供顺序JSONL接口用于只读操作的批量处理。
 
 ```mermaid
 graph TB
-A["启动器<br/>cli/run_cli.py"] --> B["主CLI解析器<br/>rdc_tool/cli.py"]
-B --> C["守护进程通信<br/>daemon client"]
-C --> D["操作路由<br/>rdc_tool/tool_router.py"]
-D --> E["领域处理器<br/>handlers/*"]
-E --> F["运行时调度<br/>server_runtime"]
-B --> G["批处理引擎<br/>rdc_tool/cli_batch.py"]
-G --> H["JSONL顺序处理<br/>read-only operations"]
+A["Windows启动器<br/>bin/rdc-tool.cmd"] --> B["CLI启动器<br/>cli/run_cli.py"]
+B --> C["核心CLI<br/>rdc_tool/cli.py"]
+C --> D["守护进程通信<br/>daemon client"]
+D --> E["操作路由<br/>tool_router"]
+E --> F["领域处理器<br/>handlers/*"]
+F --> G["运行时调度<br/>server_runtime"]
 ```
 
 **图示来源**
-- [run_cli.py:226-282](file://cli/run_cli.py#L226-L282)
-- [cli.py:1381-1769](file://rdc_tool/cli.py#L1381-L1769)
-- [tool_router.py:131-154](file://rdc_tool/tool_router.py#L131-L154)
-- [cli_batch.py:17-62](file://rdc_tool/cli_batch.py#L17-L62)
+- [bin/rdc-tool.cmd:1-12](file://bin/rdc-tool.cmd#L1-L12)
+- [cli/run_cli.py:16-63](file://cli/run_cli.py#L16-L63)
+- [cli/run_cli.py:227-298](file://cli/run_cli.py#L227-L298)
+- [rdc_tool/cli.py:62-106](file://rdc_tool/cli.py#L62-L106)
 
 **章节来源**
-- [run_cli.py:16-63](file://cli/run_cli.py#L16-L63)
-- [run_cli.py:226-282](file://cli/run_cli.py#L226-L282)
-- [cli.py:1381-1769](file://rdc_tool/cli.py#L1381-L1769)
-- [tool_router.py:1-156](file://rdc_tool/tool_router.py#L1-L156)
-- [cli_batch.py:1-62](file://rdc_tool/cli_batch.py#L1-L62)
+- [bin/rdc-tool.cmd:1-12](file://bin/rdc-tool.cmd#L1-L12)
+- [cli/run_cli.py:16-63](file://cli/run_cli.py#L16-L63)
+- [cli/run_cli.py:227-298](file://cli/run_cli.py#L227-L298)
+- [rdc_tool/cli.py:62-106](file://rdc_tool/cli.py#L62-L106)
 
 ## 核心组件
-- 启动器：检测依赖、打印版本、初始化运行环境，然后调用主 CLI。
-- 主 CLI：构建参数解析树，分发子命令；统一封装 JSON 输出与 TSV 投影；管理上下文与守护进程状态。
+- **Windows启动器**：`bin/rdc-tool.cmd`检测Python环境、设置环境变量、调用Python CLI。
+- **CLI启动器**：`cli/run_cli.py`负责环境验证、依赖检查、版本输出，然后调用核心CLI。
+- **核心CLI**：`rdc_tool/cli.py`构建参数解析树，分发子命令；统一封装 JSON 输出与 TSV 投影；管理上下文与守护进程状态。
 - 操作路由：根据 catalog 注册 rd.* 操作，校验参数、强制先决条件，再调用领域处理器。
 - 领域处理器：各模块（capture、session、event、resource、pipeline、shader 等）仅做轻量转发至运行时。
-- **新增** 批处理引擎：提供顺序JSONL接口，支持只读操作的批量处理，具备错误恢复和中断处理能力。
 
 **章节来源**
-- [run_cli.py:226-282](file://cli/run_cli.py#L226-L282)
-- [cli.py:54-125](file://rdc_tool/cli.py#L54-L125)
-- [cli.py:330-394](file://rdc_tool/cli.py#L330-L394)
-- [tool_router.py:34-57](file://rdc_tool/tool_router.py#L34-L57)
-- [tool_router.py:89-154](file://rdc_tool/tool_router.py#L89-L154)
-- [capture.py:8-9](file://rdc_tool/handlers/capture.py#L8-L9)
-- [session.py:8-12](file://rdc_tool/handlers/session.py#L8-L12)
-- [event.py:8-9](file://rdc_tool/handlers/event.py#L8-L9)
-- [resource.py:8-9](file://rdc_tool/handlers/resource.py#L8-L9)
-- [pipeline.py:8-9](file://rdc_tool/handlers/pipeline.py#L8-L9)
-- [shader.py:8-9](file://rdc_tool/handlers/shader.py#L8-L9)
-- [cli_batch.py:14-62](file://rdc_tool/cli_batch.py#L14-L62)
+- [bin/rdc-tool.cmd:1-12](file://bin/rdc-tool.cmd#L1-L12)
+- [cli/run_cli.py:66-84](file://cli/run_cli.py#L66-L84)
+- [cli/run_cli.py:227-298](file://cli/run_cli.py#L227-L298)
+- [rdc_tool/cli.py:54-125](file://rdc_tool/cli.py#L54-L125)
 
 ## 架构总览
-rdc 采用"CLI + 守护进程 + 运行时"的分层架构。CLI 通过守护进程执行 rd.* 操作，所有业务逻辑在运行时中实现。操作路由依据 catalog 进行参数校验与先决条件检查，确保调用安全与一致性。**新增** 批处理功能提供独立的顺序处理管道，专门用于只读操作的批量执行。
+rdc-tool 采用"启动器 + CLI + 守护进程 + 运行时"的分层架构。Windows平台通过`bin/rdc-tool.cmd`启动，该脚本负责环境准备和Python运行时检查，然后调用`cli/run_cli.py`，最终进入核心CLI模块执行具体命令。
 
 ```mermaid
 sequenceDiagram
 participant U as "用户"
-participant L as "启动器<br/>run_cli.py"
-participant C as "主CLI<br/>cli.py"
-participant B as "批处理引擎<br/>cli_batch.py"
+participant L as "Windows启动器<br/>bin/rdc-tool.cmd"
+participant S as "CLI启动器<br/>cli/run_cli.py"
+participant C as "核心CLI<br/>rdc_tool/cli.py"
 participant D as "守护进程"
 participant R as "运行时"
-U->>L : 执行 rdc batch ...
-L->>C : 初始化后调用 main()
-C->>B : 调用 run_batch(source, execute)
-B->>B : 读取JSONL文件逐行处理
-B->>D : daemon_request("exec", operation, args)
+U->>L : 执行 rdc-tool <command>
+L->>S : 设置环境并调用 run_cli.py
+S->>S : 验证环境和依赖
+S->>C : 调用核心CLI main()
+C->>D : daemon_request("exec", operation, args)
 D->>R : 路由到 handler -> server_runtime
 R-->>D : 返回 result payload
-D-->>B : 返回 result payload
-B-->>C : 输出每行结果的JSON
-C-->>U : 返回最终退出码
+D-->>C : 返回 result payload
+C-->>U : 输出JSON结果
 ```
 
 **图示来源**
-- [run_cli.py:226-282](file://cli/run_cli.py#L226-L282)
-- [cli.py:1721-1723](file://rdc_tool/cli.py#L1721-L1723)
-- [cli_batch.py:17-62](file://rdc_tool/cli_batch.py#L17-L62)
-- [tool_router.py:131-154](file://rdc_tool/tool_router.py#L131-L154)
+- [bin/rdc-tool.cmd:1-12](file://bin/rdc-tool.cmd#L1-L12)
+- [cli/run_cli.py:227-298](file://cli/run_cli.py#L227-L298)
+- [rdc_tool/cli.py:1381-1769](file://rdc_tool/cli.py#L1381-L1769)
 
 ## 详细命令参考
 
@@ -130,7 +113,7 @@ C-->>U : 返回最终退出码
 - --version：打印版本信息。
 
 **章节来源**
-- [cli.py:1381-1387](file://rdc_tool/cli.py#L1381-L1387)
+- [rdc_tool/cli.py:1381-1387](file://rdc_tool/cli.py#L1381-L1387)
 
 ### version
 - 用途：打印工具版本与公共契约元数据。
@@ -139,8 +122,8 @@ C-->>U : 返回最终退出码
 - 退出码：成功为 0。
 
 **章节来源**
-- [cli.py:559-564](file://rdc_tool/cli.py#L559-L564)
-- [cli.py:1398-1399](file://rdc_tool/cli.py#L1398-L1399)
+- [cli/run_cli.py:165-197](file://cli/run_cli.py#L165-L197)
+- [rdc_tool/cli.py:559-564](file://rdc_tool/cli.py#L559-L564)
 
 ### doctor
 - 用途：验证 CLI 运行时环境是否完整（依赖、Python、RenderDoc、catalog、launchers、daemon 状态等）。
@@ -149,8 +132,8 @@ C-->>U : 返回最终退出码
 - 退出码：环境不完整时非零。
 
 **章节来源**
-- [cli.py:410-532](file://rdc_tool/cli.py#L410-L532)
-- [cli.py:1401-1402](file://rdc_tool/cli.py#L1401-L1402)
+- [cli/run_cli.py:200-224](file://cli/run_cli.py#L200-L224)
+- [rdc_tool/cli.py:410-532](file://rdc_tool/cli.py#L410-L532)
 
 ### tools
 - list：列出 catalog 中定义的 rd.* 工具，支持 --full、--namespace、--limit。
@@ -159,8 +142,8 @@ C-->>U : 返回最终退出码
 - 输出：JSON。
 
 **章节来源**
-- [cli.py:694-750](file://rdc_tool/cli.py#L694-L750)
-- [cli.py:1404-1417](file://rdc_tool/cli.py#L1404-L1417)
+- [rdc_tool/cli.py:694-750](file://rdc_tool/cli.py#L694-L750)
+- [rdc_tool/cli.py:1404-1417](file://rdc_tool/cli.py#L1404-L1417)
 
 ### daemon
 - start：启动守护进程，支持 --pipe-name。
@@ -170,8 +153,8 @@ C-->>U : 返回最终退出码
 - 输出：JSON。
 
 **章节来源**
-- [cli.py:1634-1684](file://rdc_tool/cli.py#L1634-L1684)
-- [cli.py:1419-1435](file://rdc_tool/cli.py#L1419-L1435)
+- [rdc_tool/cli.py:1634-1684](file://rdc_tool/cli.py#L1634-L1684)
+- [rdc_tool/cli.py:1419-1435](file://rdc_tool/cli.py#L1419-L1435)
 
 ### context
 - status：打印当前运行时上下文快照。
@@ -181,9 +164,9 @@ C-->>U : 返回最终退出码
 - 输出：JSON。
 
 **章节来源**
-- [cli.py:780-800](file://rdc_tool/cli.py#L780-L800)
-- [cli.py:1686-1714](file://rdc_tool/cli.py#L1686-L1714)
-- [cli.py:1437-1448](file://rdc_tool/cli.py#L1437-L1448)
+- [rdc_tool/cli.py:780-800](file://rdc_tool/cli.py#L780-L800)
+- [rdc_tool/cli.py:1686-1714](file://rdc_tool/cli.py#L1686-L1714)
+- [rdc_tool/cli.py:1437-1448](file://rdc_tool/cli.py#L1437-L1448)
 
 ### call
 - 用途：调用任意 rd.* 操作。
@@ -196,8 +179,8 @@ C-->>U : 返回最终退出码
 - 错误：不支持 TSV 投影时返回结构化错误。
 
 **章节来源**
-- [cli.py:867-885](file://rdc_tool/cli.py#L867-L885)
-- [cli.py:1450-1456](file://rdc_tool/cli.py#L1450-L1456)
+- [rdc_tool/cli.py:867-885](file://rdc_tool/cli.py#L867-L885)
+- [rdc_tool/cli.py:1450-1456](file://rdc_tool/cli.py#L1450-L1456)
 
 ### batch
 - 用途：执行JSONL格式的只读操作批处理，遇到第一个失败立即停止。
@@ -219,10 +202,8 @@ C-->>U : 返回最终退出码
   - 130：被信号中断。
 
 **章节来源**
-- [cli.py:1459-1461](file://rdc_tool/cli.py#L1459-L1461)
-- [cli.py:1721-1723](file://rdc_tool/cli.py#L1721-L1723)
-- [cli_batch.py:14-62](file://rdc_tool/cli_batch.py#L14-L62)
-- [test_cli_batch.py:19-84](file://tests/test_cli_batch.py#L19-L84)
+- [rdc_tool/cli.py:1459-1461](file://rdc_tool/cli.py#L1459-L1461)
+- [rdc_tool/cli.py:1721-1723](file://rdc_tool/cli.py#L1721-L1723)
 
 ### capture
 - open：打开捕获文件并创建 Replay Session，可选设置帧索引、artifact 目录、远程句柄、预览窗口。
@@ -233,9 +214,9 @@ C-->>U : 返回最终退出码
 - 错误：每一步失败均会包装为结构化错误，附带上下文与恢复提示。
 
 **章节来源**
-- [cli.py:1042-1171](file://rdc_tool/cli.py#L1042-L1171)
-- [cli.py:1174-1194](file://rdc_tool/cli.py#L1174-L1194)
-- [cli.py:1458-1470](file://rdc_tool/cli.py#L1458-L1470)
+- [rdc_tool/cli.py:1042-1171](file://rdc_tool/cli.py#L1042-L1171)
+- [rdc_tool/cli.py:1174-1194](file://rdc_tool/cli.py#L1174-L1194)
+- [rdc_tool/cli.py:1458-1470](file://rdc_tool/cli.py#L1458-L1470)
 
 ### session
 - preview on/off/status：控制预览窗口开关与状态。
@@ -243,8 +224,8 @@ C-->>U : 返回最终退出码
 - 输出：JSON。
 
 **章节来源**
-- [cli.py:1197-1271](file://rdc_tool/cli.py#L1197-L1271)
-- [cli.py:1472-1479](file://rdc_tool/cli.py#L1472-L1479)
+- [rdc_tool/cli.py:1197-1271](file://rdc_tool/cli.py#L1197-L1271)
+- [rdc_tool/cli.py:1472-1479](file://rdc_tool/cli.py#L1472-L1479)
 
 ### vfs
 - ls/cat/resolve/tree：只读 VFS 导航辅助。
@@ -252,8 +233,8 @@ C-->>U : 返回最终退出码
 - 输出：JSON 或 TSV（仅限支持的子命令）。
 
 **章节来源**
-- [cli.py:888-900](file://rdc_tool/cli.py#L888-L900)
-- [cli.py:1484-1496](file://rdc_tool/cli.py#L1484-L1496)
+- [rdc_tool/cli.py:888-900](file://rdc_tool/cli.py#L888-L900)
+- [rdc_tool/cli.py:1484-1496](file://rdc_tool/cli.py#L1484-L1496)
 
 ### event（facade）
 - list：列出事件动作（映射到 rd.event.get_action_tree）。
@@ -262,8 +243,8 @@ C-->>U : 返回最终退出码
 - 输出：JSON 或 TSV（list 支持）。
 
 **章节来源**
-- [cli.py:953-961](file://rdc_tool/cli.py#L953-L961)
-- [cli.py:1498-1506](file://rdc_tool/cli.py#L1498-L1506)
+- [rdc_tool/cli.py:953-961](file://rdc_tool/cli.py#L953-L961)
+- [rdc_tool/cli.py:1498-1506](file://rdc_tool/cli.py#L1498-L1506)
 
 ### pipeline（facade）
 - show：显示管线摘要（映射到 rd.pipeline.get_state，detail=summary）。
@@ -272,8 +253,8 @@ C-->>U : 返回最终退出码
 - 输出：JSON（TSV 不受支持）。
 
 **章节来源**
-- [cli.py:963-972](file://rdc_tool/cli.py#L963-L972)
-- [cli.py:1508-1518](file://rdc_tool/cli.py#L1508-L1518)
+- [rdc_tool/cli.py:963-972](file://rdc_tool/cli.py#L963-L972)
+- [rdc_tool/cli.py:1508-1518](file://rdc_tool/cli.py#L1508-L1518)
 
 ### shader（facade）
 - source：获取源码或 fallback（映射到 rd.shader.get_source）。
@@ -283,8 +264,8 @@ C-->>U : 返回最终退出码
 - 输出：JSON（TSV 不受支持）。
 
 **章节来源**
-- [cli.py:974-983](file://rdc_tool/cli.py#L974-L983)
-- [cli.py:1520-1536](file://rdc_tool/cli.py#L1520-L1536)
+- [rdc_tool/cli.py:974-983](file://rdc_tool/cli.py#L974-L983)
+- [rdc_tool/cli.py:1520-1536](file://rdc_tool/cli.py#L1520-L1536)
 
 ### export（facade）
 - screenshot：导出截图（映射到 rd.export.screenshot）。
@@ -293,8 +274,8 @@ C-->>U : 返回最终退出码
 - 输出：JSON（TSV 不受支持）。
 
 **章节来源**
-- [cli.py:985-997](file://rdc_tool/cli.py#L985-L997)
-- [cli.py:1538-1555](file://rdc_tool/cli.py#L1538-L1555)
+- [rdc_tool/cli.py:985-997](file://rdc_tool/cli.py#L985-L997)
+- [rdc_tool/cli.py:1538-1555](file://rdc_tool/cli.py#L1538-L1555)
 
 ### pixel（facade）
 - value/history：读取像素值或历史（分别映射到 rd.texture.get_pixel_value / rd.texture.get_pixel_history）。
@@ -302,8 +283,8 @@ C-->>U : 返回最终退出码
 - 输出：JSON（TSV 不受支持）。
 
 **章节来源**
-- [cli.py:999-1010](file://rdc_tool/cli.py#L999-L1010)
-- [cli.py:1557-1566](file://rdc_tool/cli.py#L1557-L1566)
+- [rdc_tool/cli.py:999-1010](file://rdc_tool/cli.py#L999-L1010)
+- [rdc_tool/cli.py:1557-1566](file://rdc_tool/cli.py#L1557-L1566)
 
 ### resource（facade）
 - list：列出资源（映射到 rd.resource.list_all）。
@@ -312,8 +293,8 @@ C-->>U : 返回最终退出码
 - 输出：JSON 或 TSV（list 支持）。
 
 **章节来源**
-- [cli.py:1012-1019](file://rdc_tool/cli.py#L1012-L1019)
-- [cli.py:1568-1577](file://rdc_tool/cli.py#L1568-L1577)
+- [rdc_tool/cli.py:1012-1019](file://rdc_tool/cli.py#L1012-L1019)
+- [rdc_tool/cli.py:1568-1577](file://rdc_tool/cli.py#L1568-L1577)
 
 ### diff
 - pipeline：对比两个事件的管线状态差异，支持 --fail-on-diff。
@@ -321,8 +302,8 @@ C-->>U : 返回最终退出码
 - 输出：JSON。
 
 **章节来源**
-- [cli.py:1274-1310](file://rdc_tool/cli.py#L1274-L1310)
-- [cli.py:1579-1590](file://rdc_tool/cli.py#L1579-L1590)
+- [rdc_tool/cli.py:1274-1310](file://rdc_tool/cli.py#L1274-L1310)
+- [rdc_tool/cli.py:1579-1590](file://rdc_tool/cli.py#L1579-L1590)
 
 ### assert
 - pipeline：断言管线差异，支持 --max-changes。
@@ -330,8 +311,8 @@ C-->>U : 返回最终退出码
 - 输出：JSON。
 
 **章节来源**
-- [cli.py:1313-1378](file://rdc_tool/cli.py#L1313-L1378)
-- [cli.py:1592-1605](file://rdc_tool/cli.py#L1592-L1605)
+- [rdc_tool/cli.py:1313-1378](file://rdc_tool/cli.py#L1313-L1378)
+- [rdc_tool/cli.py:1592-1605](file://rdc_tool/cli.py#L1592-L1605)
 
 ### completion
 - 用途：生成 shell 补全脚本。
@@ -339,15 +320,14 @@ C-->>U : 返回最终退出码
 - 输出：脚本文本，可直接在对应 shell 中加载。
 
 **章节来源**
-- [cli.py:644-691](file://rdc_tool/cli.py#L644-691)
-- [cli.py:1481-1482](file://rdc_tool/cli.py#L1481-L1482)
+- [rdc_tool/cli.py:644-691](file://rdc_tool/cli.py#L644-691)
+- [rdc_tool/cli.py:1481-1482](file://rdc_tool/cli.py#L1481-L1482)
 
 ## 依赖关系与执行顺序
 - 大多数 rd.* 操作要求存在有效的 session_id 或 capture_file_id，这些通常由 rd.capture.open_file 与 rd.capture.open_replay 建立。
 - 某些操作需要 active_event_id（例如事件相关 API），可通过 rd.replay.set_frame 或 rd.event.set_active 设置。
 - 远程能力需通过 rd.core.init 启用，并通过 rd.remote.connect 建立连接。
 - 操作路由会在执行前校验参数与先决条件，不满足时将返回结构化错误。
-- **新增** 批处理命令要求所有操作必须是只读的，effects 必须属于 {replay_position, replay_position_temporary}。
 
 ```mermaid
 flowchart TD
@@ -362,25 +342,18 @@ SetEvent --> CallOp
 CallOp --> End(["结束"])
 ```
 
-**图示来源**
-- [tool_router.py:89-128](file://rdc_tool/tool_router.py#L89-L128)
-- [cli.py:311-327](file://rdc_tool/cli.py#L311-L327)
-- [cli.py:1042-1171](file://rdc_tool/cli.py#L1042-L1171)
-
 **章节来源**
-- [tool_router.py:89-128](file://rdc_tool/tool_router.py#L89-L128)
-- [cli.py:311-327](file://rdc_tool/cli.py#L311-L327)
-- [cli.py:1042-1171](file://rdc_tool/cli.py#L1042-L1171)
+- [rdc_tool/tool_router.py:89-128](file://rdc_tool/tool_router.py#L89-L128)
+- [rdc_tool/cli.py:311-327](file://rdc_tool/cli.py#L311-L327)
+- [rdc_tool/cli.py:1042-1171](file://rdc_tool/cli.py#L1042-L1171)
 
 ## 性能与输出格式
 - JSON 输出：所有命令默认输出 JSON 信封，便于程序化处理。
 - TSV 输出：仅当命令或底层工具支持 tabular projection 时可用；否则返回结构化错误，建议回退到 JSON。
 - 投影转换：当 --format tsv 时，CLI 会将请求转换为带 include_tsv_text 的投影，并在渲染阶段优先输出 TSV 文本；若无则回退为列头+行数据的表格。
-- **新增** 批处理输出：每行一个JSON响应，包含标准结果结构和批处理元数据（index、operation、cancelled等）。
 
 **章节来源**
-- [cli.py:330-394](file://rdc_tool/cli.py#L330-L394)
-- [cli_batch.py:45-49](file://rdc_tool/cli_batch.py#L45-L49)
+- [rdc_tool/cli.py:330-394](file://rdc_tool/cli.py#L330-L394)
 
 ## 故障排查
 - 常见错误类型：
@@ -388,68 +361,106 @@ CallOp --> End(["结束"])
   - 会话缺失：需要 session_id 的命令在未打开捕获时会返回结构化错误，提示先打开捕获或传递 --session-id。
   - 捕获打开失败：open_file/open_replay/set_frame 任一失败都会包装为结构化错误，包含失败步骤、上下文快照与恢复提示。
   - 不支持 TSV：当命令或工具不支持 tabular projection 时，返回 projection_not_supported 或 tabular_projection_missing。
-  - **新增** 批处理错误：
-    - batch_failed：操作执行失败或参数验证错误。
-    - batch_cancelled：批处理被用户中断。
-    - batch_input_failed：JSONL文件读取或解析失败。
-    - 只读限制：尝试执行非只读操作时返回 validation 类别错误。
 - 恢复建议：
-  - 使用 rdc-tool doctor 检查环境完整性。
-  - 使用 rdc-tool context clear 清理异常上下文后再重试。
+  - 使用 `rdc-tool doctor` 检查环境完整性。
+  - 使用 `rdc-tool context clear` 清理异常上下文后再重试。
   - 对于捕获打开失败，检查 failed_step 与 source_error_details，必要时重启守护进程或重新打开捕获。
-  - **新增** 批处理恢复：检查 meta.batch.index 定位失败位置，确认操作是否为只读类型。
 
 **章节来源**
-- [run_cli.py:239-254](file://cli/run_cli.py#L239-L254)
-- [cli.py:802-814](file://rdc_tool/cli.py#L802-L814)
-- [cli.py:817-864](file://rdc_tool/cli.py#L817-L864)
-- [cli.py:926-941](file://rdc_tool/cli.py#L926-L941)
-- [cli_batch.py:42-59](file://rdc_tool/cli_batch.py#L42-L59)
-- [test_cli_batch.py:30-84](file://tests/test_cli_batch.py#L30-L84)
+- [cli/run_cli.py:239-254](file://cli/run_cli.py#L239-L254)
+- [rdc_tool/cli.py:802-814](file://rdc_tool/cli.py#L802-L814)
+- [rdc_tool/cli.py:817-864](file://rdc_tool/cli.py#L817-L864)
+- [rdc_tool/cli.py:926-941](file://rdc_tool/cli.py#L926-L941)
 
 ## 结论
-rdc CLI 提供了统一的入口来管理与调试捕获文件、回放会话、事件、管线、着色器、资源与导出等功能。通过结构化 catalog 与操作路由，CLI 能够保证参数校验与先决条件检查的一致性；同时提供 JSON/TSV 两种输出格式，便于人类阅读与自动化集成。**新增** 的批处理功能为只读操作提供了高效的顺序处理接口，支持大规模数据分析场景。遵循本手册中的命令与参数规范，可高效完成常见的图形调试与分析任务。
+rdc-tool CLI 提供了统一的入口来管理与调试捕获文件、回放会话、事件、管线、着色器、资源与导出等功能。通过结构化 catalog 与操作路由，CLI 能够保证参数校验与先决条件检查的一致性；同时提供 JSON/TSV 两种输出格式，便于人类阅读与自动化集成。遵循本手册中的命令与参数规范，可高效完成常见的图形调试与分析任务。
 
 ## 附录：常用工作流示例
-以下示例展示典型操作流程与命令组合（以 rdc 为例）：
-- 查看版本与环境：
-  - rdc-tool --version
-  - rdc-tool --json version
-  - rdc-tool --json doctor
-- 启动守护进程与上下文管理：
-  - rdc-tool daemon start --daemon-context local
-  - rdc-tool context status --daemon-context local --json
-  - rdc-tool context update --daemon-context local --key notes --value triaged --json
-  - rdc-tool context clear --daemon-context local
-- 打开捕获并进入回放：
-  - rdc-tool capture open --file D:\path\capture.rdc --frame-index 0 --preview
-- 会话预览控制：
-  - rdc-tool session preview on
-- 直接调用 rd.* 操作：
-  - rdc-tool call rd.session.get_context --args-file .\args.json --format json
-- **新增** 批处理工作流：
-  - rdc batch ./operations.jsonl
-  - rdc batch ./operations.jsonl --remote
-  - 创建JSONL文件示例：
-    ```json
-    {"operation": "rd.event.get_action_details", "args": {"session_id": "sess_123", "event_id": 42}}
-    {"operation": "rd.resource.list_all", "args": {"session_id": "sess_123"}}
-    {"operation": "rd.pipeline.get_state", "args": {"session_id": "sess_123", "event_id": 42}}
-    ```
-- 浏览事件与资源（支持 TSV）：
-  - rdc-tool vfs ls --path / --format tsv
-  - rdc-tool event list --format tsv
-  - rdc-tool resource list --format tsv
-- 管线与着色器检查：
-  - rdc-tool pipeline show --event-id 42
-  - rdc-tool shader source --event-id 42 --stage ps
-- 导出：
-  - rdc-tool export screenshot --event-id 42 --out .\frame.png
+以下示例展示典型操作流程与命令组合（使用新的 rdc-tool 命令）：
 
-注意：以上示例来源于帮助信息与命令定义，具体行为以实际实现为准。
+### 基本命令
+- 查看版本与环境：
+  ```bash
+  rdc-tool --version
+  rdc-tool --json version
+  rdc-tool --json doctor
+  ```
+
+- 启动守护进程与上下文管理：
+  ```bash
+  rdc-tool daemon start --daemon-context local
+  rdc-tool context status --daemon-context local --json
+  rdc-tool context update --daemon-context local --key notes --value triaged --json
+  rdc-tool context clear --daemon-context local
+  ```
+
+- 打开捕获并进入回放：
+  ```bash
+  rdc-tool capture open --file D:\path\capture.rdc --frame-index 0 --preview
+  ```
+
+- 会话预览控制：
+  ```bash
+  rdc-tool session preview on
+  ```
+
+### 高级功能
+- 直接调用 rd.* 操作：
+  ```bash
+  rdc-tool call rd.session.get_context --args-file .\args.json --format json
+  ```
+
+- 浏览事件与资源（支持 TSV）：
+  ```bash
+  rdc-tool vfs ls --path / --format tsv
+  rdc-tool event list --format tsv
+  rdc-tool resource list --format tsv
+  ```
+
+- 管线与着色器检查：
+  ```bash
+  rdc-tool pipeline show --event-id 42
+  rdc-tool shader source --event-id 42 --stage ps
+  ```
+
+- 导出功能：
+  ```bash
+  rdc-tool export screenshot --event-id 42 --out .\frame.png
+  ```
+
+### 批处理工作流
+- 执行JSONL批处理：
+  ```bash
+  rdc-tool batch ./operations.jsonl
+  rdc-tool batch ./operations.jsonl --remote
+  ```
+
+- 创建JSONL文件示例：
+  ```json
+  {"operation": "rd.event.get_action_details", "args": {"session_id": "sess_123", "event_id": 42}}
+  {"operation": "rd.resource.list_all", "args": {"session_id": "sess_123"}}
+  {"operation": "rd.pipeline.get_state", "args": {"session_id": "sess_123", "event_id": 42}}
+  ```
+
+### 安装和部署
+- Windows安装：
+  ```bash
+  install.cmd
+  rdc-tool --json doctor
+  ```
+
+- 生成Shell补全：
+  ```bash
+  rdc-tool completion powershell
+  rdc-tool completion bash
+  rdc-tool completion zsh
+  rdc-tool completion fish
+  ```
+
+注意：以上示例来源于帮助信息与命令定义，具体行为以实际实现为准。所有命令现在都使用 `rdc-tool` 作为入口点，不再使用旧的 `rdx` 命令。
 
 **章节来源**
-- [cli.py:62-104](file://rdc_tool/cli.py#L62-L104)
-- [cli.py:1381-1769](file://rdc_tool/cli.py#L1381-L1769)
-- [cli_batch.py:17-62](file://rdc_tool/cli_batch.py#L17-L62)
-- [test_cli_batch.py:19-84](file://tests/test_cli_batch.py#L19-L84)
+- [README.md:17-33](file://README.md#L17-L33)
+- [cli/run_cli.py:86-119](file://cli/run_cli.py#L86-L119)
+- [rdc_tool/cli.py:62-106](file://rdc_tool/cli.py#L62-L106)
+- [tests/test_cli_launcher.py:84-155](file://tests/test_cli_launcher.py#L84-L155)

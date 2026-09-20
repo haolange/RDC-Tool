@@ -1,0 +1,10 @@
+schema_version: 1
+module_path: scripts_and_packaging
+title: rdc-tool 发布、打包与冒烟测试脚本集
+scope:
+    - scripts/
+source_files: []
+depends_on: []
+related_to:
+    - path: docs
+    - path: platform_binaries

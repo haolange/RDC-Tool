@@ -1,0 +1,16 @@
+schema_version: 1
+module_path: ""
+title: RDC-Tool RDX 工具链根工程
+scope:
+    - README.md
+    - THIRD_PARTY_NOTICES.md
+    - AGENTS.md
+    - pyproject.toml
+    - .gitignore
+    - .gitattributes
+    - rdx.bat
+    - CHANGELOG.md
+    - LICENSE
+source_files: []
+depends_on: []
+related_to: []

@@ -1,0 +1,9 @@
+schema_version: 1
+module_path: platform_binaries
+title: RenderDoc 平台二进制分发产物
+scope:
+    - binaries/
+source_files: []
+depends_on: []
+related_to:
+    - path: scripts_and_packaging
