@@ -291,6 +291,6 @@ Publication evidence: [Release v1.0.0](https://github.com/haolange/RDC-Tool/rele
 
 | Task | State | Evidence |
 |---|---|---|
-| L1 Diagnose and restore standard text | 待验证 | Compared with Apache official LICENSE-2.0.txt: previous text altered definitions and clauses, not merely whitespace. Agent already had standard clauses and was recognized as Apache-2.0; only its copyright placeholder is filled. Restore official body with Copyright 2026 CGBull; earlier classification as an external-only issue was incorrect |
-| L2 Remote recognition and distribution notice | 待执行 | Push correction, query both License APIs, supplement v1.0.0 without replacing published zip/tag |
-| L3 Handoff and prompt | 待执行 | Update desktop handoff and continuation prompt after remote verification |
+| L1 Diagnose and restore standard text | 通过 | Compared with Apache official LICENSE-2.0.txt: previous text altered definitions and clauses, not merely whitespace. Agent already had standard clauses and was recognized as Apache-2.0; only its copyright placeholder is filled. Restore official body with Copyright 2026 CGBull; earlier classification as an external-only issue was incorrect |
+| L2 Remote recognition and distribution notice | 通过 | Both APIs return Apache-2.0 with blob d0b10b02b8be510590934199b721c0a4dd21a2fb. Release correction attachment SHA256 1ff2e3232cca48a89945e95ca4542e13c235abb21df1d0dbc26e61892bd5a2b1 matches remote digest. Top-level release notice supersedes the original zip root LICENSE; original assets/tag preserved |
+| L3 Handoff and prompt | 通过 | Desktop handoff and separate evening prompt updated: License resolved, second-host visual/runtime acceptance remains. Official-text equality and Markdown checks passed; no runtime changed or full suite repeated |
