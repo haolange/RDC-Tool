@@ -104,7 +104,7 @@ def _run_windows_launcher_file(root: Path, args: list[str], *, timeout_s: int = 
     env = os.environ.copy()
     env.pop("RDX_PYTHON", None)
     env["RDX_TOOLS_ROOT"] = str(root)
-    return _run([_cmd_exe(), "/c", str(cwd / WINDOWS_LAUNCHER_FILE), *args], root, timeout_s=timeout_s, env=env)
+    return _run([_cmd_exe(), "/c", str(root / WINDOWS_LAUNCHER_FILE), *args], root, timeout_s=timeout_s, env=env)
 
 
 def _expect_public_error(root: Path, args: list[str], expected_codes: set[str]) -> None:
