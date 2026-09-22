@@ -1,4 +1,10 @@
-﻿# Tool convergence execution ledger
+﻿## RDC-Tool 1.0.2 稳定发行回执（2026-09-23）
+
+- `v1.0.2` tag 与发行源码指向 `07f613f3420d7a7b7480f5a8114c7ebc9f13c3b3`；main CI run [35770638452](https://github.com/haolange/RDC-Tool/actions/runs/35770638452) 通过。
+- Windows x64 独立包 `rdc-tool-1.0.2-windows-x64.zip` 已通过包校验及完整 `release_gate.py`（overall PASS，3130 个文件）；GitHub Release [v1.0.2](https://github.com/haolange/RDC-Tool/releases/tag/v1.0.2) 两项资产 digest 与本地一致：ZIP `a7480ad08080e41c8133c2e9021bee1b5c8be260a70f57e9656bb0156680b1ae`，`SHA256SUMS` `4cf27faed3dd0396fbfa87950af1d2d736a0814e20470668caf48ded237d6f48`。
+- 本地仅保留当前正式候选 ZIP 与 checksum；已清理本轮旧候选和之前 timeout 调查的过期 1.0.1 候选。`.qoder` 中现存用户修改保持原样。
+
+# Tool convergence execution ledger
 
 Current release update: RDC-Tool 1.0.2 session worker/transport timeout alignment, coordinated with RDC-Agent timeout defaults and tracked in the adjacent RDC-Agent release readiness and acceptance ledger. Earlier C/R/H/T tables and receipts are historical snapshots; current contracts are [public-contract.md](public-contract.md) and [install.md](install.md). Generated .qoder wiki content is not SSOT.
 
