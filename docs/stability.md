@@ -1,4 +1,4 @@
-# Stability
+﻿# Stability
 
 `rdc-tool` treats the CLI entrypoints and canonical JSON envelope as stable.
 

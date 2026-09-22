@@ -1,4 +1,4 @@
-# RDC-Tool
+﻿# RDC-Tool
 
 RenderDoc `.rdc` replay CLI for agents and humans.
 

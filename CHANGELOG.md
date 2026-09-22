@@ -1,4 +1,4 @@
-# 变更记录 `Changelog`
+﻿# 变更记录 `Changelog`
 
 ## 待发布 `Unreleased`
 

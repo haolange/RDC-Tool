@@ -1,4 +1,4 @@
-# Tool convergence execution ledger
+﻿# Tool convergence execution ledger
 
 Current release update: RDC-Tool 1.0.2 session worker/transport timeout alignment, coordinated with RDC-Agent timeout defaults and tracked in the adjacent RDC-Agent release readiness and acceptance ledger. Earlier C/R/H/T tables and receipts are historical snapshots; current contracts are [public-contract.md](public-contract.md) and [install.md](install.md). Generated .qoder wiki content is not SSOT.
 
