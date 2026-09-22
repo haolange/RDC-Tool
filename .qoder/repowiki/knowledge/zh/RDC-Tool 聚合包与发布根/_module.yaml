@@ -1,6 +1,6 @@
 schema_version: 1
 module_path: ""
-title: RDC-Tool RDX 工具链根工程
+title: RDC-Tool 聚合包与发布根
 scope:
     - README.md
     - THIRD_PARTY_NOTICES.md

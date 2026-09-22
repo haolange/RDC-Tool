@@ -3,11 +3,11 @@ schema_version: 1
 locale: zh-CN
 branch: main
 nodes_managed: true
-exported_at: "2026-09-20T08:47:07Z"
+exported_at: "2026-09-22T05:03:46Z"
 modules:
     "":
-        dir_name: RDC-Tool RDX 工具链根工程
-        title: RDC-Tool RDX 工具链根工程
+        dir_name: RDC-Tool 聚合包与发布根
+        title: RDC-Tool 聚合包与发布根
         scope:
             - README.md
             - THIRD_PARTY_NOTICES.md
@@ -61,8 +61,8 @@ modules:
             - path: spec_catalog
             - path: tests
     scripts_and_packaging:
-        dir_name: rdc-tool 发布、打包与冒烟测试脚本集
-        title: rdc-tool 发布、打包与冒烟测试脚本集
+        dir_name: rdc-tool 发布制品构建与发布门禁脚本集
+        title: rdc-tool 发布制品构建与发布门禁脚本集
         scope:
             - scripts/
         source_files: []
@@ -83,8 +83,8 @@ modules:
             - path: docs
             - path: rdx_runtime
     tests:
-        dir_name: RDC-Tool 测试套件（pytest 端到端与单元测试）
-        title: RDC-Tool 测试套件（pytest 端到端与单元测试）
+        dir_name: RDC-Tool 集成与契约测试套件
+        title: RDC-Tool 集成与契约测试套件
         scope:
             - tests/
         source_files: []

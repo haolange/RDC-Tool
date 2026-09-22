@@ -1,6 +1,6 @@
 schema_version: 1
 module_path: tests
-title: RDC-Tool 测试套件（pytest 端到端与单元测试）
+title: RDC-Tool 集成与契约测试套件
 scope:
     - tests/
 source_files: []
