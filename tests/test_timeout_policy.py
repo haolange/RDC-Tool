@@ -73,6 +73,13 @@ def test_daemon_exec_timeout_uses_session_context_window() -> None:
     assert daemon_exec_timeout_s("rd.session.get_context", {}) == (
         SESSION_CONTEXT_TIMEOUT_S + DAEMON_RESPONSE_BUFFER_S
     )
+    assert daemon_exec_timeout_s("rd.session.observe", {"out_path": "C:/tmp/frame.png"}) == (
+        SESSION_CONTEXT_TIMEOUT_S + DAEMON_RESPONSE_BUFFER_S
+    )
+
+
+def test_worker_exec_timeout_uses_session_context_window() -> None:
+    assert worker_exec_timeout_s("rd.session.observe", {"out_path": "C:/tmp/frame.png"}) == SESSION_CONTEXT_TIMEOUT_S
 
 
 def test_worker_exec_timeout_uses_operation_window_without_transport_buffer() -> None:

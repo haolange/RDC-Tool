@@ -11,7 +11,10 @@ DAEMON_RESPONSE_BUFFER_S = 5.0
 REMOTE_OPEN_REPLAY_TIMEOUT_S = 200.0
 LOCAL_OPEN_FILE_TIMEOUT_S = 120.0
 LOCAL_OPEN_REPLAY_TIMEOUT_S = 120.0
-SESSION_CONTEXT_TIMEOUT_S = 10.0
+# Session observations serialize replay navigation, target selection, and image
+# export in one context. Keep enough budget for real captures while deriving the
+# CLI transport deadline from this operation budget below.
+SESSION_CONTEXT_TIMEOUT_S = 60.0
 PIXEL_HISTORY_TIMEOUT_S = 20.0
 DEFAULT_DAEMON_REQUEST_TIMEOUT_S = 30.0
 HEAVY_DAEMON_REQUEST_TIMEOUT_S = 60.0

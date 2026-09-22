@@ -10,6 +10,17 @@ Use `rdc-tool context status --json` to inspect the active context. If the wrong
 
 If VFS, facade commands, `diff pipeline`, or `assert pipeline` reports `session_required`, the selected `--daemon-context` has no active session. Open a capture with `capture open --file <rdc>` or pass `--session-id`.
 
+### Session daemon timeout
+
+`rd.session.*` operations have a 60-second worker budget and a 65-second CLI
+transport deadline (the shared 5-second response buffer is added by the CLI).
+These are separate from the host application's outer process timeout. If a host
+reports a timeout before 65 seconds, verify that it is using the current packaged
+RDC-Tool and that its outer CLI deadline is greater than 65 seconds. Do not add a
+per-call timeout override or edit an installed package in place; update and
+reinstall the RDC-Tool build so the policy and tests remain the single source of
+truth.
+
 ## Remote Lifecycle
 
 If a remote replay fails after `rd.remote.connect`, check whether state says `remote_handle_consumed`. That means the handle was consumed by `rd.capture.open_replay`; reconnect or recover through the remote workflow instead of reusing the old handle.

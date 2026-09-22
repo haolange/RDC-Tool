@@ -39,6 +39,12 @@ applied `event_id`, null `image_path`/`image_event_id`, and `image_error`; it ne
 reuses an old PNG. `revision` increases per live context/session observation.
 Consumers must additionally track their binding generation across native restarts.
 
+Session-context operations use a 60-second worker budget. The CLI daemon transport
+adds the shared 5-second response buffer, so its deadline is 65 seconds for these
+operations. This budget is selected by the operation policy; callers do not pass a
+second per-request timeout. The host application should keep its outer CLI process
+deadline above the 65-second transport deadline.
+
 This path creates no desktop preview window. `rd.session.open_preview`,
 `rd.session.close_preview`, and `preview.display` retain their distinct standalone
 CLI window contract and geometry smoke coverage. Both use the same native replay
