@@ -1,4 +1,4 @@
-﻿# Stability
+# Stability
 
 `rdc-tool` treats the CLI entrypoints and canonical JSON envelope as stable.
 
@@ -52,4 +52,4 @@ Current contract policy:
 
 The current assembled and verified baseline is **RenderDoc 1.45**. RDC-Tool does not track every upstream minor release: a newer runtime becomes the baseline only after matching runtime packaging, catalog checks, tests and release gates pass. RenderDoc 1.44 and earlier official GUI releases are not separate assembly targets. Use the replay path matching this bundled runtime. Capture-format compatibility follows upstream RenderDoc.
 
-RDC-Agent **0.6.x** pairs with RDC-Tool **1.0.0** and the current RenderDoc **1.45** runtime. Catalog definitions and fingerprints, not package version numbers, authorize operations. Local PNG export does not prove Android device presentation.
+RDC-Agent **0.6.x** currently ships alongside RDC-Tool **1.0.2** and the current RenderDoc **1.45** runtime. Catalog definitions and fingerprints, not package version numbers, authorize operations. Local PNG export does not prove Android device presentation.

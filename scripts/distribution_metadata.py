@@ -42,4 +42,4 @@ def write_distribution_metadata(root: Path, site_packages: Path) -> None:
         rows.append([f'{directory.name}/{filename}', f'sha256={digest}', str(len(payload))])
     rows.append([f'{directory.name}/RECORD', '', ''])
     with (directory / 'RECORD').open('w', encoding='utf-8', newline='') as stream:
-        csv.writer(stream).writerows(rows)
+        csv.writer(stream, lineterminator='\n').writerows(rows)

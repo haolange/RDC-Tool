@@ -1,6 +1,6 @@
-﻿# Tool convergence execution ledger
+# Tool convergence execution ledger
 
-Current approved scope: first-use integration and 1.0.1 release preparation, coordinated by the adjacent RDC-Agent `docs/workflows/first-use-and-release-readiness.md` T4–T6. Earlier C/R/H/T tables and receipts are historical snapshots; current contracts are [public-contract.md](public-contract.md) and [install.md](install.md). Generated .qoder wiki content is not SSOT.
+Current release update: RDC-Tool 1.0.2 session worker/transport timeout alignment, coordinated with RDC-Agent timeout defaults and tracked in the adjacent RDC-Agent release readiness and acceptance ledger. Earlier C/R/H/T tables and receipts are historical snapshots; current contracts are [public-contract.md](public-contract.md) and [install.md](install.md). Generated .qoder wiki content is not SSOT.
 
 2026-09-20追加发行授权：Tools 1.0.1正式发布，Agent 0.6.0-rc.1未签名预发布；允许main提交、非强制推送与新tag/Release，不覆盖v1.0.0。Tools发行回归37项及2个subtests、markdown/identity通过；最终zip完整验证通过，SHA256 `e5cd8df1237ad95ecaf64afd911107c5298d08898492924edefb32efdf958357`。提交/上传状态由相邻Agent任务账本P1–P3追踪。下文“不提交或发布”是历史阶段边界。
 

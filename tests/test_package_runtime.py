@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 from pathlib import Path
@@ -74,6 +74,7 @@ def test_package_runtime_bundles_python_and_excludes_dev_only_packages(tmp_path:
     assert 'Name: rdc-tool' in (metadata / 'METADATA').read_text(encoding='utf-8')
     assert not (metadata / 'direct_url.json').exists()
     assert 'rdc-tool = rdc_tool.cli:main' in (metadata / 'entry_points.txt').read_text(encoding='utf-8')
+    assert b'\r' not in (metadata / 'RECORD').read_bytes()
     removed_field = "worker_" + "materialize"
     assert all(removed_field not in item for item in manifest["files"])
 

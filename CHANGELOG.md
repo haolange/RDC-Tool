@@ -1,6 +1,12 @@
-﻿# 变更记录 `Changelog`
+# 变更记录 `Changelog`
 
 ## 待发布 `Unreleased`
+
+## 1.0.2 — 2026-09-23
+
+- 将 `rd.session.*` worker 操作预算统一提高到 60 秒；CLI daemon transport 继续增加 5 秒响应缓冲，门限为 65 秒。
+- 与 RDC-Agent 默认 120 秒外层 CLI 等待对齐；操作目录与 IPC/result contract 不变。
+- 补充 session timeout 策略测试、故障排查说明与会话模型文档。
 
 ## 1.0.1 — 2026-09-20
 

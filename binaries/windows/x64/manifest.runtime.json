@@ -11187,32 +11187,32 @@
       "sha256": "ee4e96732e7cf222587b995fe4ad3de4d2e0faea014e713e4fc78727dd86e3fe"
     },
     {
-      "path": "python/Lib/site-packages/rdc_tool-1.0.1.dist-info/entry_points.txt",
+      "path": "python/Lib/site-packages/rdc_tool-1.0.2.dist-info/entry_points.txt",
       "size": 47,
       "sha256": "2720680c99ec405e86f241519dee9fc6c4d53791a51e40a5d9cccbebf3fd339b"
     },
     {
-      "path": "python/Lib/site-packages/rdc_tool-1.0.1.dist-info/INSTALLER",
+      "path": "python/Lib/site-packages/rdc_tool-1.0.2.dist-info/INSTALLER",
       "size": 17,
       "sha256": "51365a5cdacc8aeb2d13f6cdd78ea872a335ff02436e3de3eb286f68a2379b7d"
     },
     {
-      "path": "python/Lib/site-packages/rdc_tool-1.0.1.dist-info/METADATA",
+      "path": "python/Lib/site-packages/rdc_tool-1.0.2.dist-info/METADATA",
       "size": 313,
-      "sha256": "44dbfb5718801ff9ae12f605a0fdf7596d39c6a95070ca01d394c4ea4bdc73fd"
+      "sha256": "d5b70b9329547389d2f7b5a45088bc37170410199623804691e28bd452c4061b"
     },
     {
-      "path": "python/Lib/site-packages/rdc_tool-1.0.1.dist-info/RECORD",
-      "size": 491,
-      "sha256": "4c7bc2713f7da7962617f189e0109241f6fdf3cc5e755ce153678bf101017196"
+      "path": "python/Lib/site-packages/rdc_tool-1.0.2.dist-info/RECORD",
+      "size": 485,
+      "sha256": "511281f00a53ebbc081c2f3803d98411c397d359ceddb2c1bb3bdef37eaed9ec"
     },
     {
-      "path": "python/Lib/site-packages/rdc_tool-1.0.1.dist-info/top_level.txt",
+      "path": "python/Lib/site-packages/rdc_tool-1.0.2.dist-info/top_level.txt",
       "size": 9,
       "sha256": "efff3c2c8328c68e5b94f4e3698c5467e4bfa9c2644221bbab900e6d374a797a"
     },
     {
-      "path": "python/Lib/site-packages/rdc_tool-1.0.1.dist-info/WHEEL",
+      "path": "python/Lib/site-packages/rdc_tool-1.0.2.dist-info/WHEEL",
       "size": 97,
       "sha256": "463175fe3af4c31caf91a5c8fa35f9163d3b2586f93311450718453bf2217f7c"
     },
