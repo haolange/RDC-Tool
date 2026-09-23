@@ -1,9 +1,10 @@
 schema_version: 1
-module_path: platform_binaries
-title: RenderDoc 平台二进制分发产物
+module_path: docs
+title: rdc-tool 文档与发布治理
 scope:
-    - binaries/
+    - docs/
 source_files: []
 depends_on: []
 related_to:
     - path: scripts_and_packaging
+    - path: spec_catalog

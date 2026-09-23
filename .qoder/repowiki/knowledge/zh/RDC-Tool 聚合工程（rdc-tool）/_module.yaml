@@ -1,6 +1,6 @@
 schema_version: 1
 module_path: ""
-title: RDC-Tool 聚合包与发布根
+title: RDC-Tool 聚合工程（rdc-tool）
 scope:
     - README.md
     - THIRD_PARTY_NOTICES.md

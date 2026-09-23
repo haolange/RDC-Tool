@@ -3,11 +3,11 @@ schema_version: 1
 locale: zh-CN
 branch: main
 nodes_managed: true
-exported_at: "2026-09-22T05:03:46Z"
+exported_at: "2026-09-23T03:12:28Z"
 modules:
     "":
-        dir_name: RDC-Tool 聚合包与发布根
-        title: RDC-Tool 聚合包与发布根
+        dir_name: RDC-Tool 聚合工程（rdc-tool）
+        title: RDC-Tool 聚合工程（rdc-tool）
         scope:
             - README.md
             - THIRD_PARTY_NOTICES.md
@@ -29,8 +29,8 @@ modules:
         depends_on: []
         related_to: []
     docs:
-        dir_name: rdx-tools 文档集（用户与开发者指南）
-        title: rdx-tools 文档集（用户与开发者指南）
+        dir_name: rdc-tool 文档与发布治理
+        title: rdc-tool 文档与发布治理
         scope:
             - docs/
         source_files: []
@@ -40,8 +40,8 @@ modules:
             - path: scripts_and_packaging
             - path: spec_catalog
     platform_binaries:
-        dir_name: RenderDoc 平台二进制分发产物
-        title: RenderDoc 平台二进制分发产物
+        dir_name: RenderDoc 平台运行时二进制产物
+        title: RenderDoc 平台运行时二进制产物
         scope:
             - binaries/
         source_files: []
@@ -61,8 +61,8 @@ modules:
             - path: spec_catalog
             - path: tests
     scripts_and_packaging:
-        dir_name: rdc-tool 发布制品构建与发布门禁脚本集
-        title: rdc-tool 发布制品构建与发布门禁脚本集
+        dir_name: rdc-tool 发布构建、门禁与冒烟测试脚本集
+        title: rdc-tool 发布构建、门禁与冒烟测试脚本集
         scope:
             - scripts/
         source_files: []
