@@ -282,8 +282,9 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'path_inputs': []},
  {'name': 'rd.core.get_capabilities',
   'group': '3.1，核心与环境管理 (Core & Environment)',
-  'description': '获取当前环境能力详情；除 replay/remote/debug 基础项外，还会暴露当前 context/session/backend 视角下的 remote '
-                 'capability matrix。',
+   'description': '获取当前环境能力详情；除 replay/remote/debug 基础项外，还会暴露当前 context/session/backend 视角下的 remote '
+                  'capability matrix。事件绑定检查只针对当前 active event；若当前是无 shader 的 Present，'
+                  'not_currently_probed 不表示目标 draw 不可取证，应在目标事件使用直接 shader 工具及 edit_plan 复验。',
   'parameter_raw': "detail_level (string, optional): detail_level (str, 可选, 默认 'summary'): "
                    "'summary' | 'full'",
   'returns_raw': 'ok (bool)<br>data (dict): {capabilities}; `capabilities` 至少包含 replay / remote / '
@@ -918,19 +919,18 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                    'required': ['session_id'],
                    'additionalProperties': False},
   'scope': 'replay',
-  'effects': ['replay_position'],
+  'effects': [],
   'evidence_kind': None,
   'path_inputs': []},
  {'name': 'rd.event.get_action_tree',
   'group': '3.3，事件导航与 API 检查 (Event Navigation & API Inspection)',
-  'description': '获取当前帧完整的 Action 树，支持按深度或过滤条件进行裁剪。',
+  'description': '读取当前帧 Action 树；event_id 只选择该节点及其子树，不返回相邻事件。相邻事件请用 rd.event.search_actions 的 event_id_min/event_id_max 查询。根节点分页、深度及节点预算可能截断结果。',
   'parameter_raw': 'session_id (string): session_id (str)<br>max_depth (integer, optional): '
                    'max_depth (int, 可选)<br>filter (object, optional): See input_schema for '
                    'constraints.<br>offset (integer, optional): offset (int, 可选, 默认 0): '
                    '根节点分页偏移<br>limit (integer, optional): limit (int, 可选, 默认 256): '
                    '根节点分页大小<br>max_nodes (integer, optional): max_nodes (int, 可选, 默认 2000): '
-                   '整棵树返回的最大节点数<br>event_id (integer, optional): See input_schema for '
-                   'constraints.<br>include_markers (boolean, optional): See input_schema for '
+                   '整棵树返回的最大节点数<br>event_id (integer, optional): 选择该事件及子树，不含相邻事件<br>include_markers (boolean, optional): See input_schema for '
                    'constraints.<br>include_drawcalls (boolean, optional): See input_schema for '
                    'constraints.<br>projection (object, optional): See input_schema for '
                    'constraints.',
@@ -974,7 +974,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                                                                '整棵树返回的最大节点数',
                                                 'type': 'integer',
                                                 'minimum': 1},
-                                  'event_id': {'type': 'integer', 'minimum': 0},
+                                  'event_id': {'description': '只选择指定事件及其子树；相邻事件用 rd.event.search_actions 的 event_id_min/event_id_max 查询。',
+                                               'type': 'integer', 'minimum': 0},
                                   'include_markers': {'type': 'boolean', 'default': True},
                                   'include_drawcalls': {'type': 'boolean', 'default': True},
                                   'projection': {'type': 'object',
@@ -1007,7 +1008,7 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                    'required': ['session_id'],
                    'additionalProperties': False},
   'scope': 'replay',
-  'effects': ['replay_position'],
+  'effects': [],
   'evidence_kind': None,
   'path_inputs': []},
  {'name': 'rd.event.get_callstack',
@@ -1114,7 +1115,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'description': '在当前帧的 Action 树中搜索节点，支持按名称、Flag 或事件范围等条件。',
   'parameter_raw': 'session_id (string): session_id (str)<br>query (object): query (dict): 查询条件，例如 '
                    '{name_regex?, name_contains?, flags_include?, flags_exclude?, event_id_min?, '
-                   'event_id_max?}<br>max_results (integer, optional): max_results (int, 可选, 默认 '
+                   'event_id_max?}；flags_include/flags_exclude 为 RenderDoc ActionFlags 成员名数组，'
+                   '分别要求全部包含/全部排除，先筛选再应用 max_results；未知名称返回 validation_error<br>max_results (integer, optional): max_results (int, 可选, 默认 '
                    '200)',
   'returns_raw': 'ok (bool)<br>data (dict): {matches}<br>artifacts (list)<br>error '
                  '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
@@ -1129,7 +1131,9 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                                   'query': {'description': 'query (dict): 查询条件，例如 {name_regex?, '
                                                            'name_contains?, flags_include?, '
                                                            'flags_exclude?, event_id_min?, '
-                                                           'event_id_max?}',
+                                                           'event_id_max?}；flags_include/flags_exclude '
+                                                           '为 RenderDoc ActionFlags 成员名数组，分别要求全部包含/全部排除，'
+                                                           '先筛选再应用 max_results；未知名称返回 validation_error',
                                             'type': 'object'},
                                   'max_results': {'description': 'max_results (int, 可选, 默认 200)',
                                                   'type': 'integer'}},
@@ -1282,7 +1286,7 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'path_inputs': [{'name': 'output_path', 'access': 'write'}]},
  {'name': 'rd.export.screenshot',
   'group': '3.11，导出、报告与可复现打包 (Export & Reporting)',
-  'description': '导出当前 event 的输出截图（等价于 UI 的保存 framebuffer）。',
+  'description': '导出指定 event 的展示截图；Present 目标不可用时可能回退到事件输出纹理，并在 target_source、evidence_truth_level 和 summary_degraded_reasons 中标记。截图尺寸与坐标可能不同于源纹理，不能据此宣称最终 framebuffer；原生纹理取证需先核对目标 texture，再用 rd.export.texture。',
   'parameter_raw': 'session_id (string): session_id (str)<br>target (object, optional): See '
                    'input_schema for constraints.<br>event_id (integer, optional): event_id (int, '
                    '可选): 指定 event 输出；缺省为当前 active event<br>output_path (string): output_path '
@@ -1298,7 +1302,11 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                  'image_paths, resolved_event_id, selected_formats, requested_formats, '
                  'recommended_formats, name_info, texture_format, chosen_output_slot, texture_id, '
                  'target_source, binding_truth_level, visual_truth_level, evidence_truth_level, '
-                 'summary_degraded_reasons}<br>artifacts (list)<br>error (dict|null)<br>meta '
+                 'summary_degraded_reasons}<br>artifacts (list)<br>error (dict|null): '
+                 'target-resolution failure restores the prior event where possible and reports '
+                 'failure_stage, replay_state_restored, restored_event_id and '
+                 'artifact_write_attempted in error.details; missing or failed restoration '
+                 'does not prove replay safety<br>meta '
                  '(dict)<br>projections (dict, 可选)',
   'param_names': ['session_id',
                   'target',
@@ -1388,18 +1396,18 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'path_inputs': [{'name': 'output_dir', 'access': 'write'}]},
  {'name': 'rd.export.texture',
   'group': '3.11，导出、报告与可复现打包 (Export & Reporting)',
-  'description': '将纹理导出为可直接打开的图片/导出文件；这是统一的纹理导出入口，支持子资源选择、显示映射与通道控制。',
+  'description': '导出纹理；省略 channels、remap、flip_y 时使用原生 SaveTexture，显式传入任一显示控制字段（即使 flip_y=false）则使用显示映射渲染，输出坐标可能不同于源纹理。',
   'parameter_raw': 'session_id (string): session_id (str)<br>texture_id (string): texture_id '
                    '(str)<br>subresource (object, optional): See input_schema for '
                    'constraints.<br>output_path (string): output_path (str)<br>file_format '
                    "(string, optional): file_format (str, 可选, 默认 'png'): canonical output format; "
                    "high precision formats such as 'hdr'/'exr' fail closed if "
-                   'unavailable<br>channels (string, optional): channels (str, 可选, 默认 '
-                   "'rgba')<br>remap (object, optional): remap (dict, 可选): {black_point, "
-                   'white_point, gamma, hdr_clamp?}<br>flip_y (boolean, optional): flip_y (bool, '
-                   '可选, 默认 false)',
+                   'unavailable<br>channels (string, optional): 显示通道；原生导出须省略'
+                   '<br>remap (object, optional): 显示映射；原生导出须省略'
+                   '<br>flip_y (boolean, optional): 显示翻转；原生导出须省略，显式 false 也触发显示渲染',
   'returns_raw': 'ok (bool)<br>data (dict): {artifact_path, saved_path, meta, selected_formats, '
-                 'requested_formats, recommended_formats, name_info, texture_format}; multi-format '
+                 'requested_formats, recommended_formats, name_info, texture_format}; native PNG/JPG '
+                 'meta includes export_method=SaveTexture and image_width/image_height read from the saved file; multi-format '
                  'export returns {exports, saved_paths, selected_formats, requested_formats, '
                  'recommended_formats}. Explicit HDR/EXR/DDS requests never silently downgrade to '
                  'PNG; unavailable encoders return ok=false with '
@@ -1444,12 +1452,11 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                                                                  "'hdr'/'exr' fail closed if "
                                                                  'unavailable',
                                                   'type': 'string'},
-                                  'channels': {'description': "channels (str, 可选, 默认 'rgba')",
+                                  'channels': {'description': '显示通道；原生 SaveTexture 导出须省略',
                                                'type': 'string'},
-                                  'remap': {'description': 'remap (dict, 可选): {black_point, '
-                                                           'white_point, gamma, hdr_clamp?}',
+                                  'remap': {'description': '显示映射；原生 SaveTexture 导出须省略',
                                             'type': 'object'},
-                                  'flip_y': {'description': 'flip_y (bool, 可选, 默认 false)',
+                                  'flip_y': {'description': '显示翻转；原生 SaveTexture 导出须省略，显式 false 也触发显示渲染',
                                              'type': 'boolean'}},
                    'required': ['session_id', 'texture_id', 'output_path'],
                    'additionalProperties': False},
@@ -1789,7 +1796,7 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'group': '3.4，管线状态查询 (Pipeline State Inspection)',
   'description': '获取指定 stage 的资源绑定（SRV/CBV/RO-Images 等）。',
   'parameter_raw': 'session_id (string): session_id (str)<br>stage (string): stage (str): '
-                   "'VS'|'HS'|'DS'|'GS'|'PS'|'CS'|'AS'|'MS'|'RT'<br>type (string, optional): See "
+                   "'vs'|'hs'|'ds'|'gs'|'ps'|'cs'|'as'|'ms'<br>type (string, optional): See "
                    'input_schema for constraints.<br>event_id (integer, optional): Replay event; '
                    'omitted uses the owning session current event.',
   'returns_raw': 'ok (bool)<br>data (dict): {bindings}<br>artifacts (list)<br>error '
@@ -1803,7 +1810,7 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                    'properties': {'session_id': {'description': 'session_id (str)',
                                                  'type': 'string'},
                                   'stage': {'description': 'stage (str): '
-                                                           "'VS'|'HS'|'DS'|'GS'|'PS'|'CS'|'AS'|'MS'|'RT'",
+                                                           "'vs'|'hs'|'ds'|'gs'|'ps'|'cs'|'as'|'ms'",
                                             'type': 'string'},
                                   'type': {'type': 'string',
                                            'enum': ['SRV', 'UAV', 'CBV', 'Sampler']},
@@ -1833,7 +1840,9 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'input_schema': {'type': 'object',
                    'properties': {'session_id': {'description': 'session_id (str)',
                                                  'type': 'string'},
-                                  'stage': {'description': 'stage (str)', 'type': 'string'},
+                                  'stage': {'description': 'Use canonical shader stage: vs, hs, ds, gs, ps, cs, ms, or as. Pixel shader is ps.',
+                                            'type': 'string',
+                                            'enum': ['vs', 'hs', 'ds', 'gs', 'ps', 'cs', 'ms', 'as']},
                                   'event_id': {'type': 'integer',
                                                'minimum': 0,
                                                'description': 'Replay event; omitted uses the '
@@ -1884,7 +1893,7 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                    'daemon context<br>detail (string): detail<br>sections (array): Only request '
                    'these state sections; omitted selects all.',
   'returns_raw': 'Shader hash is SHA-256 of recorded shader rawBytes, or null when unavailable; debug_name is the native non-autogenerated shader resource debug name or null; resource_name retains the native display name including autogenerated names; debug_source_files lists actual debug source filenames separately. Neither is derived from ResourceId.<br>data: resolved_event_id, pipeline_state. Full indexed viewports/scissors, blend '
-                 'options and complete front/back stencil. API-specific sections carry api, status '
+                 'options and complete front/back stencil. Blend factors/operations and depth compare use native RenderDoc enum names (for example SrcAlpha, InvSrcAlpha, GreaterEqual); unlabelled values are reported as unknown(raw) without guessing. API-specific sections carry api, status '
                  'and native data; failed reads are not empty states.',
   'param_names': ['session_id', 'event_id', 'context_id', 'detail', 'sections'],
   'prerequisites': [{'requires': 'session_id',
@@ -2420,7 +2429,7 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                    'required': ['session_id', 'resource_id'],
                    'additionalProperties': False},
   'scope': 'replay',
-  'effects': ['replay_position'],
+  'effects': [],
   'evidence_kind': None,
   'path_inputs': []},
  {'name': 'rd.resource.get_usage',
@@ -2874,7 +2883,9 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                                                                  'source file path; file directory '
                                                                  'is added to include_dirs',
                                                   'type': 'string'},
-                                  'stage': {'description': 'stage (str)', 'type': 'string'},
+                                  'stage': {'description': 'Use canonical shader stage: vs, hs, ds, gs, ps, cs, ms, or as. Pixel shader is ps.',
+                                            'type': 'string',
+                                            'enum': ['vs', 'hs', 'ds', 'gs', 'ps', 'cs', 'ms', 'as']},
                                   'entry': {'description': 'entry (str)', 'type': 'string'},
                                   'target': {'description': "target (str): e.g. 'vs_6_6'/'ps_6_6' "
                                                             "or 'spirv1.6'",
@@ -2910,14 +2921,13 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                   {'name': 'output_path', 'access': 'write'}]},
  {'name': 'rd.shader.debug_start',
   'group': '3.9，Shader Debugger 与像素/顶点级调试 (Shader Debugging)',
-  'description': '启动 shader debugger（默认 pixel），在 remote replay 下会先读取 remote capability matrix；如果当前 '
-                 'backend/session 明确不支持 debug，则在创建 trace 前直接 truthful-fail。',
+  'description': '启动事件绑定的 pixel shader debugger。未指定 target 时按当前 Event 的输出目标查找；目标没有本 Event 的像素历史命中时，不接受 native debugger 句柄为成功。remote replay 会先读取 capability matrix。',
   'parameter_raw': 'session_id (string): session_id (str)<br>mode (string, optional): mode (str, '
                    "可选, 默认 'pixel'): 当前正式支持 `pixel`；传入其他 mode 会返回结构化 `validation_error`，并在 details "
                    '中附带 `supported_modes` / `requested_mode` / `failure_stage` / '
                    '`failure_reason`<br>event_id (integer, optional): event_id (int, 可选): 缺省为当前 '
                    'active event<br>params (object): params (dict): pixel 模式下使用 {x, y, sample?, '
-                   'target?, view?, primitive?}<br>timeout_ms (integer, optional): timeout_ms '
+                   'target?, view?, primitive?}；显式 target 只验证该目标，不回退到其他输出；缺省时使用当前 Event 输出，找不到时才尝试默认目标<br>timeout_ms (integer, optional): timeout_ms '
                    '(int, 可选, 默认 10000)<br>context_id (string, optional): context_id (str, '
                    'optional): choose the context to use; defaults to the current daemon context',
   'returns_raw': 'ok (bool)<br>data (dict): {shader_debug_id, initial_state, resolved_context, '
@@ -2944,7 +2954,7 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                                                'type': 'integer',
                                                'minimum': 0},
                                   'params': {'description': 'params (dict): pixel 模式下使用 {x, y, '
-                                                            'sample?, target?, view?, primitive?}',
+                                                            'sample?, target?, view?, primitive?}；显式 target 不回退，缺省按当前 Event 输出选择',
                                              'type': 'object'},
                                   'timeout_ms': {'description': 'timeout_ms (int, 可选, 默认 10000)',
                                                  'type': 'integer'},
@@ -2966,7 +2976,10 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'parameter_raw': 'session_id (string): session_id (str)<br>stage (string): stage '
                    '(str)<br>event_id (integer, optional): event_id (int, 可选)<br>shader_id '
                    '(string, optional): shader_id (str, 可选): expected bound shader identity<br>ops '
-                   '(array, optional): ops (list, 可选): structured patch ops<br>source_text '
+                   '(array, optional): ops (list, 可选): structured patch ops; for SPIR-V ASM, '
+                   '{"op":"force_full_precision","variables":["493"]} removes only '
+                   'OpDecorate %493 RelaxedPrecision; an empty variables list applies to all '
+                   'RelaxedPrecision decorations<br>source_text '
                    '(string, optional): source_text (str, 可选): full replacement source '
                    'text<br>source_path (string, optional): source_path (str, 可选): full '
                    'replacement source file path<br>entry (string, optional): entry (str, required '
@@ -3022,16 +3035,21 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'input_schema': {'type': 'object',
                    'properties': {'session_id': {'description': 'session_id (str)',
                                                  'type': 'string'},
-                                  'stage': {'description': 'stage (str)', 'type': 'string'},
+                                  'stage': {'description': 'Use canonical shader stage: vs, hs, ds, gs, ps, cs, ms, or as. Pixel shader is ps.',
+                                            'type': 'string',
+                                            'enum': ['vs', 'hs', 'ds', 'gs', 'ps', 'cs', 'ms', 'as']},
                                   'event_id': {'description': 'event_id (int, 可选)',
                                                'type': 'integer',
                                                'minimum': 0},
                                   'shader_id': {'description': 'shader_id (str, 可选): expected '
                                                                'bound shader identity',
                                                 'type': 'string'},
-                                  'ops': {'description': 'ops (list, 可选): structured patch ops',
+                                  'ops': {'description': 'Structured patch ops. For SPIR-V ASM, '
+                                                         '{"op":"force_full_precision","variables":["493"]} '
+                                                         'targets only OpDecorate %493 RelaxedPrecision; '
+                                                         'an empty variables list removes all RelaxedPrecision decorations.',
                                           'type': 'array',
-                                          'items': {}},
+                                          'items': {'type': 'object'}},
                                   'source_text': {'description': 'source_text (str, 可选): full '
                                                                  'replacement source text',
                                                   'type': 'string'},
@@ -3105,7 +3123,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                                                'minimum': 0,
                                                'description': 'Replay event; omitted uses the '
                                                               'owning session current event.'},
-                                  'stage': {'type': 'string'},
+                                  'stage': {'type': 'string',
+                                            'enum': ['vs', 'hs', 'ds', 'gs', 'ps', 'cs', 'ms', 'as']},
                                   'as_base64': {'type': 'boolean'}},
                    'required': ['session_id'],
                    'additionalProperties': False},
@@ -3135,7 +3154,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                                                'minimum': 0,
                                                'description': 'Replay event; omitted uses the '
                                                               'owning session current event.'},
-                                  'stage': {'type': 'string'}},
+                                  'stage': {'type': 'string',
+                                            'enum': ['vs', 'hs', 'ds', 'gs', 'ps', 'cs', 'ms', 'as']}},
                    'required': ['session_id'],
                    'additionalProperties': False},
   'scope': 'replay',
@@ -3166,7 +3186,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                                                'minimum': 0,
                                                'description': 'Replay event; omitted uses the '
                                                               'owning session current event.'},
-                                  'stage': {'type': 'string'}},
+                                  'stage': {'type': 'string',
+                                            'enum': ['vs', 'hs', 'ds', 'gs', 'ps', 'cs', 'ms', 'as']}},
                    'required': ['session_id', 'block_name_or_index'],
                    'additionalProperties': False},
   'scope': 'replay',
@@ -3200,7 +3221,9 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'input_schema': {'type': 'object',
                    'properties': {'session_id': {'description': 'session_id (str)',
                                                  'type': 'string'},
-                                  'stage': {'description': 'stage (str)', 'type': 'string'},
+                                  'stage': {'description': 'Use canonical shader stage: vs, hs, ds, gs, ps, cs, ms, or as. Pixel shader is ps.',
+                                            'type': 'string',
+                                            'enum': ['vs', 'hs', 'ds', 'gs', 'ps', 'cs', 'ms', 'as']},
                                   'slot': {'description': 'slot (int)',
                                            'type': 'integer',
                                            'minimum': 0},
@@ -3262,20 +3285,24 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                  '`rd.pipeline.get_shader`、`rd.export.shader_bundle`、`rd.shader.get_reflection`、`rd.shader.edit_and_replace` '
                  '使用同一套绑定逻辑。',
   'parameter_raw': 'session_id (string): session_id (str)<br>shader_id (string, optional): '
-                   'shader_id (str)<br>target (string, optional): target (str, 可选): '
-                   "`'auto'<br>event_id (integer, optional): Replay event; omitted uses the owning "
+                   'shader_id (str)<br>target (string, optional): auto（默认）或当前 replay 支持的精确 '
+                   'disassembly target 名称；raw SPIR-V ASM 用 SPIR-V ASM，不能把 encoding 名 spirv 当成 target。'
+                   '<br>event_id (integer, optional): Replay event; omitted uses the owning '
                    'session current event.<br>stage (string, optional): See input_schema for '
                    'constraints.',
   'returns_raw': 'ok (bool)<br>data (dict): {disassembly, target, source_encoding, '
                  'is_raw_spirv_asm, source_hash, shader_id, resolved_event_id, '
                  'edit_plan}<br>`edit_plan` describes shader_format, input_kind, can_edit_text, '
                  'can_build, can_replace, requires_toolchain, build_input_kind, '
-                 'allowed_edit_inputs, allowed_ops, recommended_next_tool, and blocked_reason. '
+                 'allowed_edit_inputs, allowed_ops, recommended_next_tool, and blocked_reason. allowed_edit_inputs lists independent input forms (full source_text, diff_text, or structured ops); allowed_ops only names supported structured ops and does not restrict source_text or diff_text edits. '
+                 "The default RenderDoc SPIR-V view is read-only; request target='SPIR-V ASM' "
+                 'and inspect that result edit_plan before attempting replacement. '
                  'DXIL/DXBC disassembly is read-only unless edit_plan reports a buildable source '
                  'path.<br>artifacts (list)<br>error (dict|null): 绑定失败显式返回 '
                  '`shader_binding_lookup_failed` / `shader_stage_mismatch`；当请求 target '
                  '不存在或源码不可取时，显式返回 `shader_disassembly_unavailable` 并带 `failure_stage` / '
-                 '`failure_reason`<br>meta (dict)<br>projections (dict, 可选)',
+                 '`failure_reason`；未知 target 在应用 replay event 前拒绝，返回 available_targets 与 '
+                 'effects_attempted=false / context_preserved=true<br>meta (dict)<br>projections (dict, 可选)',
   'param_names': ['session_id', 'shader_id', 'target', 'event_id', 'stage'],
   'prerequisites': [{'requires': 'session_id',
                      'via_tools': ['rd.capture.open_file', 'rd.capture.open_replay'],
@@ -3285,13 +3312,15 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                    'properties': {'session_id': {'description': 'session_id (str)',
                                                  'type': 'string'},
                                   'shader_id': {'description': 'shader_id (str)', 'type': 'string'},
-                                  'target': {'description': "target (str, 可选): `'auto'",
+                                  'target': {'description': 'auto（默认）或当前 replay 支持的精确 disassembly target；raw SPIR-V ASM 用 SPIR-V ASM',
                                              'type': 'string'},
                                   'event_id': {'type': 'integer',
                                                'minimum': 0,
                                                'description': 'Replay event; omitted uses the '
                                                               'owning session current event.'},
-                                  'stage': {'type': 'string'}},
+                                  'stage': {'type': 'string',
+                                            'description': 'Use canonical shader stage: vs, hs, ds, gs, ps, cs, ms, or as. Pixel shader is ps.',
+                                            'enum': ['vs', 'hs', 'ds', 'gs', 'ps', 'cs', 'ms', 'as']}},
                    'required': ['session_id'],
                    'additionalProperties': False},
   'scope': 'replay',
@@ -3340,7 +3369,9 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                    '(bool, 可选, 默认 true)<br>context_id (string, optional): context_id (str, '
                    'optional): choose the context to use; defaults to the current daemon context',
   'returns_raw': 'ok (bool)<br>data (dict): {reflection, shader_id, '
-                 'resolved_event_id}<br>artifacts (list)<br>error (dict|null): 绑定失败显式返回 '
+                 'resolved_event_id}; reflection.debug_info 包含原生 debuggable、'
+                 'source_debug_information 与 status，原生字段缺席时返回 null，'
+                 '不能据此声称可调试<br>artifacts (list)<br>error (dict|null): 绑定失败显式返回 '
                  '`shader_binding_lookup_failed` / `shader_stage_mismatch` / '
                  '`shader_reflection_unavailable`，不再把所有失败折叠成 `shader_not_bound`<br>meta '
                  '(dict)<br>projections (dict, 可选)',
@@ -3364,7 +3395,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                                                 'type': 'string'},
                                   'stage': {'description': 'stage (str, 可选): 若未提供 `shader_id`，则与 '
                                                            '`event_id` 一起解析当前绑定 shader',
-                                            'type': 'string'},
+                                            'type': 'string',
+                                            'enum': ['vs', 'hs', 'ds', 'gs', 'ps', 'cs', 'ms', 'as']},
                                   'event_id': {'description': 'event_id (int, 可选): 缺省为当前 active '
                                                               'event',
                                                'type': 'integer',
@@ -3399,9 +3431,10 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                  'resolved_event_id}; when original debug source is unavailable, returns ok=true '
                  'with source_available=false and a format-aware fallback. SPIR-V may recommend '
                  "`rd.shader.get_disassembly` with target='SPIR-V ASM' and "
-                 "source_encoding='spirvasm'; DXIL/DXBC recommends read-only disassembly and/or "
+                 "source_encoding='spirvasm'; the current edit_plan describes absent source, "
+                 "so inspect the fallback result before editing. DXIL/DXBC recommends read-only disassembly and/or "
                  '`rd.shader.extract_binary` instead of treating disassembly text as replacement '
-                 'source.<br>artifacts (list)<br>error (dict|null)<br>meta (dict)<br>projections '
+                 'source.<br>artifacts (list)<br>error (dict|null): invalid_shader_stage is rejected before any replay effect, with effects_attempted=false and context_preserved=true. An unbound shader at the requested event returns shader_binding_lookup_failed; the original replay event is restored and reported as replay_state_restored/restored_event_id only after native restoration succeeds. A failed restoration reports shader_inspection_recovery_failed and requires controlled recovery.<br>meta (dict)<br>projections '
                  '(dict, 可选)',
   'param_names': ['session_id', 'shader_id', 'prefer_original', 'event_id', 'stage'],
   'prerequisites': [{'requires': 'session_id',
@@ -3419,7 +3452,9 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                                                'minimum': 0,
                                                'description': 'Replay event; omitted uses the '
                                                               'owning session current event.'},
-                                  'stage': {'type': 'string'}},
+                                  'stage': {'type': 'string',
+                                            'description': 'Use canonical shader stage: vs, hs, ds, gs, ps, cs, ms, or as. Pixel shader is ps.',
+                                            'enum': ['vs', 'hs', 'ds', 'gs', 'ps', 'cs', 'ms', 'as']}},
                    'required': ['session_id'],
                    'additionalProperties': False},
   'scope': 'replay',
@@ -3448,7 +3483,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                                                'minimum': 0,
                                                'description': 'Replay event; omitted uses the '
                                                               'owning session current event.'},
-                                  'stage': {'type': 'string'}},
+                                  'stage': {'type': 'string',
+                                            'enum': ['vs', 'hs', 'ds', 'gs', 'ps', 'cs', 'ms', 'as']}},
                    'required': ['session_id'],
                    'additionalProperties': False},
   'scope': 'replay',
@@ -3759,8 +3795,13 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                    '默认 true)<br>target (object, optional): See input_schema for '
                    'constraints.<br>event_id (integer, optional): Replay event; omitted uses the '
                    'owning session current event.',
-  'returns_raw': 'ok (bool)<br>data (dict): {history}<br>artifacts (list)<br>error '
-                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
+  'returns_raw': 'ok (bool)<br>data (dict): {history, resolved_event_id, texture_id, '
+                 'target_metadata, binding_truth_level, evidence_truth_level}. Each history '
+                 'item includes pre_mod, shader_out and post_mod with native validity, '
+                 'format-aware color_rgba, depth and stencil. Non-finite color channels '
+                 'are null and listed in non_finite_channels; missing or invalid values '
+                 'are explicit. pre_mod is unavailable for non-first fragments.<br>'
+                 'artifacts (list)<br>error (dict|null)<br>meta (dict)<br>projections (dict, 可选)',
   'param_names': ['session_id',
                   'texture_id',
                   'x',
@@ -3811,13 +3852,13 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'path_inputs': []},
  {'name': 'rd.texture.get_pixel_value',
   'group': '3.6，纹理数据访问与分析 (Texture Data Access & Analysis)',
-  'description': '用于读取纹理在指定像素坐标处的值。该值将自动按照纹理格式解码为 float4 或 int4。',
+  'description': '用于读取纹理在指定像素坐标处的值。该值将自动按照纹理格式解码为 float4 或 int4。Event ID 可能稀疏；比较前一事件时须先从 action tree 确认实际 event_id，不能用当前 ID 减一猜测。',
   'parameter_raw': 'session_id (string): session_id (str)<br>texture_id (string): texture_id '
                    '(str)<br>x (integer): x (int)<br>y (integer): y (int)<br>mip (integer, '
                    'optional): mip (int, 可选, 默认 0)<br>slice (integer, optional): slice (int, 可选, '
                    '默认 0)<br>sample (integer, optional): sample (int, 可选, 默认 0)<br>as_type '
                    "(string, optional): as_type (str, 可选, 默认 'float'): 返回值类型，可选 'float', 'uint', "
-                   "'int'<br>event_id (integer, optional): Replay event; omitted uses the owning "
+                   "'int'<br>event_id (integer, optional): Replay event from the action tree; IDs may be sparse; omitted uses the owning "
                    'session current event.',
   'returns_raw': 'ok (bool)<br>data (dict): {value}<br>artifacts (list)<br>error '
                  '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',

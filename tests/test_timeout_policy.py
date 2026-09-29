@@ -146,6 +146,7 @@ def test_dispatch_remote_connect_uses_default_timeout_when_missing(monkeypatch) 
 def test_remote_ping_rehydrates_handle_from_context_snapshot(monkeypatch) -> None:
     original_remotes = dict(server._runtime.remotes)
     context_id = "remote-rehydrate-test"
+    retired_forwards: list[str] = []
 
     async def _inline_offload(fn, *args, **kwargs):
         return fn(*args, **kwargs)
@@ -153,6 +154,12 @@ def test_remote_ping_rehydrates_handle_from_context_snapshot(monkeypatch) -> Non
     monkeypatch.setattr(server.server_runtime, "_offload", _inline_offload)
     monkeypatch.setattr(server.server_runtime, "_create_remote_server_connection", lambda url: DummyRemoteServer())
     monkeypatch.setattr(server.server_runtime, "_wait_for_remote_endpoint", lambda url, timeout_ms: None)
+    monkeypatch.setattr(server.server_runtime, "resolve_adb_path", lambda: "adb-test")
+    monkeypatch.setattr(
+        server.server_runtime,
+        "cleanup_android_remote",
+        lambda result: retired_forwards.append(result.forward_spec) or [],
+    )
     monkeypatch.setattr(
         server.server_runtime,
         "bootstrap_android_remote",
@@ -170,6 +177,7 @@ def test_remote_ping_rehydrates_handle_from_context_snapshot(monkeypatch) -> Non
             installed_apk=True,
             pushed_config=True,
             started_activity=True,
+            owned_pids=[123],
             created_forward=True,
             install_mode="upgrade",
             install_reason="test",
@@ -194,7 +202,16 @@ def test_remote_ping_rehydrates_handle_from_context_snapshot(monkeypatch) -> Non
                 "transport": "adb_android",
                 "device_serial": "serial-1",
                 "options": {"device_serial": "serial-1", "local_port": 45678, "remote_port": 38920},
-                "bootstrap": {"device_serial": "serial-1", "remote_port": 38920},
+                "bootstrap": {
+                    "device_serial": "serial-1",
+                    "package_name": "org.renderdoc.renderdoccmd.arm64",
+                    "port": 45678,
+                    "remote_port": 38920,
+                    "forward_spec": "tcp:45678",
+                    "created_forward": True,
+                    "started_activity": False,
+                    "owned_pids": [],
+                },
             },
         },
         context_id,
@@ -212,6 +229,7 @@ def test_remote_ping_rehydrates_handle_from_context_snapshot(monkeypatch) -> Non
         assert payload["data"]["detail"]["remote_id"] == "remote_demo"
         assert server._runtime.remotes["remote_demo"].host == "127.0.0.1"
         assert server._runtime.remotes["remote_demo"].device_serial == "serial-1"
+        assert retired_forwards == ["tcp:45678"]
     finally:
         clear_context_snapshot(context_id)
         server._runtime.context_snapshots.pop(context_id, None)

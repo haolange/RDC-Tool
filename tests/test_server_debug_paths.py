@@ -11,9 +11,8 @@ from rdc_tool import server
 
 
 class _FakeTrace:
-    def __init__(self, *, valid: bool, debugger: object | None = None) -> None:
-        self.valid = valid
-        self.debugger = object() if debugger is None and not valid else debugger
+    def __init__(self, *, debugger: object | None = None) -> None:
+        self.debugger = debugger
 
 
 class _FakeHistoryItem:
@@ -37,14 +36,14 @@ class _FakeHistoryItem:
 
 
 class _FakeController:
-    def __init__(self, traces: list[_FakeTrace]) -> None:
+    def __init__(self, traces: list[_FakeTrace | None]) -> None:
         self._traces = list(traces)
         self.debug_calls: list[dict[str, int | None]] = []
 
     def GetPipelineState(self) -> object:
         return object()
 
-    def DebugPixel(self, x: int, y: int, inputs: object) -> _FakeTrace:
+    def DebugPixel(self, x: int, y: int, inputs: object) -> _FakeTrace | None:
         self.debug_calls.append(
             {
                 "x": x,
@@ -56,7 +55,7 @@ class _FakeController:
         )
         if self._traces:
             return self._traces.pop(0)
-        return _FakeTrace(valid=False)
+        return None
 
     def FreeTrace(self, trace: object) -> None:
         return None
@@ -116,8 +115,8 @@ def _install_debug_env(monkeypatch, controller: _FakeController, history_items: 
 
 
 def test_debug_start_returns_structured_error_details(monkeypatch) -> None:
-    controller = _FakeController([_FakeTrace(valid=False)])
-    _install_debug_env(monkeypatch, controller, [])
+    controller = _FakeController([None])
+    _install_debug_env(monkeypatch, controller, [_FakeHistoryItem(11, 9)])
 
     payload = json.loads(
         asyncio.run(
@@ -189,7 +188,7 @@ def test_debug_start_rejects_unsupported_mode_with_structured_validation_error(m
 
 
 def test_debug_start_rejects_cross_event_fallback(monkeypatch) -> None:
-    controller = _FakeController([_FakeTrace(valid=False), _FakeTrace(valid=False), _FakeTrace(valid=False)])
+    controller = _FakeController([None, None, None])
     _install_debug_env(monkeypatch, controller, [_FakeHistoryItem(17, 0)])
 
     start = json.loads(
@@ -249,8 +248,8 @@ def test_debug_start_reports_target_configuration_failures(monkeypatch) -> None:
 
 
 def test_debug_start_reports_missing_debugger_handle(monkeypatch) -> None:
-    controller = _FakeController([_FakeTrace(valid=True, debugger=None)])
-    _install_debug_env(monkeypatch, controller, [])
+    controller = _FakeController([_FakeTrace()])
+    _install_debug_env(monkeypatch, controller, [_FakeHistoryItem(11, 9)])
 
     payload = json.loads(
         asyncio.run(
@@ -271,6 +270,104 @@ def test_debug_start_reports_missing_debugger_handle(monkeypatch) -> None:
     assert payload["category"] == "runtime"
     assert payload["details"]["failure_stage"] == "trace_state"
     assert payload["details"]["failure_reason"] == "debugger_handle_missing"
+
+
+def test_debug_start_accepts_native_trace_without_valid_field(monkeypatch) -> None:
+    debugger = object()
+    controller = _FakeController([_FakeTrace(debugger=debugger)])
+    _install_debug_env(monkeypatch, controller, [_FakeHistoryItem(11, 9)])
+
+    payload = json.loads(
+        asyncio.run(
+            server._dispatch_shader(
+                "debug_start",
+                {
+                    "session_id": "sess_test",
+                    "mode": "pixel",
+                    "event_id": 11,
+                    "params": {"x": 5, "y": 6, "target": {"texture_id": "ResourceId::77"}},
+                },
+            )
+        )
+    )
+
+    assert payload["success"] is True
+    assert payload["resolved_event_id"] == 11
+    assert server._runtime.shader_debugs[payload["shader_debug_id"]].debugger is debugger
+
+
+def test_debug_start_uses_event_output_before_unrelated_default_target(monkeypatch) -> None:
+    controller = _FakeController([_FakeTrace(debugger=object())])
+    _install_debug_env(monkeypatch, controller, [])
+
+    async def _event_outputs(session_id: str, event_id: int):
+        return [("ResourceId::208", 0)]
+
+    async def _configure(session_id: str, target: dict[str, object], *, event_id: int | None = None, sample_override: int | None = None):
+        return (
+            str(target.get("texture_id") or "ResourceId::284"),
+            None,
+            SimpleNamespace(mip=0, slice=0, sample=0),
+        )
+
+    async def _history(controller_obj: object, resource_id: str, x: int, y: int, subresource: object):
+        return [_FakeHistoryItem(11, 14915)] if resource_id == "ResourceId::208" else []
+
+    monkeypatch.setattr(server.server_runtime, "_output_target_resource_ids", _event_outputs)
+    monkeypatch.setattr(server.server_runtime, "_configure_texture_output_for_target", _configure)
+    monkeypatch.setattr(server.server_runtime, "_pixel_history_raw", _history)
+
+    payload = json.loads(asyncio.run(server._dispatch_shader(
+        "debug_start", {"session_id": "sess_test", "event_id": 11, "params": {"x": 5, "y": 6, "primitive": 14915}},
+    )))
+
+    assert payload["success"] is True
+    assert payload["selected_target_source"] == "event.output[0]"
+    assert payload["resolved_context"]["target"]["texture_id"] == "ResourceId::208"
+    assert payload["pixel_history_summary"]["matched_event_hit_count"] == 1
+    assert len(controller.debug_calls) == 1
+
+
+def test_debug_start_uses_matching_default_when_event_has_no_listed_output(monkeypatch) -> None:
+    controller = _FakeController([_FakeTrace(debugger=object())])
+    _install_debug_env(monkeypatch, controller, [_FakeHistoryItem(11, 14915)])
+
+    payload = json.loads(asyncio.run(server._dispatch_shader(
+        "debug_start", {"session_id": "sess_test", "event_id": 11,
+                        "params": {"x": 5, "y": 6, "primitive": 14915}},
+    )))
+
+    assert payload["success"] is True
+    assert payload["selected_target_source"] == "default_target"
+    assert payload["pixel_history_summary"]["matched_event_hit_count"] == 1
+
+
+def test_debug_start_rejects_zero_hit_explicit_target_without_fallback(monkeypatch) -> None:
+    controller = _FakeController([_FakeTrace(debugger=object())])
+    _install_debug_env(monkeypatch, controller, [])
+    configured_targets: list[dict[str, object]] = []
+
+    async def _event_outputs(session_id: str, event_id: int):
+        return [("ResourceId::208", 0)]
+
+    async def _configure(session_id: str, target: dict[str, object], *, event_id: int | None = None, sample_override: int | None = None):
+        configured_targets.append(target)
+        return (str(target["texture_id"]), None, SimpleNamespace(mip=0, slice=0, sample=0))
+
+    monkeypatch.setattr(server.server_runtime, "_output_target_resource_ids", _event_outputs)
+    monkeypatch.setattr(server.server_runtime, "_configure_texture_output_for_target", _configure)
+
+    payload = json.loads(asyncio.run(server._dispatch_shader(
+        "debug_start", {"session_id": "sess_test", "event_id": 11,
+                        "params": {"x": 5, "y": 6, "target": {"texture_id": "ResourceId::284"}}},
+    )))
+
+    assert payload["success"] is False
+    assert payload["code"] == "shader_debug_event_binding_unavailable"
+    assert payload["details"]["failure_stage"] == "pixel_history"
+    assert payload["details"]["failure_reason"] == "no_event_hit"
+    assert configured_targets == [{"texture_id": "ResourceId::284"}]
+    assert controller.debug_calls == []
 
 
 def test_debug_start_times_out_pixel_history(monkeypatch) -> None:

@@ -64,6 +64,7 @@ def test_describe_android_remote_exposes_bootstrap_flags() -> None:
     payload = remote_bootstrap.describe_android_remote(result)
 
     assert payload["installed_apk"] is True
+    assert payload["owned_pids"] == [123]
     assert payload["pushed_config"] is True
     assert payload["started_activity"] is True
     assert payload["created_forward"] is True
@@ -133,6 +134,100 @@ def test_install_helper_reports_uninstall_failure(monkeypatch: pytest.MonkeyPatc
         remote_bootstrap._ensure_android_helper_installed("adb", "serial-1", result.package_name, "apk", result)
 
     assert excinfo.value.code == "android_apk_force_replace_uninstall_failed"
+
+
+@pytest.mark.parametrize("sdk_level,storage_dir", [(29, "data"), (30, "media"), (35, "media")])
+@pytest.mark.parametrize("remote_state", ["existing", "missing"])
+def test_owned_helper_config_preserves_existing_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path, remote_state: str, sdk_level: int, storage_dir: str
+) -> None:
+    commands: list[list[str]] = []
+    local_config = tmp_path / "renderdoc.conf"
+    local_config.write_text("", encoding="utf-8")
+    result = AndroidBootstrapResult(
+        adb_path="adb",
+        device_serial="serial-1",
+        package_name="org.renderdoc.renderdoccmd.arm64",
+        activity_name="org.renderdoc.renderdoccmd.arm64.Loader",
+        abi="arm64-v8a",
+        host="127.0.0.1",
+        port=38960,
+        remote_port=38920,
+        apk_path="apk",
+        forward_spec="tcp:38960",
+    )
+
+    def fake_shell(adb_path: str, device_serial: str, *args: str, **_: object) -> SimpleNamespace:
+        commands.append([adb_path, device_serial, *args])
+        if args[:2] == ("getprop", "ro.build.version.sdk"):
+            return SimpleNamespace(stdout=str(sdk_level))
+        return SimpleNamespace(stdout=remote_state if args[0].startswith("if ") else "")
+
+    def fake_run(cmd: list[str], **_: object) -> SimpleNamespace:
+        commands.append(cmd)
+        return SimpleNamespace(stdout="")
+
+    monkeypatch.setattr(remote_bootstrap, "_adb_shell", fake_shell)
+    monkeypatch.setattr(remote_bootstrap, "_run_subprocess", fake_run)
+    monkeypatch.setattr(remote_bootstrap, "_write_renderdoc_conf", lambda _: local_config)
+
+    remote_bootstrap._ensure_renderdoc_conf(result)
+
+    assert result.config_remote_path == (
+        f"/sdcard/Android/{storage_dir}/{result.package_name}/files/renderdoc.conf"
+    )
+    assert result.pushed_config is (remote_state == "missing")
+    assert any("push" in cmd for cmd in commands) is (remote_state == "missing")
+    assert result.config_local_path == (str(local_config) if remote_state == "missing" else "")
+
+
+def test_owned_helper_config_rejects_unknown_remote_file_type(monkeypatch: pytest.MonkeyPatch) -> None:
+    result = AndroidBootstrapResult(
+        adb_path="adb",
+        device_serial="serial-1",
+        package_name="org.renderdoc.renderdoccmd.arm64",
+        activity_name="org.renderdoc.renderdoccmd.arm64.Loader",
+        abi="arm64-v8a",
+        host="127.0.0.1",
+        port=38960,
+        remote_port=38920,
+        apk_path="apk",
+        forward_spec="tcp:38960",
+    )
+    def fake_shell(*args: object, **_: object) -> SimpleNamespace:
+        return SimpleNamespace(stdout="30" if args[2:4] == ("getprop", "ro.build.version.sdk") else "invalid")
+
+    monkeypatch.setattr(remote_bootstrap, "_adb_shell", fake_shell)
+
+    with pytest.raises(remote_bootstrap.AndroidRemoteBootstrapError) as excinfo:
+        remote_bootstrap._ensure_renderdoc_conf(result)
+
+    assert excinfo.value.code == "android_config_probe_failed"
+    assert result.pushed_config is False
+
+
+@pytest.mark.parametrize("sdk_level", ["", "unknown", "0"])
+def test_owned_helper_config_rejects_unknown_sdk(monkeypatch: pytest.MonkeyPatch, sdk_level: str) -> None:
+    result = AndroidBootstrapResult(
+        adb_path="adb",
+        device_serial="serial-1",
+        package_name="org.renderdoc.renderdoccmd.arm64",
+        activity_name="org.renderdoc.renderdoccmd.arm64.Loader",
+        abi="arm64-v8a",
+        host="127.0.0.1",
+        port=38960,
+        remote_port=38920,
+        apk_path="apk",
+        forward_spec="tcp:38960",
+    )
+    monkeypatch.setattr(remote_bootstrap, "_adb_shell", lambda *a, **k: SimpleNamespace(stdout=sdk_level))
+
+    with pytest.raises(remote_bootstrap.AndroidRemoteBootstrapError) as excinfo:
+        remote_bootstrap._ensure_renderdoc_conf(result)
+
+    assert excinfo.value.code == "android_sdk_probe_failed"
+    assert result.config_remote_path == ""
+    assert result.pushed_config is False
 
 
 def test_cleanup_android_remote_removes_forward_and_config(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:

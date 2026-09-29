@@ -170,6 +170,7 @@ def _normalize_remote_session_record(value: Any) -> Dict[str, Any]:
     bootstrap = item.get("bootstrap") if isinstance(item.get("bootstrap"), dict) else {}
     requested = item.get("requested") if isinstance(item.get("requested"), dict) else {}
     options = item.get("options") if isinstance(item.get("options"), dict) else {}
+    owned_pids = bootstrap.get("owned_pids")
     return {
         "transport": str(item.get("transport") or "renderdoc").strip() or "renderdoc",
         "host": str(item.get("host") or "").strip(),
@@ -188,6 +189,7 @@ def _normalize_remote_session_record(value: Any) -> Dict[str, Any]:
         "options": {
             "install_apk": bool(options.get("install_apk", True)),
             "push_config": bool(options.get("push_config", True)),
+            "device_serial": str(options.get("device_serial") or "").strip(),
             "local_port": _normalize_int(options.get("local_port")),
             "remote_port": _normalize_int(
                 options.get("remote_port") or bootstrap.get("remote_port")
@@ -197,7 +199,13 @@ def _normalize_remote_session_record(value: Any) -> Dict[str, Any]:
             "package_name": str(bootstrap.get("package_name") or "").strip(),
             "activity_name": str(bootstrap.get("activity_name") or "").strip(),
             "abi": str(bootstrap.get("abi") or "").strip(),
+            "device_serial": str(bootstrap.get("device_serial") or "").strip(),
+            "port": _normalize_int(bootstrap.get("port")),
             "remote_port": _normalize_int(bootstrap.get("remote_port")),
+            "forward_spec": str(bootstrap.get("forward_spec") or "").strip(),
+            "created_forward": bootstrap.get("created_forward") is True,
+            "started_activity": bootstrap.get("started_activity") is True,
+            "owned_pids": list(owned_pids) if isinstance(owned_pids, list) else [],
             "config_remote_path": str(bootstrap.get("config_remote_path") or "").strip(),
         },
     }

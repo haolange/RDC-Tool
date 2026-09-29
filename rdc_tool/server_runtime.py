@@ -35,6 +35,7 @@ from types import SimpleNamespace
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from rdc_tool.config import RdcToolConfig
+from rdc_tool.io_utils import safe_json_text
 from rdc_tool.context_snapshot import (
     SnapshotRetentionPolicy,
     clear_context_snapshot,
@@ -78,6 +79,9 @@ from rdc_tool.remote_bootstrap import (
     bootstrap_android_remote,
     cleanup_android_remote,
     describe_android_remote,
+    AndroidBootstrapResult,
+    retain_android_helper_ownership,
+    resolve_adb_path,
 )
 from rdc_tool.runtime_bootstrap import bootstrap_renderdoc_runtime
 from rdc_tool.runtime_paths import artifacts_dir, ensure_runtime_dirs, runtime_root
@@ -1160,13 +1164,27 @@ def _context_snapshot(context_id: Optional[str] = None) -> Dict[str, Any]:
         state_endpoint = str(state_remote.get("endpoint") or "")
         state_origin_remote_id = str(state_remote.get("origin_remote_id") or "")
         if state_remote and str(state_session.get("backend_type") or "") == "remote":
+            origin_remote_id = state_origin_remote_id or str(remote_payload.get("origin_remote_id") or "")
+            scope = _remote_context_scope(
+                origin_remote_id,
+                origin_context_id=str(state_remote.get("origin_context_id") or remote_payload.get("origin_context_id") or ""),
+                context_id=ctx,
+            )
             snapshot["remote"] = {
                 "state": "session_owned",
                 "remote_id": "",
-                "origin_remote_id": state_origin_remote_id or str(remote_payload.get("origin_remote_id") or ""),
+                "origin_remote_id": origin_remote_id,
                 "endpoint": state_endpoint or str(remote_payload.get("endpoint") or ""),
                 "consumed_by_session_id": owned_session_id,
                 "active_session_ids": [owned_session_id] if owned_session_id else [],
+                "origin_context_id": scope["origin_context_id"],
+                "context_locality": scope["context_locality"],
+                "reuse_policy": scope["reuse_policy"],
+                "transport": str(state_remote.get("transport") or remote_payload.get("transport") or ""),
+                "requested": dict(state_remote.get("requested") or remote_payload.get("requested") or {}),
+                "options": dict(state_remote.get("options") or remote_payload.get("options") or {}),
+                "bootstrap": dict(state_remote.get("bootstrap") or remote_payload.get("bootstrap") or {}),
+                "device_serial": str(state_remote.get("device_serial") or remote_payload.get("device_serial") or ""),
             }
             _runtime.context_snapshots[ctx] = snapshot
             return snapshot
@@ -1474,7 +1492,6 @@ async def _choose_visual_output_target(
     event_id: int,
     *,
     target: Optional[Dict[str, Any]] = None,
-    allow_framebuffer_fallback: bool = True,
 ) -> Tuple[Any, Optional[Any], Optional[int], str]:
     parsed_target = target or {}
     explicit_target = parsed_target.get("texture_id") or parsed_target.get("textureId")
@@ -1635,18 +1652,6 @@ async def _choose_visual_output_target(
         if output_targets:
             best_texture_id, chosen_output_slot = output_targets[0]
             best_texture_desc = None
-        elif allow_framebuffer_fallback:
-            best_texture_id, _ = await _get_texture_descriptor(
-                session_id,
-                None,
-                event_id=event_id,
-            )
-            target_texture_id, texture_desc = await _get_texture_descriptor(
-                session_id,
-                best_texture_id,
-                event_id=event_id,
-            )
-            return target_texture_id, texture_desc, None, "framebuffer_fallback"
         else:
             raise _preview_error(
                 "preview_event_output_unavailable",
@@ -1840,7 +1845,6 @@ async def _resolve_visual_target_for_event(
     event_id: int,
     *,
     target: Optional[Dict[str, Any]] = None,
-    allow_framebuffer_fallback: bool = True,
 ) -> Tuple[Any, Optional[Any], Dict[str, Any], Dict[str, Any]]:
     parsed_target = target or {}
     semantic = _requested_visual_target_semantic(parsed_target)
@@ -1884,12 +1888,21 @@ async def _resolve_visual_target_for_event(
                 backend=str(_context_state(_runtime_context_id()).get("backend") or "local"),
             )
 
-    texture_id, texture_desc, chosen_output_slot, target_source = await _choose_visual_output_target(
-        session_id,
-        event_id,
-        target=target,
-        allow_framebuffer_fallback=allow_framebuffer_fallback,
-    )
+    try:
+        texture_id, texture_desc, chosen_output_slot, target_source = await _choose_visual_output_target(
+            session_id,
+            event_id,
+            target=target,
+        )
+    except CoreError as exc:
+        if swapchain_error is not None:
+            exc.details["swapchain_error"] = {
+                "code": swapchain_error.code,
+                "category": swapchain_error.category,
+                "message": swapchain_error.message,
+                "details": dict(swapchain_error.details),
+            }
+        raise
     truth_meta = dict(await _event_truth_metadata(session_id, int(event_id)))
     reasons = list(truth_meta.get("summary_degraded_reasons") or [])
     if semantic == "swapchain" and swapchain_error is not None:
@@ -1907,11 +1920,6 @@ async def _resolve_visual_target_for_event(
     if str(target_source or "").startswith("event_binding_"):
         if "visual_target_binding_fallback" not in reasons:
             reasons.append("visual_target_binding_fallback")
-        truth_meta["binding_truth_level"] = "binding_degraded"
-        truth_meta["evidence_truth_level"] = "visual_evidence_only"
-    elif str(target_source or "") == "framebuffer_fallback":
-        if "visual_target_framebuffer_fallback" not in reasons:
-            reasons.append("visual_target_framebuffer_fallback")
         truth_meta["binding_truth_level"] = "binding_degraded"
         truth_meta["evidence_truth_level"] = "visual_evidence_only"
     truth_meta["summary_degraded_reasons"] = reasons
@@ -2016,7 +2024,6 @@ async def _display_preview_binding(
     target_texture_id, texture_desc, chosen_output_slot, target_source = await _choose_visual_output_target(
         session_id,
         int(event_id),
-        allow_framebuffer_fallback=False,
     )
     display_state = await _build_preview_display_state(
         binding,
@@ -2832,12 +2839,21 @@ async def _rehydrate_remote_handle_from_snapshot(remote_id: str) -> RemoteHandle
         or bootstrap_detail.get("device_serial")
         or ""
     ).strip()
+    if transport == "adb_android":
+        requested_port = _as_int(
+            bootstrap_detail.get("remote_port"),
+            _as_int(options.get("remote_port"), requested_port),
+        )
+        options = {**options, "local_port": 0}
+    prior_android = await _offload(_retire_recovery_android_forward, remote_payload, ctx) if transport == "adb_android" else None
     try:
         bootstrap_result, remote_server, server_info = await _connect_remote_endpoint(
             "127.0.0.1" if transport == "adb_android" else host,
             requested_port if transport == "adb_android" else port,
             transport, {**options, "device_serial": device_serial}, remote_connect_timeout_ms({}))
         if bootstrap_result is not None:
+            if prior_android is not None:
+                await _retain_recovered_android_ownership(bootstrap_result, prior_android, remote_server)
             bootstrap_detail = describe_android_remote(bootstrap_result)
             host, port = bootstrap_result.host, bootstrap_result.port
             requested_host, requested_port = "127.0.0.1", bootstrap_result.remote_port
@@ -2921,13 +2937,13 @@ def _json_default(value: Any) -> Any:
 def _ok(**fields: Any) -> str:
     payload: Dict[str, Any] = {"success": True}
     payload.update(fields)
-    return json.dumps(payload, ensure_ascii=False, default=_json_default)
+    return safe_json_text(payload, default=_json_default)
 
 
 def _err(message: str, **fields: Any) -> str:
     payload: Dict[str, Any] = {"success": False, "error_message": str(message)}
     payload.update(fields)
-    return json.dumps(payload, ensure_ascii=False, default=_json_default)
+    return safe_json_text(payload, default=_json_default)
 
 
 def _projection_request(args: Dict[str, Any], tool_name: str) -> Dict[str, Any]:
@@ -3983,6 +3999,7 @@ def _remote_session_metadata(
         "options": {
             "install_apk": _as_bool(bootstrap.get("installed_apk"), True),
             "push_config": _as_bool(bootstrap.get("pushed_config"), True),
+            "device_serial": str(handle.device_serial or bootstrap.get("device_serial") or "").strip(),
             "local_port": int(handle.port or 0),
             "remote_port": _as_int(bootstrap.get("remote_port"), requested_port),
         },
@@ -3990,7 +4007,13 @@ def _remote_session_metadata(
             "package_name": str(bootstrap.get("package_name") or "").strip(),
             "activity_name": str(bootstrap.get("activity_name") or "").strip(),
             "abi": str(bootstrap.get("abi") or "").strip(),
+            "device_serial": str(bootstrap.get("device_serial") or "").strip(),
+            "port": _as_int(bootstrap.get("port"), int(handle.port or 0)),
             "remote_port": _as_int(bootstrap.get("remote_port"), requested_port),
+            "forward_spec": str(bootstrap.get("forward_spec") or "").strip(),
+            "created_forward": bool(bootstrap.get("created_forward")),
+            "started_activity": bool(bootstrap.get("started_activity")),
+            "owned_pids": list(bootstrap.get("owned_pids") or []),
             "config_remote_path": str(bootstrap.get("config_remote_path") or "").strip(),
         },
     }
@@ -3999,6 +4022,94 @@ def _remote_session_metadata(
 def _session_record_remote_metadata(session_record: Dict[str, Any]) -> Dict[str, Any]:
     remote = session_record.get("remote")
     return dict(remote or {}) if isinstance(remote, dict) else {}
+
+
+def _retire_recovery_android_forward(remote_record: Dict[str, Any], context_id: str) -> AndroidBootstrapResult | None:
+    """Release the verified old forward before a recovered connection allocates a new one."""
+    bootstrap = _as_dict(remote_record.get("bootstrap"), default={})
+    if bootstrap.get("created_forward") is not True:
+        raise RuntimeToolError("Persisted Android forward ownership is missing")
+    options = _as_dict(remote_record.get("options"), default={})
+    serial = str(remote_record.get("device_serial") or "").strip()
+    port = _as_int(bootstrap.get("port"), 0)
+    remote_port = _as_int(bootstrap.get("remote_port"), 0)
+    pids = bootstrap.get("owned_pids")
+    started = bool(bootstrap.get("started_activity"))
+    if not (
+        remote_record.get("transport") == "adb_android"
+        and remote_record.get("origin_context_id") == context_id
+        and serial
+        and bootstrap.get("device_serial") == serial
+        and (not options.get("device_serial") or options.get("device_serial") == serial)
+        and port > 0
+        and port == _as_int(options.get("local_port"), 0)
+        and remote_port > 0
+        and remote_port == _as_int(options.get("remote_port"), 0)
+        and bootstrap.get("forward_spec") == f"tcp:{port}"
+        and remote_record.get("endpoint") == f"127.0.0.1:{port}"
+        and (not started or (
+            bool(bootstrap.get("package_name"))
+            and isinstance(pids, list)
+            and bool(pids)
+            and all(isinstance(pid, int) and not isinstance(pid, bool) and pid > 0 for pid in pids)
+        ))
+    ):
+        raise RuntimeToolError("Persisted Android forward ownership is incomplete or inconsistent")
+    prior = AndroidBootstrapResult(
+        adb_path=resolve_adb_path(),
+        device_serial=serial,
+        package_name=str(bootstrap.get("package_name") or ""),
+        activity_name=str(bootstrap.get("activity_name") or ""),
+        abi=str(bootstrap.get("abi") or ""),
+        host="127.0.0.1",
+        port=port,
+        remote_port=remote_port,
+        apk_path="",
+        forward_spec=f"tcp:{port}",
+        created_forward=True,
+        started_activity=started,
+        owned_pids=list(pids or []),
+    )
+    forward_only = AndroidBootstrapResult(
+        adb_path=prior.adb_path,
+        device_serial=serial,
+        package_name=prior.package_name,
+        activity_name=prior.activity_name,
+        abi=prior.abi,
+        host=prior.host,
+        port=port,
+        remote_port=remote_port,
+        apk_path="",
+        forward_spec=prior.forward_spec,
+        created_forward=True,
+    )
+    errors = cleanup_android_remote(forward_only)
+    if errors:
+        raise RuntimeToolError("Persisted Android forward cleanup failed", details={"cleanup_errors": errors})
+    return prior
+
+
+async def _retain_recovered_android_ownership(
+    current: AndroidBootstrapResult, prior: AndroidBootstrapResult, remote_server: Any,
+) -> None:
+    try:
+        await _offload(retain_android_helper_ownership, current, prior)
+    except BaseException as exc:
+        cleanup_errors = []
+        try:
+            await _offload(remote_server.ShutdownConnection)
+        except Exception as shutdown_error:
+            cleanup_errors.append(f"remote shutdown failed: {shutdown_error}")
+        try:
+            cleanup_errors.extend(await _offload(cleanup_android_remote, current))
+        except Exception as cleanup_error:
+            cleanup_errors.append(str(cleanup_error))
+        if cleanup_errors:
+            raise RuntimeToolError(
+                "Recovered Android connection cleanup failed",
+                details={"cleanup_errors": cleanup_errors},
+            ) from exc
+        raise
 
 
 def _session_replace_capability(session_id: str, controller: Any) -> Tuple[bool, str]:
@@ -4130,8 +4241,8 @@ def _session_remote_capability_matrix(
         }
 
     has_bound_shader = False
-    inspection_status = "blocked_current_session"
-    inspection_reason = "Current event has no validated bound shader for event-bound inspection."
+    inspection_status = "not_currently_probed"
+    inspection_reason = "The active event has not established a bound shader for event-bound inspection."
     if controller is not None:
         try:
             pipe = controller.GetPipelineState()
@@ -4145,8 +4256,8 @@ def _session_remote_capability_matrix(
                 inspection_status = "verified"
                 inspection_reason = "Current event exposes at least one bound shader for event-bound inspection."
             elif current_event_id > 0:
-                inspection_status = "degraded"
-                inspection_reason = "Current event resolved, but event-bound shader visibility is degraded."
+                inspection_status = "not_currently_probed"
+                inspection_reason = "The active event has no bound shader; this does not establish visibility at a different target event."
         except Exception as exc:
             inspection_status = "unstable"
             inspection_reason = f"Unable to inspect event-bound shader visibility: {exc}"
@@ -4175,7 +4286,10 @@ def _session_remote_capability_matrix(
     fix_status = "verified"
     fix_reason = "Remote session currently exposes enough surfaces for strict verification planning."
     blocked_codes: List[str] = []
-    if inspection_status not in {"verified"}:
+    if inspection_status == "not_currently_probed":
+        fix_status = "not_currently_probed"
+        fix_reason = "Inspect the intended draw event and its shader edit_plan before deciding whether fix verification is possible."
+    elif inspection_status != "verified":
         fix_status = "blocked_current_session"
         fix_reason = "Event-bound shader inspection is not currently stable enough for strict verification."
         blocked_codes.append("BLOCKED_REMOTE_SHADER_INTROSPECTION")
@@ -4606,7 +4720,6 @@ async def _pick_previewable_default_event_id(
             await _choose_visual_output_target(
                 session_id,
                 candidate_event_id,
-                allow_framebuffer_fallback=False,
             )
             return candidate_event_id
         except Exception:
@@ -5175,7 +5288,59 @@ async def _pixel_history_raw_with_timeout(
     )
 
 
-def _pixel_history_item_payload(item: Any) -> Dict[str, Any]:
+def _pixel_history_color_type(texture_desc: Any) -> str:
+    component = getattr(getattr(texture_desc, "format", None), "compType", None)
+    comp_types = getattr(_get_rd(), "CompType", None)
+    if component is None or comp_types is None:
+        return "unknown"
+    for name, value_type in (
+        ("Float", "float"), ("UNorm", "float"), ("SNorm", "float"),
+        ("UScaled", "float"), ("SScaled", "float"), ("Depth", "float"),
+        ("UNormSRGB", "float"), ("UInt", "uint"), ("SInt", "int"),
+    ):
+        if component == getattr(comp_types, name, None):
+            return value_type
+    return "unknown"
+
+
+def _pixel_history_modification_payload(value: Any, color_type: str) -> Dict[str, Any]:
+    if value is None:
+        return {"valid": False, "unavailable_reason": "native_value_missing"}
+    if not callable(getattr(value, "IsValid", None)) or not value.IsValid():
+        return {"valid": False, "unavailable_reason": "native_value_invalid"}
+
+    color = getattr(value, "col", None)
+    channel = {"float": "floatValue", "uint": "uintValue", "int": "intValue"}.get(color_type)
+    rgba = None
+    non_finite_channels: List[int] = []
+    if color is not None and channel is not None:
+        raw = getattr(color, channel, None)
+        if raw is not None:
+            rgba = []
+            for index in range(4):
+                number = float(raw[index]) if color_type == "float" else int(raw[index])
+                if color_type == "float" and not math.isfinite(number):
+                    non_finite_channels.append(index)
+                    rgba.append(None)
+                else:
+                    rgba.append(number)
+
+    depth = float(getattr(value, "depth", -1.0))
+    stencil = int(getattr(value, "stencil", -1))
+    return {
+        "valid": True,
+        "color_type": color_type,
+        "color_rgba": rgba,
+        "non_finite_channels": non_finite_channels,
+        "depth": depth if math.isfinite(depth) and depth != -1.0 else None,
+        "stencil": stencil if stencil >= 0 else None,
+        "stencil_status": "available" if stencil >= 0 else (
+            "undetermined" if stencil == -2 else "not_in_use"
+        ),
+    }
+
+
+def _pixel_history_item_payload(item: Any, color_type: str = "unknown") -> Dict[str, Any]:
     passed = bool(item.Passed()) if hasattr(item, "Passed") else False
     flags: List[str] = []
     if passed:
@@ -5198,10 +5363,17 @@ def _pixel_history_item_payload(item: Any) -> Dict[str, Any]:
         flags.append("backface_culled")
     if bool(getattr(item, "directShaderWrite", False)):
         flags.append("direct_shader_write")
+    frag_index = int(getattr(item, "fragIndex", -1))
+    pre_mod = _pixel_history_modification_payload(getattr(item, "preMod", None), color_type)
+    if frag_index > 0:
+        pre_mod = {"valid": False, "unavailable_reason": "non_first_fragment"}
     return {
         "event_id": int(getattr(item, "eventId", 0)),
         "primitive_id": int(getattr(item, "primitiveID", -1)),
-        "frag_index": int(getattr(item, "fragIndex", -1)),
+        "frag_index": frag_index,
+        "pre_mod": pre_mod,
+        "shader_out": _pixel_history_modification_payload(getattr(item, "shaderOut", None), color_type),
+        "post_mod": _pixel_history_modification_payload(getattr(item, "postMod", None), color_type),
         "passed": passed,
         "depth_test_failed": bool(getattr(item, "depthTestFailed", False)),
         "stencil_test_failed": bool(getattr(item, "stencilTestFailed", False)),
@@ -5309,6 +5481,13 @@ async def _restore_remote_handle_from_session_record(
     endpoint_host = str(remote_record.get("host") or "").strip()
     endpoint_port = _as_int(remote_record.get("port"), 0)
     origin_remote_id = str(remote_record.get("origin_remote_id") or "").strip()
+    scope = _remote_context_scope(
+        origin_remote_id,
+        origin_context_id=str(remote_record.get("origin_context_id") or ""),
+        context_id=_runtime_context_id(),
+    )
+    if scope["origin_context_id"] != scope["current_context_id"]:
+        raise RuntimeToolError("Persisted remote context ownership does not match")
     requested = _as_dict(remote_record.get("requested"), default={})
     requested_host = str(requested.get("host") or endpoint_host or "127.0.0.1").strip() or "127.0.0.1"
     requested_port = _as_int(
@@ -5319,6 +5498,16 @@ async def _restore_remote_handle_from_session_record(
     options = _as_dict(remote_record.get("options"), default={})
     bootstrap_result = None
     bootstrap_detail = _as_dict(remote_record.get("bootstrap"), default={})
+
+    if transport == "adb_android":
+        # The original request port can differ from the socket actually opened
+        # by RenderDocCmd. A persisted local forward belongs to the old
+        # connection and must not be claimed again during recovery.
+        requested_port = _as_int(
+            bootstrap_detail.get("remote_port"),
+            _as_int(options.get("remote_port"), requested_port),
+        )
+        options = {**options, "local_port": 0}
 
     if origin_remote_id and origin_remote_id in _runtime.remotes:
         live_handle = _runtime.remotes.get(origin_remote_id)
@@ -5336,11 +5525,14 @@ async def _restore_remote_handle_from_session_record(
             endpoint_host, endpoint_port = _parse_remote_endpoint(endpoint)
         endpoint_host = endpoint_host or requested_host
         endpoint_port = endpoint_port if endpoint_port > 0 else requested_port
+    prior_android = await _offload(_retire_recovery_android_forward, remote_record, _runtime_context_id()) if transport == "adb_android" else None
     bootstrap_result, remote_server, server_info = await _connect_remote_endpoint(
         "127.0.0.1" if transport == "adb_android" else endpoint_host,
         requested_port if transport == "adb_android" else endpoint_port,
         transport, {**options, "device_serial": device_serial}, remote_connect_timeout_ms({}))
     if bootstrap_result is not None:
+        if prior_android is not None:
+            await _retain_recovered_android_ownership(bootstrap_result, prior_android, remote_server)
         bootstrap_detail = describe_android_remote(bootstrap_result)
         endpoint_host, endpoint_port = bootstrap_result.host, bootstrap_result.port
         requested_host, requested_port = "127.0.0.1", bootstrap_result.remote_port
@@ -5350,6 +5542,9 @@ async def _restore_remote_handle_from_session_record(
         host=endpoint_host,
         port=endpoint_port,
         connected=True,
+        origin_context_id=scope["origin_context_id"],
+        context_locality=scope["context_locality"],
+        reuse_policy=scope["reuse_policy"],
         transport=transport,
         remote_server=remote_server,
         server_info=server_info,
@@ -5363,7 +5558,7 @@ async def _restore_remote_handle_from_session_record(
         detail={
             "connected": True,
             "transport": transport,
-            "endpoint": url,
+            "endpoint": _remote_url(endpoint_host, endpoint_port),
             "requires_remote_device": transport == "adb_android",
             "bootstrap": dict(bootstrap_detail) if bootstrap_detail else {},
         },
@@ -5453,6 +5648,9 @@ async def _recover_single_session_from_state(
             "remote_id": remote_handle_for_session.remote_id,
             "remote_server": remote_handle_for_session.remote_server,
             "close_remote_server_on_cleanup": False,
+            "bootstrap": dict(remote_handle_for_session.bootstrap or {}),
+            "bootstrap_result": remote_handle_for_session.bootstrap_result,
+            "device_serial": remote_handle_for_session.device_serial,
         }
 
     if trace_id:
@@ -5553,18 +5751,25 @@ async def _recover_single_session_from_state(
         except Exception:
             pass
         _runtime.replays.pop(str(session_id), None)
+        cleanup_errors: List[str] = []
         if remote_handle_for_session is not None:
             _release_remote_session_lease(str(session_id), context_id=ctx)
+            try:
+                cleanup_errors = await _offload(_disconnect_remote_handle_sync, remote_handle_for_session)
+            except Exception as cleanup_exc:
+                cleanup_errors = [str(cleanup_exc)]
+            if not cleanup_errors and _runtime.remotes.get(remote_handle_for_session.remote_id) is remote_handle_for_session:
+                _runtime.remotes.pop(remote_handle_for_session.remote_id, None)
         session_record["state"] = "degraded"
         session_record["is_live"] = False
-        session_record["last_error"] = str(exc)
+        session_record["last_error"] = str(exc) if not cleanup_errors else f"{exc}; remote cleanup: {'; '.join(cleanup_errors)}"
         session_record["updated_at_ms"] = _now_ms()
         session_record["recovery"] = {
             **dict(session_record.get("recovery") or {}),
             "status": "degraded",
             "last_attempt_ms": _now_ms(),
             "attempt_count": int(dict(session_record.get("recovery") or {}).get("attempt_count") or 0) + 1,
-            "last_error": str(exc),
+            "last_error": session_record["last_error"],
         }
         sessions[str(session_id)] = session_record
         state["sessions"] = sessions
@@ -5607,19 +5812,26 @@ async def _maybe_refresh_remote_session_after_revert(
         or "",
     ).strip()
 
-    live_handle = _runtime.remotes.pop(origin_remote_id, None) if origin_remote_id else None
-    if origin_remote_id:
-        _clear_context_remote_live(origin_remote_id, context_id=ctx)
+    live_handle = _runtime.remotes.get(origin_remote_id) if origin_remote_id else None
     if live_handle is None:
         live_handle = owned_handle
     if live_handle is not None:
         try:
-            await _offload(_disconnect_remote_handle_sync, live_handle)
-        except Exception:
-            logger.debug(
-                "Best-effort remote disconnect during replacement revert refresh failed",
-                exc_info=True,
+            cleanup_errors = await _offload(_disconnect_remote_handle_sync, live_handle)
+        except Exception as exc:
+            raise RuntimeToolError(
+                "Remote disconnect failed during replacement revert recovery",
+                details={"session_id": str(session_id), "error": str(exc)},
+            ) from exc
+        if cleanup_errors:
+            raise RuntimeToolError(
+                "Remote cleanup failed during replacement revert recovery",
+                details={"session_id": str(session_id), "cleanup_errors": cleanup_errors},
             )
+
+    if origin_remote_id:
+        _runtime.remotes.pop(origin_remote_id, None)
+        _clear_context_remote_live(origin_remote_id, context_id=ctx)
 
     await _recover_single_session_from_state(ctx, str(session_id))
 
@@ -6633,15 +6845,37 @@ async def _dispatch_session(action: str, args: Dict[str, Any]) -> str:
         # Release live resources before discarding the only ownership record.
         current = _context_state(requested_context)
         cleanup_errors = []
-        for sid in list(current.get("sessions", {})):
+        for sid, record in list(current.get("sessions", {}).items()):
             try:
-                await _session_manager.close_session(sid)
+                try:
+                    _session_manager.get_state(sid)
+                except SessionError as exc:
+                    # Recovery can leave a remote session deferred or degraded after
+                    # closing its native handle. Keep the durable ownership record
+                    # until all remaining remote resources are verified and released.
+                    if not (
+                        exc.detail.code == "session_not_found"
+                        and isinstance(record, dict)
+                        and record.get("backend_type") == "remote"
+                        and record.get("is_live") is False
+                        and (record.get("recovery") or {}).get("status") in {"deferred", "degraded"}
+                        and (
+                            (record.get("recovery") or {}).get("status") != "degraded"
+                            or record.get("state") == "degraded"
+                        )
+                        and not record.get("shader_replacements")
+                        and sid not in _runtime.replays
+                        and sid not in _runtime.session_owned_remotes
+                    ):
+                        raise
+                else:
+                    await _session_manager.close_session(sid)
                 _release_remote_session_lease(sid, context_id=requested_context)
                 _runtime.replays.pop(sid, None)
             except Exception as exc:
                 cleanup_errors.append(str(exc))
         if cleanup_errors:
-            return _err("Context cleanup failed", code="context_cleanup_failed", details={"cleanup_errors": cleanup_errors})
+            return _err("Context cleanup failed", code="context_cleanup_failed", details={"cleanup_errors": cleanup_errors, "cleanup_reason_code": "session_cleanup_failed"})
         for rid, handle in list(_runtime.remotes.items()):
             if normalize_context_id(handle.origin_context_id) != requested_context:
                 continue
@@ -6651,7 +6885,51 @@ async def _dispatch_session(action: str, args: Dict[str, Any]) -> str:
             else:
                 _runtime.remotes.pop(rid, None)
         if cleanup_errors:
-            return _err("Context cleanup failed", code="context_cleanup_failed", details={"cleanup_errors": cleanup_errors})
+            return _err("Context cleanup failed", code="context_cleanup_failed", details={"cleanup_errors": cleanup_errors, "cleanup_reason_code": "remote_handle_cleanup_failed"})
+        # A restarted daemon has no RemoteHandle, but the persisted snapshot
+        # still owns the exact ADB forward created by this context. Reuse the
+        # bootstrap cleanup, which verifies the current forward identity.
+        remote = dict(_context_snapshot(requested_context).get("remote") or {})
+        bootstrap = dict(remote.get("bootstrap") or {})
+        if remote.get("state") == "expired" and remote.get("transport") == "adb_android":
+            if bootstrap.get("started_activity") or bootstrap.get("created_forward"):
+                serial = str(bootstrap.get("device_serial") or "")
+                port = _as_int(bootstrap.get("port"), 0)
+                remote_port = _as_int(bootstrap.get("remote_port"), 0)
+                if not (
+                    remote.get("origin_context_id") == requested_context
+                    and serial
+                    and serial == remote.get("device_serial")
+                    and serial == (remote.get("options") or {}).get("device_serial")
+                    and port > 0
+                    and port == _as_int((remote.get("options") or {}).get("local_port"), 0)
+                    and remote_port > 0
+                    and remote_port == _as_int((remote.get("options") or {}).get("remote_port"), 0)
+                    and bootstrap.get("forward_spec") == f"tcp:{port}"
+                    and remote.get("endpoint") == f"127.0.0.1:{port}"
+                ):
+                    cleanup_errors.append("Expired ADB forward ownership is incomplete or inconsistent")
+                else:
+                    try:
+                        cleanup_errors.extend(await _offload(cleanup_android_remote, AndroidBootstrapResult(
+                            adb_path=resolve_adb_path(),
+                            device_serial=serial,
+                            package_name=str(bootstrap.get("package_name") or ""),
+                            activity_name=str(bootstrap.get("activity_name") or ""),
+                            abi=str(bootstrap.get("abi") or ""),
+                            host="127.0.0.1",
+                            port=port,
+                            remote_port=remote_port,
+                            apk_path=str(bootstrap.get("apk_path") or ""),
+                            forward_spec=f"tcp:{port}",
+                            created_forward=bool(bootstrap.get("created_forward")),
+                            started_activity=bool(bootstrap.get("started_activity")),
+                            owned_pids=[int(pid) for pid in list(bootstrap.get("owned_pids") or []) if isinstance(pid, int) and not isinstance(pid, bool) and pid > 0],
+                        )))
+                    except Exception as exc:
+                        cleanup_errors.append(str(exc))
+        if cleanup_errors:
+            return _err("Context cleanup failed", code="context_cleanup_failed", details={"cleanup_errors": cleanup_errors, "cleanup_reason_code": "expired_remote_cleanup_failed"})
         snapshot = _reset_context_snapshot(requested_context)
         state = _context_state(requested_context)
         return _ok(
@@ -7341,6 +7619,19 @@ async def _dispatch_event(action: str, args: Dict[str, Any]) -> str:
     if action == "search_actions":
         query = _parse_query_like(args.get("query"))
         max_results = _as_int(args.get("max_results"), 200)
+        flag_filters: Dict[str, List[Any]] = {}
+        action_flags = _get_rd().ActionFlags
+        for filter_name in ("flags_include", "flags_exclude"):
+            requested = query.get(filter_name, [])
+            if not isinstance(requested, list) or any(not isinstance(name, str) or not name for name in requested):
+                return _err(f"{filter_name} must be an array of ActionFlags names", code="validation_error", category="validation")
+            members = []
+            for name in requested:
+                member = getattr(action_flags, name, None)
+                if member is None:
+                    return _err(f"Unknown ActionFlags name in {filter_name}: {name}", code="validation_error", category="validation")
+                members.append(member)
+            flag_filters[filter_name] = members
         name_regex = query.get("name_regex")
         pattern = re.compile(str(name_regex)) if name_regex else None
         name_contains = str(query.get("name_contains", "")).lower().strip()
@@ -7350,6 +7641,11 @@ async def _dispatch_event(action: str, args: Dict[str, Any]) -> str:
         for action_obj in flat:
             eid = int(getattr(action_obj, "eventId", 0))
             name = _action_name(action_obj)
+            flags = getattr(action_obj, "flags", 0)
+            if any(not bool(flags & member) for member in flag_filters["flags_include"]):
+                continue
+            if any(bool(flags & member) for member in flag_filters["flags_exclude"]):
+                continue
             if event_id_min is not None and eid < int(event_id_min):
                 continue
             if event_id_max is not None and eid > int(event_id_max):
@@ -7487,7 +7783,7 @@ async def _dispatch_pipeline(action: str, args: Dict[str, Any]) -> str:
         if "output_targets" in selected:
             try:
                 _, _, visual_target_payload, truth_meta = await _resolve_visual_target_for_event(
-                    session_id, resolved_event_id, target={"semantic": "event_output"}, allow_framebuffer_fallback=True)
+                    session_id, resolved_event_id, target={"semantic": "event_output"})
             except Exception as exc:
                 visual_target_payload = {"unavailable_reason": str(exc)}
         keys = {k for section in selected for k in fields[section]}
@@ -7581,7 +7877,7 @@ async def _dispatch_pipeline(action: str, args: Dict[str, Any]) -> str:
     if action == "get_resource_bindings":
         bindings = await _pipeline_service.get_resource_bindings(
             session_id, resolved_event_id, _session_manager,
-            stage=ShaderStage(str(args["stage"]).upper()) if args.get("stage") else None)
+            stage=ShaderStage(str(args["stage"]).lower()) if args.get("stage") else None)
         binding_type = args.get("type")
         if binding_type is not None and binding_type not in {"SRV", "UAV", "CBV", "Sampler"}:
             return _err("Invalid binding type", code="validation_error")
@@ -8577,10 +8873,25 @@ async def _dispatch_texture(action: str, args: Dict[str, Any]) -> str:
 
     if action == "get_pixel_value":
         _require(args, "texture_id", "x", "y")
-        event_id = await _ensure_event(
-            session_id,
-            _as_int(args.get("event_id"), 0) if args.get("event_id") is not None else None,
-        )
+        requested_event_id = _as_int(args.get("event_id"), 0) if args.get("event_id") is not None else None
+        try:
+            event_id = await _ensure_event(session_id, requested_event_id)
+        except CoreError as exc:
+            if exc.code != "event_not_found" or requested_event_id is None:
+                raise
+            # _ensure_event validates an explicit id against the action index before SetFrameEvent.
+            # This rejection cannot have moved the replay or attempted a texture readback.
+            return _err(
+                exc.message,
+                code=exc.code,
+                category="validation",
+                details={
+                    **dict(exc.details),
+                    "failure_stage": "validate_event",
+                    "effects_attempted": False,
+                    "context_preserved": True,
+                },
+            )
         rid = await _resolve_texture_id(session_id, args["texture_id"], event_id=event_id)
         pixel = await _render_service.pick_pixel(
             session_id=session_id,
@@ -8626,7 +8937,12 @@ async def _dispatch_texture(action: str, args: Dict[str, Any]) -> str:
         if as_type != "float" and not np.isfinite(arr).all():
             return _err("Cannot convert non-finite region to integers", code="texture_nonfinite_data")
         arr = arr.astype({"float": np.float64, "uint": np.uint32, "int": np.int32}[as_type])
-        stats.update(shape=list(arr.shape), dtype=str(arr.dtype), stride=stride)
+        finite_samples = arr[np.isfinite(arr)]
+        stats.update(shape=list(arr.shape), dtype=str(arr.dtype), stride=stride,
+                     nan_count=int(np.isnan(arr).sum()), inf_count=int(np.isinf(arr).sum()),
+                     min=float(finite_samples.min()) if finite_samples.size else None,
+                     max=float(finite_samples.max()) if finite_samples.size else None,
+                     mean=float(finite_samples.mean()) if finite_samples.size else None)
         container = io.BytesIO()
         np.savez_compressed(container, pixels=arr)
         artifact_ref = await _artifact_store.store(container.getvalue(), mime="application/x-npz", suffix=".npz")
@@ -8690,9 +9006,10 @@ async def _dispatch_texture(action: str, args: Dict[str, Any]) -> str:
         event_id = await _ensure_event(session_id, _as_int(args["event_id"]) if args.get("event_id") is not None else None)
         if args.get("texture_id") is not None:
             rid = await _resolve_texture_id(session_id, args["texture_id"], event_id=event_id)
+            texture_desc = None
         else:
-            rid, _, _, _ = await _resolve_visual_target_for_event(
-                session_id, event_id, target=target, allow_framebuffer_fallback=False)
+            rid, texture_desc, _, _ = await _resolve_visual_target_for_event(
+                session_id, event_id, target=target)
         rd = _get_rd()
         sub = rd.Subresource()
         sub.mip = _as_int(args.get("mip"), 0)
@@ -8722,7 +9039,10 @@ async def _dispatch_texture(action: str, args: Dict[str, Any]) -> str:
             )
         except Exception as exc:
             return _err(f"PixelHistory unavailable: {exc}")
-        history = [_pixel_history_item_payload(item) for item in history_raw]
+        if texture_desc is None and history_raw:
+            _, texture_desc = await _get_texture_descriptor(session_id, rid, event_id=event_id)
+        color_type = _pixel_history_color_type(texture_desc)
+        history = [_pixel_history_item_payload(item, color_type) for item in history_raw]
         truth_meta = await _event_truth_metadata(session_id, int(event_id))
         return _ok(
             history=history,
@@ -9020,17 +9340,20 @@ def _shader_edit_plan(
         )
         return plan
     if encoding_key in {"spirv", "spirvasm", "openglspirv", "openglspirvasm"}:
-        plan["input_kind"] = "text_ir"
-        plan["can_edit_text"] = True
-        plan["can_build"] = True
-        plan["can_replace"] = True
-        plan["allowed_edit_inputs"] = ["source_text", "diff_text", "ops"]
-        plan["allowed_ops"] = ["force_full_precision"]
-        plan["build_input_kind"] = "binary_spirv" if encoding_key in {"spirv", "openglspirv"} else "text"
-        if encoding_key in {"spirv", "openglspirv"}:
-            plan["requires_toolchain"] = ["spirv-as"]
+        plan["input_kind"] = "source_unavailable"
+        plan["can_edit_text"] = False
+        plan["can_build"] = False
+        plan["can_replace"] = False
+        plan["allowed_edit_inputs"] = []
+        plan["allowed_ops"] = []
+        plan["build_input_kind"] = "unsupported"
+        plan["requires_toolchain"] = []
         plan["recommended_next_tool"] = "rd.shader.get_disassembly"
         plan["fallback_tools"] = ["rd.shader.get_disassembly"]
+        plan["blocked_reason"] = (
+            "Original shader source is unavailable. Request target='SPIR-V ASM' from "
+            "rd.shader.get_disassembly and inspect that result's edit_plan before replacement."
+        )
         return plan
     plan["input_kind"] = "unsupported"
     plan["recommended_next_tool"] = "rd.shader.get_disassembly"
@@ -9558,6 +9881,21 @@ async def _collect_constant_buffers(
 
 
 async def _dispatch_shader(action: str, args: Dict[str, Any]) -> str:
+    if "stage" in args:
+        requested_stage = str(args["stage"]).strip()
+        if requested_stage not in _stage_candidates():
+            return _err(
+                f"Invalid shader stage: {args['stage']}",
+                code="invalid_shader_stage",
+                category="validation",
+                details={
+                    "requested_stage": requested_stage,
+                    "allowed_stages": _stage_candidates(),
+                    "failure_stage": "validate_stage",
+                    "effects_attempted": False,
+                    "context_preserved": True,
+                },
+            )
     if action == "compile":
         session_id = str(args.get("session_id") or _context_snapshot().get("runtime", {}).get("session_id") or "").strip()
         if not session_id:
@@ -9734,6 +10072,27 @@ async def _dispatch_shader(action: str, args: Dict[str, Any]) -> str:
     _require(args, "session_id")
     session_id = str(args["session_id"])
     controller = await _get_controller(session_id)
+    if action == "get_disassembly":
+        requested_target = str(args.get("target", "auto")).strip()
+        requested_encoding = str(args.get("source_encoding") or "")
+        if requested_target and requested_target.lower() != "auto" and not PatchEngine._is_raw_spirv_asm_request(requested_target, requested_encoding):
+            targets = [str(target) for target in await _offload(controller.GetDisassemblyTargets, True)]
+            if not PatchEngine._find_matching_target(targets, requested_target):
+                return _err(
+                    f"Requested disassembly target is unavailable: {requested_target}",
+                    code="shader_disassembly_unavailable",
+                    category="validation",
+                    details={
+                        "session_id": session_id,
+                        "requested_target": requested_target,
+                        "available_targets": targets,
+                        "failure_stage": "validate_target",
+                        "failure_reason": "target_unavailable",
+                        "effects_attempted": False,
+                        "context_preserved": True,
+                    },
+                )
+    source_original_event = _active_event(session_id) if action == "get_source" else 0
     event_id = await _ensure_event(session_id, args.get("event_id"))
     pipe = await _offload(controller.GetPipelineState)
 
@@ -9888,15 +10247,16 @@ async def _dispatch_shader(action: str, args: Dict[str, Any]) -> str:
         if target:
             add_target_candidate("user.target", target)
         else:
-            add_target_candidate("default_target", {})
-        try:
-            for rid, rt_index in await _output_target_resource_ids(session_id, event_id):
-                add_target_candidate(
-                    f"event.output[{rt_index}]",
-                    {"rt_index": int(rt_index), "texture_id": str(rid)},
-                )
-        except Exception:
-            pass
+            try:
+                for rid, rt_index in await _output_target_resource_ids(session_id, event_id):
+                    add_target_candidate(
+                        f"event.output[{rt_index}]",
+                        {"rt_index": int(rt_index), "texture_id": str(rid)},
+                    )
+            except Exception:
+                pass
+            if not target_candidates:
+                add_target_candidate("default_target", {})
 
         trace = None
         attempts_log: List[Dict[str, Any]] = []
@@ -9926,7 +10286,7 @@ async def _dispatch_shader(action: str, args: Dict[str, Any]) -> str:
 
         for target_source, target_candidate in target_candidates:
             try:
-                target_rid, _, target_sub = await _configure_texture_output_for_target(
+                target_rid, target_texture_desc, target_sub = await _configure_texture_output_for_target(
                     session_id,
                     target_candidate,
                     event_id=event_id,
@@ -10013,7 +10373,8 @@ async def _dispatch_shader(action: str, args: Dict[str, Any]) -> str:
                     "error": str(exc),
                 }
             else:
-                history_items = [_pixel_history_item_payload(item) for item in history_raw]
+                color_type = _pixel_history_color_type(target_texture_desc)
+                history_items = [_pixel_history_item_payload(item, color_type) for item in history_raw]
                 history_summary = _pixel_history_summary(history_items, event_id)
 
             history_summary["target_source"] = target_source
@@ -10022,6 +10383,27 @@ async def _dispatch_shader(action: str, args: Dict[str, Any]) -> str:
             if int(history_summary.get("matched_event_hit_count", 0)) > 0:
                 matched_event_hit_seen = True
             if history_timed_out:
+                continue
+            if int(history_summary.get("matched_event_hit_count", 0)) == 0:
+                cross_event_hits = sum(
+                    1 for item in history_items
+                    if int(item.get("event_id") or 0) > 0
+                    and int(item.get("event_id") or 0) != int(event_id)
+                )
+                cross_event_rejections += cross_event_hits
+                attempts_log.append(
+                    {
+                        "target_source": target_source,
+                        "stage": "pixel_history",
+                        "resolved_context": last_context,
+                        "error": (
+                            "Cross-event shader debug fallback is not allowed for rd.shader.debug_start"
+                            if cross_event_hits else
+                            "Selected target has no pixel-history hit for the requested event"
+                        ),
+                        "matched_event_hit_count": 0,
+                    },
+                )
                 continue
             default_sample = sample_override if sample_override is not None else _subresource_to_dict(target_sub)["sample"]
             default_view = view_override if view_override is not None else 0
@@ -10136,14 +10518,12 @@ async def _dispatch_shader(action: str, args: Dict[str, Any]) -> str:
                     "primitive": int(attempt_primitive) if attempt_primitive is not None else None,
                     "target": resolved_target,
                 }
-                valid = bool(trace is not None and getattr(trace, "valid", False))
-                missing_debugger_handle = bool(
-                    trace is not None and getattr(trace, "debugger", None) is None
-                )
+                # Native ShaderDebugTrace is valid when it owns a debugger handle.
+                trace_debugger = getattr(trace, "debugger", None) if trace is not None else None
+                valid = trace_debugger is not None
+                missing_debugger_handle = trace is not None and trace_debugger is None
                 if missing_debugger_handle:
                     debugger_missing_count += 1
-                if valid and missing_debugger_handle:
-                    valid = False
                 attempts_log.append(
                     {
                         "target_source": target_source,
@@ -10172,10 +10552,10 @@ async def _dispatch_shader(action: str, args: Dict[str, Any]) -> str:
                     except Exception:
                         pass
                     trace = None
-            if trace is not None and getattr(trace, "valid", False):
+            if trace is not None and getattr(trace, "debugger", None) is not None:
                 break
 
-        if trace is None or not getattr(trace, "valid", False):
+        if trace is None or getattr(trace, "debugger", None) is None:
             failure_stage = "debug_pixel"
             failure_reason = "invalid_trace"
             error_code = "shader_debug_event_binding_unavailable"
@@ -10209,6 +10589,9 @@ async def _dispatch_shader(action: str, args: Dict[str, Any]) -> str:
             elif not matched_event_hit_seen and cross_event_rejections > 0:
                 failure_stage = "pixel_history"
                 failure_reason = "cross_event_only"
+            elif not matched_event_hit_seen:
+                failure_stage = "pixel_history"
+                failure_reason = "no_event_hit"
             elif invalid_trace_count > 0:
                 failure_stage = "debug_pixel"
                 failure_reason = "invalid_trace"
@@ -10332,6 +10715,7 @@ async def _dispatch_shader(action: str, args: Dict[str, Any]) -> str:
                     "remaining_replacements": len(remaining_replacements),
                     "error": str(exc),
                     "exception_type": type(exc).__name__,
+                    "recovery_error_code": str(getattr(exc, "code", type(exc).__name__)),
                 },
             )
         return _ok(replacement_id=replacement_id, reverted=True)
@@ -10699,7 +11083,32 @@ async def _dispatch_shader(action: str, args: Dict[str, Any]) -> str:
                 require_reflection=False,
             )
         except CoreError as exc:
-            return _err(exc.message, code=exc.code, category=exc.category, details=dict(exc.details))
+            details = dict(exc.details)
+            if exc.code == "shader_binding_lookup_failed" and source_original_event > 0:
+                try:
+                    restored_event = await _ensure_event(session_id, source_original_event)
+                    if restored_event != source_original_event or _active_event(session_id) != source_original_event:
+                        raise RuntimeError("Replay event did not match the original event after restoration")
+                except Exception as restore_error:
+                    return _err(
+                        f"Failed to restore replay after shader binding lookup failed: {restore_error}",
+                        code="shader_inspection_recovery_failed",
+                        category="runtime",
+                        details={
+                            "context_id": _runtime_context_id(),
+                            "session_id": session_id,
+                            "resolved_event_id": int(event_id),
+                            "failure_stage": "resolve_binding",
+                            "original_error_code": exc.code,
+                            "replay_state_restored": False,
+                        },
+                    )
+                details.update({
+                    "context_id": _runtime_context_id(),
+                    "replay_state_restored": True,
+                    "restored_event_id": source_original_event,
+                })
+            return _err(exc.message, code=exc.code, category=exc.category, details=details)
         source_encoding = _shader_encoding_name(getattr(reflection, "encoding", "")) if reflection is not None else ""
         edit_plan = _shader_edit_plan(
             source_encoding=source_encoding,
@@ -10862,6 +11271,10 @@ async def _dispatch_shader(action: str, args: Dict[str, Any]) -> str:
             }
             return _ok(layout=layout, shader_id=shader_id, resolved_event_id=int(event_id))
         if action == "get_reflection":
+            native_debug_info = getattr(reflection, "debugInfo", None) if reflection is not None else None
+            native_debuggable = getattr(native_debug_info, "debuggable", None)
+            native_source_debug = getattr(native_debug_info, "sourceDebugInformation", None)
+            native_debug_status = getattr(native_debug_info, "debugStatus", None)
             refl = {
                 "entry_points": [str(getattr(reflection, "entryPoint", "main"))] if reflection else [],
                 "inputs": [],
@@ -10869,6 +11282,11 @@ async def _dispatch_shader(action: str, args: Dict[str, Any]) -> str:
                 "resources": [],
                 "constant_blocks": [],
                 "samplers": [],
+                "debug_info": {
+                    "debuggable": bool(native_debuggable) if native_debuggable is not None else None,
+                    "source_debug_information": bool(native_source_debug) if native_source_debug is not None else None,
+                    "status": str(native_debug_status) if native_debug_status is not None else None,
+                },
             }
             if reflection is not None:
                 for ro in getattr(reflection, "readOnlyResources", []) or []:
@@ -11163,7 +11581,8 @@ async def _dispatch_export(action: str, args: Dict[str, Any]) -> str:
 
     if action == "screenshot":
         target = _parse_target_like(args.get("target"))
-        event_id = _as_int(args.get("event_id"), _active_event(session_id))
+        original_event = _active_event(session_id)
+        event_id = _as_int(args.get("event_id"), original_event)
         if event_id <= 0:
             event_id = await _ensure_event(session_id, None)
         explicit_target = target.get("texture_id") or target.get("textureId")
@@ -11172,25 +11591,47 @@ async def _dispatch_export(action: str, args: Dict[str, Any]) -> str:
                 session_id,
                 event_id,
                 target=target,
-                allow_framebuffer_fallback=True,
             )
         except CoreError as exc:
+            failure_message, failure_code, failure_category = exc.message, exc.code, exc.category
             details = dict(exc.details)
-            details.setdefault("session_id", session_id)
-            details.setdefault("event_id", int(event_id))
-            details.setdefault("failure_stage", "resolve_visual_target")
-            return _err(exc.message, code=exc.code, category=exc.category, details=details)
         except Exception as exc:
-            return _err(
-                f"Failed to resolve screenshot target: {exc}",
-                code="screenshot_target_unavailable",
-                category="runtime",
-                details={
-                    "session_id": session_id,
-                    "event_id": int(event_id),
-                    "failure_stage": "resolve_visual_target",
-                },
-            )
+            failure_message = f"Failed to resolve screenshot target: {exc}"
+            failure_code, failure_category = "screenshot_target_unavailable", "runtime"
+            details = {}
+        else:
+            failure_message = None
+        if failure_message is not None:
+            details["session_id"] = session_id
+            details["event_id"] = int(event_id)
+            details["failure_stage"] = "resolve_visual_target"
+            if original_event > 0:
+                try:
+                    restored_event = await _ensure_event(session_id, original_event)
+                    if restored_event != original_event or _active_event(session_id) != original_event:
+                        raise RuntimeError("Replay event did not match the original event after restoration")
+                except Exception as exc:
+                    return _err(
+                        f"Failed to restore replay after screenshot target resolution failed: {exc}",
+                        code="screenshot_target_recovery_failed",
+                        category="runtime",
+                        details={
+                            "context_id": _runtime_context_id(),
+                            "session_id": session_id,
+                            "event_id": int(event_id),
+                            "failure_stage": "resolve_visual_target",
+                            "original_error_code": failure_code,
+                            "replay_state_restored": False,
+                            "artifact_write_attempted": False,
+                        },
+                    )
+                details.update({
+                    "context_id": _runtime_context_id(),
+                    "replay_state_restored": True,
+                    "restored_event_id": original_event,
+                    "artifact_write_attempted": False,
+                })
+            return _err(failure_message, code=failure_code, category=failure_category, details=details)
         chosen_output_slot = visual_target_payload.get("output_slot") if isinstance(visual_target_payload, dict) else None
         target_source = str(visual_target_payload.get("target_source") or "") if isinstance(visual_target_payload, dict) else ""
         resolved_event_id = _as_int(
@@ -11277,13 +11718,30 @@ async def _dispatch_export(action: str, args: Dict[str, Any]) -> str:
                     category=str(payload.get("category") or "runtime"),
                     details=details,
                 )
+            export_meta = _as_dict(payload.get("meta"), default={})
+            image_width = _as_int(export_meta.get("width"), 0)
+            image_height = _as_int(export_meta.get("height"), 0)
+            if image_width <= 0 or image_height <= 0:
+                return _err(
+                    "Screenshot renderer did not report the exported image dimensions",
+                    code="screenshot_dimensions_unavailable",
+                    category="runtime",
+                    details={
+                        "session_id": session_id,
+                        "event_id": int(resolved_event_id),
+                        "texture_id": str(target_texture_id),
+                        "file_format": export_format,
+                    },
+                )
             exports.append(
                 {
                     "file_format": export_format,
                     "artifact_path": payload.get("artifact_path"),
                     "saved_path": payload.get("saved_path") or payload.get("image_path") or payload.get("artifact_path"),
                     "image_path": payload.get("image_path") or payload.get("saved_path") or payload.get("artifact_path"),
-                    "meta": payload.get("meta"),
+                    "meta": export_meta,
+                    "width": image_width,
+                    "height": image_height,
                     "binding_truth_level": payload.get("binding_truth_level"),
                     "visual_truth_level": payload.get("visual_truth_level"),
                     "evidence_truth_level": payload.get("evidence_truth_level"),
@@ -11298,8 +11756,10 @@ async def _dispatch_export(action: str, args: Dict[str, Any]) -> str:
                 saved_path=single["saved_path"],
                 image_path=single["image_path"],
                 meta=single["meta"],
-                width=int(getattr(texture_desc, "width", 0) or 0) if texture_desc is not None else 0,
-                height=int(getattr(texture_desc, "height", 0) or 0) if texture_desc is not None else 0,
+                width=single["width"],
+                height=single["height"],
+                texture_width=int(getattr(texture_desc, "width", 0) or 0) if texture_desc is not None else 0,
+                texture_height=int(getattr(texture_desc, "height", 0) or 0) if texture_desc is not None else 0,
                 resolved_event_id=int(resolved_event_id),
                 requested_event_id=int(event_id),
                 present_event_id=int(present_event_id) if present_event_id > 0 else None,
@@ -11327,8 +11787,10 @@ async def _dispatch_export(action: str, args: Dict[str, Any]) -> str:
             exports=exports,
             saved_paths=[item["saved_path"] for item in exports],
             image_paths=[item["image_path"] for item in exports],
-            width=int(getattr(texture_desc, "width", 0) or 0) if texture_desc is not None else 0,
-            height=int(getattr(texture_desc, "height", 0) or 0) if texture_desc is not None else 0,
+            width=exports[0]["width"],
+            height=exports[0]["height"],
+            texture_width=int(getattr(texture_desc, "width", 0) or 0) if texture_desc is not None else 0,
+            texture_height=int(getattr(texture_desc, "height", 0) or 0) if texture_desc is not None else 0,
             resolved_event_id=int(resolved_event_id),
             requested_event_id=int(event_id),
             present_event_id=int(present_event_id) if present_event_id > 0 else None,
@@ -11362,7 +11824,11 @@ async def _dispatch_export(action: str, args: Dict[str, Any]) -> str:
         resolved_event_id = await _ensure_event(session_id, _as_int(args.get("event_id"), 0))
         output_dir = Path(str(args["output_dir"]))
         output_dir.mkdir(parents=True, exist_ok=True)
+        include_binaries = _as_bool(args.get("include_binaries"), True)
+        include_reflection = _as_bool(args.get("include_reflection"), True)
+        include_disassembly = _as_bool(args.get("include_disassembly"), True)
         stage_payloads = []
+        failures = []
         for stage in _stage_candidates():
             shader_resp = await _dispatch_pipeline(
                 "get_shader",
@@ -11370,12 +11836,71 @@ async def _dispatch_export(action: str, args: Dict[str, Any]) -> str:
             )
             shader_payload = json.loads(shader_resp)
             if shader_payload.get("success") and shader_payload.get("shader", {}).get("shader_id"):
-                stage_payloads.append(
-                    {
-                        **dict(shader_payload["shader"]),
-                        "resolved_event_id": int(shader_payload.get("resolved_event_id") or resolved_event_id),
+                shader = dict(shader_payload["shader"])
+                shader_id = str(shader["shader_id"])
+                stage_name = str(shader.get("stage") or stage).lower()
+                entry = {
+                    **shader,
+                    "resolved_event_id": int(shader_payload.get("resolved_event_id") or resolved_event_id),
+                    "exports": {},
+                }
+                for kind, enabled, shader_action in (
+                    ("binary", include_binaries, "extract_binary"),
+                    ("reflection", include_reflection, "get_reflection"),
+                    ("disassembly", include_disassembly, "get_disassembly"),
+                ):
+                    if not enabled:
+                        continue
+                    call_args = {
+                        "session_id": session_id,
+                        "event_id": int(resolved_event_id),
+                        "stage": stage_name,
+                        "shader_id": shader_id,
                     }
-                )
+                    if kind == "binary":
+                        call_args["output_path"] = str(output_dir / f"{stage_name}-shader")
+                    elif kind == "disassembly":
+                        call_args["target"] = "auto"
+                    result = json.loads(await _dispatch_shader(shader_action, call_args))
+                    if not result.get("success"):
+                        failure = {
+                            "stage": stage_name,
+                            "kind": kind,
+                            "code": result.get("code") or "shader_export_unavailable",
+                            "message": result.get("error_message") or result.get("message") or "Shader export unavailable",
+                        }
+                        failures.append(failure)
+                        entry["exports"][kind] = {"available": False, "error": failure}
+                        continue
+                    if kind == "binary":
+                        saved_path = Path(str(result.get("saved_path") or ""))
+                        if not saved_path.is_file():
+                            failure = {"stage": stage_name, "kind": kind, "code": "shader_export_missing", "message": "Binary export returned no file"}
+                            failures.append(failure)
+                            entry["exports"][kind] = {"available": False, "error": failure}
+                            continue
+                        content = saved_path.read_bytes()
+                    else:
+                        content = (
+                            json.dumps(result.get("reflection"), ensure_ascii=False, indent=2).encode("utf-8")
+                            if kind == "reflection"
+                            else str(result.get("disassembly") or "").encode("utf-8")
+                        )
+                        if kind == "disassembly" and not content:
+                            failure = {"stage": stage_name, "kind": kind, "code": "shader_disassembly_empty", "message": "Disassembly export returned no source"}
+                            failures.append(failure)
+                            entry["exports"][kind] = {"available": False, "error": failure}
+                            continue
+                        saved_path = output_dir / f"{stage_name}-{kind}.{'json' if kind == 'reflection' else 'txt'}"
+                        saved_path.write_bytes(content)
+                    entry["exports"][kind] = {
+                        "available": True,
+                        "path": str(saved_path),
+                        "sha256": hashlib.sha256(content).hexdigest(),
+                        "size_bytes": len(content),
+                        **({"target": result.get("target"), "source_encoding": result.get("source_encoding")} if kind == "disassembly" else {}),
+                    }
+                stage_payloads.append(entry)
         if not stage_payloads:
             return _err(
                 f"No bound shaders available for event {int(resolved_event_id)}",
@@ -11390,13 +11915,15 @@ async def _dispatch_export(action: str, args: Dict[str, Any]) -> str:
                     "requested_event_id": _as_int(args.get("event_id"), 0),
                     "resolved_event_id": int(resolved_event_id),
                     "shaders": stage_payloads,
+                    "complete": not failures,
+                    "failures": failures,
                 },
                 ensure_ascii=False,
                 indent=2,
             ),
             encoding="utf-8",
         )
-        return _ok(output_dir=str(output_dir), bundle_path=str(bundle_json), resolved_event_id=int(resolved_event_id))
+        return _ok(output_dir=str(output_dir), bundle_path=str(bundle_json), resolved_event_id=int(resolved_event_id), complete=not failures, failures=failures)
     if action == "cbuffer_dump":
         _require(args, "output_dir")
         output_dir = Path(str(args["output_dir"]))
@@ -11912,6 +12439,7 @@ async def _vfs_passes_node(parts: List[str], path: str, args: Dict[str, Any]) ->
         query = {
             "event_id_min": int(selected.get("begin_event_id") or 0),
             "event_id_max": int(selected.get("end_event_id") or 0),
+            "flags_include": ["Drawcall"],
         }
         matches_payload = await _vfs_call("rd.event.search_actions", {"session_id": session_id, "query": query, "max_results": args.get("max_results") or 500})
         matches = [

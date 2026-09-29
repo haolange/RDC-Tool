@@ -63,6 +63,17 @@ function Assert-LinkFreePath {
     }
 }
 
+function Get-RdcFileSha256 {
+    param([string]$Path)
+    $stream = [IO.File]::OpenRead($Path)
+    try {
+        $sha = [Security.Cryptography.SHA256]::Create()
+        try { return [Convert]::ToBase64String($sha.ComputeHash($stream)) }
+        finally { $sha.Dispose() }
+    }
+    finally { $stream.Dispose() }
+}
+
 function Copy-RdcToolTools {
     param(
         [string]$SourceRoot,
@@ -101,6 +112,13 @@ function Copy-RdcToolTools {
         }
         else {
             New-Item -ItemType Directory -Path (Split-Path -Parent $dst) -Force | Out-Null
+            if (Test-Path -LiteralPath $dst -PathType Leaf) {
+                $existing = Get-Item -LiteralPath $dst
+                if ($_.Length -eq $existing.Length -and
+                    (Get-RdcFileSha256 -Path $src) -eq (Get-RdcFileSha256 -Path $dst)) {
+                    return
+                }
+            }
             Copy-Item -LiteralPath $src -Destination $dst -Force
         }
     }

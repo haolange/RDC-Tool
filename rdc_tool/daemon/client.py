@@ -352,11 +352,39 @@ def _remove_file_if_exists(path: Path, cleaned: list[str]) -> None:
 
 def _clear_orphan_context_artifacts(context: str, cleaned: Dict[str, list[str]]) -> None:
     ctx = _normalize_context(context)
+    if _context_has_unreleased_resources(ctx):
+        return
     _remove_file_if_exists(context_state_path(ctx), cleaned["context_files"])
     _remove_file_if_exists(context_snapshot_path(ctx), cleaned["snapshot_files"])
     _remove_file_if_exists(context_log_path(ctx), cleaned["log_files"])
     _remove_file_if_exists(_session_state_path(ctx), cleaned["session_files"])
     _remove_file_if_exists(worker_state_path(ctx), cleaned["worker_files"])
+
+
+def _context_has_unreleased_resources(context: str) -> bool:
+    """A dead daemon does not prove that its persisted native resources were released."""
+    for path in (context_state_path(context), context_snapshot_path(context)):
+        status, payload = _load_json_with_status(path)
+        if status == "invalid":
+            return True
+        if status == "missing":
+            continue
+        if path == context_state_path(context):
+            if payload.get("sessions") or payload.get("captures"):
+                return True
+            continue
+        runtime = payload.get("runtime") or {}
+        remote = payload.get("remote") or {}
+        if not isinstance(runtime, dict) or not isinstance(remote, dict):
+            return True
+        bootstrap = remote.get("bootstrap") or {}
+        if not isinstance(bootstrap, dict):
+            return True
+        if (runtime.get("session_id") or runtime.get("capture_file_id")
+                or remote.get("remote_id") or remote.get("active_session_ids")
+                or bootstrap.get("started_activity") or bootstrap.get("created_forward")):
+            return True
+    return False
 
 
 def _is_windows_process_running(pid: int) -> bool:
@@ -589,10 +617,11 @@ def cleanup_stale_daemon_states(context: Optional[str] = None) -> Dict[str, list
                     cleaned["killed_pids"].append(str(worker_pid))
                     _wait_for_pid_exit(worker_pid, 3.0)
             clear_daemon_state(ctx)
-            clear_session_state(ctx)
             clear_worker_state(ctx)
             cleaned["state_files"].append(path.name)
-            cleaned["session_files"].append(_session_state_path(ctx).name)
+            if not _context_has_unreleased_resources(ctx):
+                clear_session_state(ctx)
+                cleaned["session_files"].append(_session_state_path(ctx).name)
             continue
 
         live_contexts.add(ctx)
@@ -839,6 +868,8 @@ def clear_context(context: Optional[str] = "default") -> Tuple[bool, str, Dict[s
     state = load_daemon_state(context=chosen_ctx)
     if not state:
         cleanup_stale_daemon_states(context=chosen_ctx)
+        if _context_has_unreleased_resources(chosen_ctx):
+            return False, "context still owns resources; restart its daemon and clear it", {"context_id": chosen_ctx}
         clear_session_state(context=chosen_ctx)
         clear_context_snapshot(context=chosen_ctx)
         clear_context_state(context=chosen_ctx)
@@ -852,6 +883,8 @@ def clear_context(context: Optional[str] = "default") -> Tuple[bool, str, Dict[s
         refreshed = load_daemon_state(context=chosen_ctx)
         if refreshed:
             return False, "context clear failed", {"state": refreshed}
+        if _context_has_unreleased_resources(chosen_ctx):
+            return False, "context clear failed; persisted resources remain", {"context_id": chosen_ctx}
         clear_session_state(context=chosen_ctx)
         clear_context_snapshot(context=chosen_ctx)
         clear_context_state(context=chosen_ctx)
@@ -873,6 +906,8 @@ def clear_context(context: Optional[str] = "default") -> Tuple[bool, str, Dict[s
 
 def stop_daemon(context: Optional[str] = "default") -> Tuple[bool, str]:
     chosen_ctx = _normalize_context(context)
+    if _context_has_unreleased_resources(chosen_ctx):
+        return False, "context still owns resources; clear it before stopping the daemon"
     st = load_daemon_state(context=chosen_ctx)
     if not st:
         cleanup_stale_daemon_states(context=chosen_ctx)

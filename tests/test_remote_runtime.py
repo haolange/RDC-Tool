@@ -13,6 +13,7 @@ from rdc_tool import server
 from rdc_tool.core.session_manager import SessionManager, SessionState, _map_graphics_api
 from rdc_tool.context_snapshot import clear_context_snapshot
 from rdc_tool.models import BackendType
+from rdc_tool.runtime_state import normalize_context_state
 
 
 class DummyRemoteServer:
@@ -30,6 +31,292 @@ class DummyRemoteServer:
 
     def ShutdownConnection(self) -> None:
         self.shutdown_called = True
+
+
+def test_remote_capability_probe_does_not_block_target_draw_from_present_event(monkeypatch) -> None:
+    runtime = server.server_runtime
+    state = {
+        "backend": "remote",
+        "sessions": {"sess_target": {"backend_type": "remote", "active_event_id": 3029}},
+    }
+    monkeypatch.setattr(runtime, "_context_state", lambda _context_id: state)
+    monkeypatch.setattr(runtime, "_session_record_remote_metadata", lambda _record: {
+        "endpoint": "127.0.0.1:38960",
+        "origin_remote_id": "remote_target",
+        "origin_context_id": "default",
+    })
+    monkeypatch.setattr(runtime._runtime, "replays", {"sess_target": object()})
+    monkeypatch.setattr(runtime, "_stage_candidates", lambda: ["ps"])
+    monkeypatch.setattr(runtime, "_rd_stage", lambda stage: stage)
+    monkeypatch.setattr(runtime, "_is_null_resource_id", lambda shader: shader is None)
+    monkeypatch.setattr(runtime, "_supported_source_encoding_names", lambda _controller: ["spirv"])
+    monkeypatch.setattr(runtime, "_session_replace_capability", lambda _session_id, _controller: (True, "Available."))
+
+    class ProbeController:
+        def __init__(self, shader: object | None) -> None:
+            self.shader = shader
+
+        def GetPipelineState(self) -> SimpleNamespace:
+            return SimpleNamespace(GetShader=lambda _stage: self.shader)
+
+        def DebugPixel(self) -> None:
+            pass
+
+    at_present = runtime._session_remote_capability_matrix(
+        "sess_target", context_id="default", controller=ProbeController(None), probe_live=True,
+    )
+    assert at_present["event_bound_inspection"]["status"] == "not_currently_probed"
+    assert at_present["fix_verification"]["status"] == "not_currently_probed"
+    assert at_present["fix_verification"]["details"]["blocked_capability_codes"] == []
+    assert at_present["shader_replace"]["status"] == "verified"
+    assert at_present["shader_compile"]["status"] == "verified"
+
+    state["sessions"]["sess_target"]["active_event_id"] = 1248
+    at_target_draw = runtime._session_remote_capability_matrix(
+        "sess_target", context_id="default", controller=ProbeController(object()), probe_live=True,
+    )
+    assert at_target_draw["event_bound_inspection"]["status"] == "verified"
+    assert at_target_draw["fix_verification"]["status"] == "verified"
+
+
+def test_android_recovery_uses_discovered_socket_and_fresh_local_forward(monkeypatch) -> None:
+    runtime = server.server_runtime
+    observed = []
+
+    async def connect(host, port, transport, options, timeout_ms):
+        observed.append((host, port, transport, dict(options)))
+        bootstrap = runtime.AndroidBootstrapResult(
+            'adb-test', 'test-device', 'test-helper', '', '', '127.0.0.1',
+            62000, 39920, '', 'tcp:62000', created_forward=True,
+        )
+        return bootstrap, DummyRemoteServer(), {}
+
+    monkeypatch.setattr(runtime, '_connect_remote_endpoint', connect)
+    monkeypatch.setattr(runtime, 'describe_android_remote', lambda result: {'remote_port': result.remote_port})
+    monkeypatch.setattr(runtime, 'resolve_adb_path', lambda: 'adb-test')
+    monkeypatch.setattr(runtime, '_runtime_context_id', lambda: 'default')
+    retired = []
+    monkeypatch.setattr(runtime, 'cleanup_android_remote', lambda result: retired.append(result.forward_spec) or [])
+    monkeypatch.setattr(runtime._runtime, 'remotes', {})
+    record = {'remote': {
+        'transport': 'adb_android', 'host': '127.0.0.1', 'port': 58884,
+        'endpoint': '127.0.0.1:58884', 'origin_remote_id': 'remote_original',
+        'origin_context_id': 'default', 'device_serial': 'test-device',
+        'requested': {'host': '127.0.0.1', 'port': 38920},
+        'options': {'device_serial': 'test-device', 'local_port': 58884, 'remote_port': 39920,
+                    'install_apk': False, 'push_config': False},
+        'bootstrap': {
+            'device_serial': 'test-device', 'package_name': 'test-helper',
+            'port': 58884, 'remote_port': 39920, 'forward_spec': 'tcp:58884',
+            'created_forward': True, 'started_activity': False,
+        },
+    }}
+
+    handle = asyncio.run(runtime._restore_remote_handle_from_session_record('sess_recovery', record))
+
+    assert observed[0][:3] == ('127.0.0.1', 39920, 'adb_android')
+    assert observed[0][3]['local_port'] == 0
+    assert observed[0][3]['device_serial'] == 'test-device'
+    assert retired == ['tcp:58884']
+    assert handle.port == 62000
+    assert handle.requested_port == 39920
+    assert handle.origin_context_id == 'default'
+    async def noop(*args): pass
+    monkeypatch.setattr(runtime, '_context_state', lambda *args: {'sessions': {}})
+    monkeypatch.setattr(runtime, '_context_snapshot', lambda *args: {'remote': {'state': 'none'}})
+    monkeypatch.setattr(runtime, '_close_preview_binding', noop)
+    monkeypatch.setattr(runtime, '_reset_context_snapshot', lambda ctx: {'context_id': ctx})
+    runtime._runtime.remotes['remote_original'] = handle
+    cleared = json.loads(asyncio.run(runtime._dispatch_session('clear_context', {})))
+    assert cleared['success'] is True
+    assert retired == ['tcp:58884', 'tcp:62000']
+
+
+def test_android_snapshot_rehydration_rejects_missing_forward_ownership(monkeypatch) -> None:
+    runtime = server.server_runtime
+    observed = []
+    payload = {'remote': {
+        'remote_id': 'remote_original', 'origin_remote_id': 'remote_original',
+        'origin_context_id': 'test-context', 'transport': 'adb_android',
+        'endpoint': '127.0.0.1:58884', 'device_serial': 'test-device',
+        'requested': {'host': '127.0.0.1', 'port': 38920},
+        'options': {'local_port': 58884, 'remote_port': 39920},
+        'bootstrap': {'remote_port': 39920},
+    }}
+    async def connect(host, port, transport, options, timeout_ms):
+        observed.append((port, dict(options)))
+        bootstrap = SimpleNamespace(host='127.0.0.1', port=62000, remote_port=39920)
+        return bootstrap, DummyRemoteServer(), {}
+    monkeypatch.setattr(runtime, '_runtime_context_id', lambda: 'test-context')
+    monkeypatch.setattr(runtime, 'load_context_snapshot', lambda *args, **kwargs: payload)
+    monkeypatch.setattr(runtime, '_connect_remote_endpoint', connect)
+    monkeypatch.setattr(runtime, 'describe_android_remote', lambda result: {'remote_port': result.remote_port})
+    monkeypatch.setattr(runtime, '_set_context_remote_live', lambda *args, **kwargs: None)
+    monkeypatch.setattr(runtime._runtime, 'remotes', {})
+
+    with pytest.raises(runtime.RuntimeToolError, match='ownership is missing'):
+        asyncio.run(runtime._rehydrate_remote_handle_from_snapshot('remote_original'))
+    assert observed == []
+
+
+@pytest.mark.parametrize('forward_spec,expected_error', [
+    ('tcp:58884', False),
+    ('tcp:58885', True),
+])
+def test_android_snapshot_recovery_retires_only_verified_owned_forward(
+    monkeypatch, forward_spec, expected_error,
+) -> None:
+    runtime = server.server_runtime
+    payload = {'remote': {
+        'remote_id': 'remote_original', 'origin_remote_id': 'remote_original',
+        'origin_context_id': 'test-context', 'transport': 'adb_android',
+        'endpoint': '127.0.0.1:58884', 'device_serial': 'test-device',
+        'requested': {'host': '127.0.0.1', 'port': 39920},
+        'options': {'device_serial': 'test-device', 'local_port': 58884, 'remote_port': 39920},
+        'bootstrap': {
+            'device_serial': 'test-device', 'package_name': 'test-helper',
+            'port': 58884, 'remote_port': 39920, 'forward_spec': forward_spec,
+            'created_forward': True, 'started_activity': False,
+        },
+    }}
+    actions = []
+    async def offload(fn, *args): return fn(*args)
+    async def connect(host, port, transport, options, timeout_ms):
+        actions.append(('connect', options['local_port']))
+        return runtime.AndroidBootstrapResult(
+            'adb-test', 'test-device', 'test-helper', '', '', '127.0.0.1',
+            62000, 39920, '', 'tcp:62000', created_forward=True,
+        ), DummyRemoteServer(), {}
+    def cleanup(result):
+        actions.append(('cleanup', result.forward_spec, result.started_activity))
+        return []
+    monkeypatch.setattr(runtime, '_runtime_context_id', lambda: 'test-context')
+    monkeypatch.setattr(runtime, 'load_context_snapshot', lambda *args, **kwargs: payload)
+    monkeypatch.setattr(runtime, '_offload', offload)
+    monkeypatch.setattr(runtime, 'resolve_adb_path', lambda: 'adb-test')
+    monkeypatch.setattr(runtime, 'cleanup_android_remote', cleanup)
+    monkeypatch.setattr(runtime, '_connect_remote_endpoint', connect)
+    monkeypatch.setattr(runtime, 'describe_android_remote', lambda result: {'remote_port': result.remote_port})
+    monkeypatch.setattr(runtime, '_set_context_remote_live', lambda *args, **kwargs: None)
+    monkeypatch.setattr(runtime._runtime, 'remotes', {})
+
+    if expected_error:
+        with pytest.raises(runtime.RuntimeToolError, match='ownership is incomplete'):
+            asyncio.run(runtime._rehydrate_remote_handle_from_snapshot('remote_original'))
+        assert actions == []
+    else:
+        handle = asyncio.run(runtime._rehydrate_remote_handle_from_snapshot('remote_original'))
+        assert handle is not None and handle.port == 62000
+        assert actions == [('cleanup', 'tcp:58884', False), ('connect', 0)]
+
+
+def test_recovered_helper_ownership_requires_same_pid(monkeypatch) -> None:
+    from rdc_tool import remote_bootstrap
+
+    prior = remote_bootstrap.AndroidBootstrapResult(
+        'adb-test', 'test-device', 'test-helper', '', '', '127.0.0.1',
+        58884, 39920, '', 'tcp:58884', started_activity=True, owned_pids=[123],
+    )
+    current = remote_bootstrap.AndroidBootstrapResult(
+        'adb-test', 'test-device', 'test-helper', '', '', '127.0.0.1',
+        62000, 39920, '', 'tcp:62000',
+    )
+    monkeypatch.setattr(remote_bootstrap, '_package_pids', lambda *args: [456])
+    remote_bootstrap.retain_android_helper_ownership(current, prior)
+    assert current.started_activity is False and current.owned_pids == []
+    monkeypatch.setattr(remote_bootstrap, '_package_pids', lambda *args: [123])
+    remote_bootstrap.retain_android_helper_ownership(current, prior)
+    assert current.started_activity is True and current.owned_pids == [123]
+
+
+def test_remote_session_record_preserves_forward_cleanup_identity() -> None:
+    runtime = server.server_runtime
+    handle = runtime.RemoteHandle(
+        remote_id='remote-owned', host='127.0.0.1', port=58884,
+        connected=True, origin_context_id='owned-context', transport='adb_android',
+        device_serial='test-device', requested_port=39920,
+        bootstrap={
+            'device_serial': 'test-device', 'package_name': 'test-helper',
+            'port': 58884, 'remote_port': 39920, 'forward_spec': 'tcp:58884',
+            'created_forward': True, 'started_activity': True, 'owned_pids': [123],
+        },
+    )
+    remote = runtime._remote_session_metadata(
+        handle, remote_id=handle.remote_id, endpoint='127.0.0.1:58884',
+    )
+    assert remote['origin_context_id'] == 'owned-context'
+    assert remote['options']['device_serial'] == 'test-device'
+    assert remote['bootstrap']['forward_spec'] == 'tcp:58884'
+    assert remote['bootstrap']['created_forward'] is True
+    assert remote['bootstrap']['started_activity'] is True
+    assert remote['bootstrap']['owned_pids'] == [123]
+    persisted = normalize_context_state({
+        'sessions': {'sess-owned': {'backend_type': 'remote', 'remote': remote}},
+    }, 'owned-context')['sessions']['sess-owned']['remote']
+    assert persisted['options']['device_serial'] == 'test-device'
+    assert persisted['bootstrap']['device_serial'] == 'test-device'
+    assert persisted['bootstrap']['port'] == 58884
+    assert persisted['bootstrap']['forward_spec'] == 'tcp:58884'
+    assert persisted['bootstrap']['created_forward'] is True
+    assert persisted['bootstrap']['started_activity'] is True
+    assert persisted['bootstrap']['owned_pids'] == [123]
+
+
+def test_recovery_ownership_check_failure_releases_new_connection(monkeypatch) -> None:
+    runtime = server.server_runtime
+    current = runtime.AndroidBootstrapResult(
+        'adb-test', 'test-device', 'test-helper', '', '', '127.0.0.1',
+        62000, 39920, '', 'tcp:62000', created_forward=True,
+    )
+    prior = runtime.AndroidBootstrapResult(
+        'adb-test', 'test-device', 'test-helper', '', '', '127.0.0.1',
+        58884, 39920, '', 'tcp:58884', started_activity=True, owned_pids=[123],
+    )
+    remote = DummyRemoteServer()
+    cleaned = []
+    async def offload(fn, *args): return fn(*args)
+    def fail_ownership(*args): raise RuntimeError('ADB PID check unavailable')
+    monkeypatch.setattr(runtime, '_offload', offload)
+    monkeypatch.setattr(runtime, 'retain_android_helper_ownership', fail_ownership)
+    monkeypatch.setattr(runtime, 'cleanup_android_remote', lambda result: cleaned.append(result.forward_spec) or [])
+    with pytest.raises(RuntimeError, match='ADB PID check unavailable'):
+        asyncio.run(runtime._retain_recovered_android_ownership(current, prior, remote))
+    assert remote.shutdown_called is True
+    assert cleaned == ['tcp:62000']
+
+
+def test_revert_refresh_does_not_reconnect_after_failed_owned_cleanup(monkeypatch) -> None:
+    runtime = server.server_runtime
+    session_id = 'sess_recovery'
+    handle = SimpleNamespace(remote_id='remote_original', host='127.0.0.1', port=58884)
+    state = {'sessions': {session_id: {
+        'backend_type': 'remote',
+        'remote': {'origin_remote_id': 'remote_original'},
+    }}}
+    monkeypatch.setattr(runtime, '_runtime_context_id', lambda: 'test-context')
+    monkeypatch.setattr(runtime, '_context_state', lambda context_id: state)
+    monkeypatch.setattr(runtime._runtime, 'remotes', {'remote_original': handle})
+    monkeypatch.setattr(runtime._runtime, 'replays', {session_id: object()})
+    monkeypatch.setattr(runtime, '_release_remote_session_lease', lambda *args, **kwargs: handle)
+    monkeypatch.setattr(runtime, '_clear_context_remote_live', lambda *args, **kwargs: None)
+    monkeypatch.setattr(runtime, '_disconnect_remote_handle_sync', lambda owned: ['forward ownership changed'])
+    async def offload(fn, *args):
+        return fn(*args)
+    async def close_session(sid):
+        assert sid == session_id
+    monkeypatch.setattr(runtime, '_session_manager', SimpleNamespace(close_session=close_session))
+    monkeypatch.setattr(runtime, '_offload', offload)
+    recovered = []
+    async def recover(*args):
+        recovered.append(args)
+    monkeypatch.setattr(runtime, '_recover_single_session_from_state', recover)
+
+    with pytest.raises(runtime.RuntimeToolError, match='Remote cleanup failed'):
+        asyncio.run(runtime._maybe_refresh_remote_session_after_revert(
+            session_id, remaining_replacements=[],
+        ))
+    assert recovered == []
+    assert runtime._runtime.remotes['remote_original'] is handle
 
 
 class _OkStatus:
@@ -779,6 +1066,93 @@ def test_clear_context_closes_only_owned_remotes_and_retains_failed_ownership(mo
     assert runtime._runtime.remotes['foreign'] is foreign
     assert ('owned' in runtime._runtime.remotes) is bool(cleanup_errors)
     assert resets == ([] if cleanup_errors else ['clear-test'])
+
+
+@pytest.mark.parametrize(
+    'record_live,forward_identity_valid,cleanup_error,recovery_status,started_activity,owned_pids,expected_success',
+    [
+        (False, True, False, 'deferred', False, [], True),
+        (False, True, False, 'degraded', False, [], True),
+        (False, False, False, 'deferred', False, [], False),
+        (False, True, True, 'deferred', False, [], False),
+        (True, True, False, 'deferred', False, [], False),
+        (False, True, False, 'deferred', True, [123], True),
+        (False, True, False, 'deferred', True, [], False),
+    ],
+)
+def test_clear_context_deferred_remote_releases_only_verified_owned_forward(
+    monkeypatch, record_live, forward_identity_valid, cleanup_error, recovery_status, started_activity, owned_pids, expected_success,
+):
+    runtime = server.server_runtime
+    from rdc_tool.core.session_manager import SessionError
+
+    context_id = 'deferred-context'
+    session_id = 'deferred-session'
+    serial = 'test-android-device'
+    record = {
+        'backend_type': 'remote',
+        'is_live': record_live,
+        'state': recovery_status,
+        'recovery': {'status': recovery_status},
+        'shader_replacements': [],
+    }
+    remote = {
+        'state': 'expired',
+        'transport': 'adb_android',
+        'origin_context_id': context_id,
+        'device_serial': serial,
+        'endpoint': '127.0.0.1:57885',
+        'options': {'device_serial': serial, 'local_port': 57885, 'remote_port': 39920},
+        'bootstrap': {
+            'device_serial': serial,
+            'port': 57885,
+            'remote_port': 39920,
+            'forward_spec': 'tcp:57885' if forward_identity_valid else 'tcp:57886',
+            'created_forward': True,
+            'started_activity': started_activity,
+            'owned_pids': owned_pids,
+        },
+    }
+    class MissingManager:
+        def get_state(self, sid):
+            assert sid == session_id
+            raise SessionError('session_not_found', 'No live native session')
+        async def close_session(self, sid):
+            pytest.fail('Missing native session must not be closed again')
+    monkeypatch.setattr(runtime, '_session_manager', MissingManager())
+    monkeypatch.setattr(runtime, '_runtime_context_id', lambda: context_id)
+    monkeypatch.setattr(runtime, '_context_state', lambda *a: {'sessions': {session_id: record}})
+    monkeypatch.setattr(runtime, '_context_snapshot', lambda *a: {'remote': remote})
+    monkeypatch.setattr(runtime._runtime, 'remotes', {})
+    monkeypatch.setattr(runtime._runtime, 'replays', {})
+    monkeypatch.setattr(runtime._runtime, 'session_owned_remotes', {})
+    async def noop(*a): pass
+    async def offload(fn, *args): return fn(*args)
+    monkeypatch.setattr(runtime, '_close_preview_binding', noop)
+    monkeypatch.setattr(runtime, '_offload', offload)
+    monkeypatch.setattr(runtime, 'resolve_adb_path', lambda: 'adb-test')
+    cleanups = []
+    def cleanup(result):
+        cleanups.append(result)
+        return ['forward identity changed'] if cleanup_error else (
+            ['helper process identity unknown'] if result.started_activity and not result.owned_pids else []
+        )
+    monkeypatch.setattr(runtime, 'cleanup_android_remote', cleanup)
+    resets = []
+    monkeypatch.setattr(runtime, '_reset_context_snapshot', lambda ctx: resets.append(ctx) or {'context_id': ctx})
+
+    result = json.loads(asyncio.run(runtime._dispatch_session('clear_context', {})))
+    assert result['success'] is expected_success
+    if not expected_success:
+        assert result['details']['cleanup_reason_code'] in {'session_cleanup_failed', 'expired_remote_cleanup_failed'}
+    assert len(cleanups) == (1 if not record_live and forward_identity_valid else 0)
+    if cleanups:
+        assert (cleanups[0].device_serial, cleanups[0].forward_spec, cleanups[0].remote_port) == (
+            serial, 'tcp:57885', 39920,
+        )
+        assert cleanups[0].started_activity is started_activity
+        assert cleanups[0].owned_pids == owned_pids
+    assert resets == ([context_id] if expected_success else [])
 
 
 def test_android_transfer_does_not_break_rpc_with_native_copy_attempt(monkeypatch):

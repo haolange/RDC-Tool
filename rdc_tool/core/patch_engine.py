@@ -1799,7 +1799,7 @@ class PatchEngine:
                     "rd.shader.extract_binary; do not pass disassembly text to edit_and_replace."
                 ),
             }
-        return {
+        plan = {
             "shader_format": {
                 "source_encoding": normalized,
                 "container": normalized or "unknown",
@@ -1819,6 +1819,13 @@ class PatchEngine:
                 "rd.shader.edit_and_replace."
             ),
         }
+        if normalized in {"spirv", "openglspirv"}:
+            plan["recommended_next_tool"] = "rd.shader.get_disassembly"
+            plan["blocked_reason"] = (
+                "This RenderDoc SPIR-V disassembly is read-only. Request target='SPIR-V ASM' "
+                "and inspect that result's edit_plan before attempting replacement."
+            )
+        return plan
 
     @staticmethod
     def _assemble_spirv_asm(source: str) -> bytes:

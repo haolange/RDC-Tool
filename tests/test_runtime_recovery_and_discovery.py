@@ -96,6 +96,8 @@ class _FakeRecoveryPatchEngine:
 def _reset_runtime_state() -> None:
     original_captures = dict(server._runtime.captures)
     original_replays = dict(server._runtime.replays)
+    original_remotes = dict(server._runtime.remotes)
+    original_session_owned_remotes = dict(server._runtime.session_owned_remotes)
     original_context_snapshots = dict(server._runtime.context_snapshots)
     original_context_states = dict(server._runtime.context_states)
     original_hydrated = set(server._runtime.hydrated_contexts)
@@ -109,6 +111,8 @@ def _reset_runtime_state() -> None:
     clear_context_state("default")
     server._runtime.captures.clear()
     server._runtime.replays.clear()
+    server._runtime.remotes.clear()
+    server._runtime.session_owned_remotes.clear()
     server._runtime.context_snapshots.clear()
     server._runtime.context_states.clear()
     server._runtime.hydrated_contexts.clear()
@@ -121,6 +125,8 @@ def _reset_runtime_state() -> None:
         clear_context_state("default")
         server._runtime.captures = original_captures
         server._runtime.replays = original_replays
+        server._runtime.remotes = original_remotes
+        server._runtime.session_owned_remotes = original_session_owned_remotes
         server._runtime.context_snapshots = original_context_snapshots
         server._runtime.context_states = original_context_states
         server._runtime.hydrated_contexts = original_hydrated
@@ -571,6 +577,7 @@ def test_session_resume_restores_persisted_remote_session_and_metadata(
     )
     fake_controller = _FakeRecoveryController([101, 202, 303])
     fake_manager = _FakeRecoverySessionManager(controller=fake_controller)
+    fake_bootstrap_result = SimpleNamespace(adb_path="adb", device_serial="e38b8019")
     fake_remote = server.RemoteHandle(
         remote_id="remote_origin",
         host="127.0.0.1",
@@ -584,6 +591,7 @@ def test_session_resume_restores_persisted_remote_session_and_metadata(
             "remote_port": 38920,
             "abi": "arm64-v8a",
         },
+        bootstrap_result=fake_bootstrap_result,
         requested_host="127.0.0.1",
         requested_port=38920,
         device_serial="e38b8019",
@@ -622,6 +630,9 @@ def test_session_resume_restores_persisted_remote_session_and_metadata(
             "remote_id": "remote_origin",
             "remote_server": fake_remote.remote_server,
             "close_remote_server_on_cleanup": False,
+            "bootstrap": fake_remote.bootstrap,
+            "bootstrap_result": fake_bootstrap_result,
+            "device_serial": "e38b8019",
         }
     ]
     assert fake_controller.set_calls == [202]
@@ -631,6 +642,62 @@ def test_session_resume_restores_persisted_remote_session_and_metadata(
     state = server.server_runtime._context_state("default")
     assert state["sessions"]["sess_remote"]["remote"]["device_serial"] == "e38b8019"
     assert state["sessions"]["sess_remote"]["remote"]["origin_remote_id"] == "remote_origin"
+
+
+@pytest.mark.parametrize("cleanup_errors", [[], ["forward ownership changed"]])
+def test_failed_remote_recovery_releases_or_retains_verified_handle(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, cleanup_errors: list[str],
+) -> None:
+    capture_path = tmp_path / "remote_failure.rdc"
+    capture_path.write_bytes(b"rdc")
+    save_context_state({
+        "context_id": "default",
+        "captures": {"capf_failure": {"file_path": str(capture_path)}},
+        "sessions": {"sess_failure": {
+            "session_id": "sess_failure", "capture_file_id": "capf_failure",
+            "rdc_path": str(capture_path), "backend_type": "remote",
+            "state": "degraded", "is_live": False,
+            "remote": {"origin_remote_id": "remote_failure", "transport": "adb_android"},
+        }},
+    }, "default")
+    runtime = server.server_runtime
+    remote = SimpleNamespace(
+        remote_id="remote_failure", host="127.0.0.1", port=62486,
+        transport="adb_android", detail={"endpoint": "127.0.0.1:62486"},
+        remote_server=object(), bootstrap={}, bootstrap_result=object(),
+        device_serial="test-device",
+    )
+    async def restore_capture(*_args: object) -> SimpleNamespace:
+        return SimpleNamespace(file_path=str(capture_path))
+    async def restore_remote(*_args: object) -> SimpleNamespace:
+        return remote
+    async def fail_create(**_kwargs: object) -> None:
+        raise RuntimeError("capture transfer failed")
+    async def close_session(_session_id: str) -> None:
+        return None
+    async def offload(fn: object, *args: object) -> object:
+        return fn(*args)
+    cleaned: list[object] = []
+    def disconnect(handle: object) -> list[str]:
+        cleaned.append(handle)
+        return cleanup_errors
+    monkeypatch.setattr(runtime, "_restore_capture_handle_from_state", restore_capture)
+    monkeypatch.setattr(runtime, "_restore_remote_handle_from_session_record", restore_remote)
+    monkeypatch.setattr(runtime, "_session_manager", SimpleNamespace(
+        get_state=lambda _sid: (_ for _ in ()).throw(SessionError("session_not_found", "missing")),
+        create_session=fail_create, close_session=close_session,
+    ))
+    monkeypatch.setattr(runtime, "_offload", offload)
+    monkeypatch.setattr(runtime, "_disconnect_remote_handle_sync", disconnect)
+
+    with pytest.raises(RuntimeError, match="capture transfer failed"):
+        asyncio.run(runtime._recover_single_session_from_state("default", "sess_failure"))
+
+    assert cleaned == [remote]
+    assert (runtime._runtime.remotes.get("remote_failure") is remote) is bool(cleanup_errors)
+    record = runtime._context_state("default")["sessions"]["sess_failure"]
+    assert record["state"] == "degraded" and record["is_live"] is False
+    assert ("remote cleanup:" in record["last_error"]) is bool(cleanup_errors)
 
 
 def test_context_snapshot_preserves_remote_session_recovery_metadata(tmp_path: Path) -> None:

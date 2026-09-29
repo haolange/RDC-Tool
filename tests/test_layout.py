@@ -3,8 +3,21 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_event_shader_inspection_uses_one_canonical_stage_vocabulary() -> None:
+    from rdc_tool.runtime_catalog import describe_operation, validate_operation_arguments
+
+    for operation in ("rd.pipeline.get_shader", "rd.shader.get_disassembly"):
+        stage = describe_operation(operation)["input_schema"]["properties"]["stage"]
+        assert stage["enum"] == ["vs", "hs", "ds", "gs", "ps", "cs", "ms", "as"]
+        validate_operation_arguments(operation, {"session_id": "sess_demo", "stage": "ps", "event_id": 1248})
+        with pytest.raises(ValueError, match="must be one of"):
+            validate_operation_arguments(operation, {"session_id": "sess_demo", "stage": "pixel", "event_id": 1248})
 
 
 def test_catalog_has_unique_tools_and_declared_count() -> None:
@@ -16,6 +29,20 @@ def test_catalog_has_unique_tools_and_declared_count() -> None:
     assert len(names) == declared_count
     assert len(set(names)) == len(names)
     assert all(n.startswith("rd.") for n in names)
+
+
+def test_read_only_replay_queries_do_not_claim_a_position_change() -> None:
+    from rdc_tool.operation_definitions import OPERATIONS
+
+    effects = {item["name"]: item["effects"] for item in OPERATIONS}
+    for name in (
+        "rd.event.get_active",
+        "rd.event.get_action_details",
+        "rd.resource.get_details",
+    ):
+        assert effects[name] == []
+    assert "replay_position" in effects["rd.event.set_active"]
+    assert "replay_position" in effects["rd.export.screenshot"]
 
 
 def test_catalog_uses_repo_relative_source_path_and_readable_groups() -> None:

@@ -489,6 +489,19 @@ def test_revert_replacement_surfaces_remote_refresh_failure(
     assert payload["details"]["exception_type"] == "RuntimeError"
 
 
+def test_catalog_explains_targeted_spirv_precision_patch() -> None:
+    from rdc_tool.runtime_catalog import describe_operation, validate_operation_arguments
+
+    tool = describe_operation("rd.shader.edit_and_replace")
+    description = tool["input_schema"]["properties"]["ops"]["description"]
+    assert '"variables":["493"]' in description
+    assert "only OpDecorate %493 RelaxedPrecision" in description
+    validate_operation_arguments("rd.shader.edit_and_replace", {
+        "session_id": "sess_example", "stage": "ps", "event_id": 1,
+        "ops": [{"op": "force_full_precision", "variables": ["493"]}],
+    })
+
+
 def test_edit_and_replace_returns_capability_failure_without_mock_success(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -594,9 +607,57 @@ def test_get_source_reports_ir_fallback_when_debug_source_unavailable(monkeypatc
     assert payload["fallback_args"]["target"] == "SPIR-V ASM"
     assert payload["fallback_args"]["source_encoding"] == "spirvasm"
     assert payload["fallback_args"]["shader_id"] == "ResourceId::77"
-    assert payload["edit_plan"]["input_kind"] == "text_ir"
+    assert payload["edit_plan"]["input_kind"] == "source_unavailable"
     assert payload["edit_plan"]["recommended_next_tool"] == "rd.shader.get_disassembly"
-    assert payload["edit_plan"]["allowed_ops"] == ["force_full_precision"]
+    assert payload["edit_plan"]["can_replace"] is False
+    assert payload["edit_plan"]["allowed_ops"] == []
+    assert "target='SPIR-V ASM'" in payload["edit_plan"]["blocked_reason"]
+
+
+@pytest.mark.parametrize("restore_fails", [False, True])
+def test_get_source_unbound_event_proves_restoration_or_reports_failure(
+    monkeypatch: pytest.MonkeyPatch, restore_fails: bool,
+) -> None:
+    current_event = {"value": 1248}
+    transitions: list[int] = []
+
+    class Controller(_SupportedController):
+        def GetPipelineState(self) -> SimpleNamespace:
+            return SimpleNamespace(
+                GetShader=lambda _stage: "ResourceId::0" if current_event["value"] == 3029 else "ResourceId::77",
+                GetShaderReflection=lambda _stage: SimpleNamespace(entryPoint="main"),
+            )
+
+    _install_shader_replace_env(monkeypatch, Controller())
+
+    async def set_event(_session_id: str, event_id: int | None) -> int:
+        requested = int(event_id or 0)
+        transitions.append(requested)
+        if restore_fails and requested == 1248:
+            raise RuntimeError("native restore failed")
+        current_event["value"] = requested
+        return requested
+
+    monkeypatch.setattr(server.server_runtime, "_ensure_event", set_event)
+    monkeypatch.setattr(server.server_runtime, "_active_event", lambda _session_id: current_event["value"])
+    monkeypatch.setattr(server.server_runtime, "_runtime_context_id", lambda: "owned-context")
+    payload = json.loads(asyncio.run(server._dispatch_shader(
+        "get_source", {"session_id": "sess_demo", "event_id": 3029, "stage": "ps"},
+    )))
+
+    assert payload["success"] is False
+    assert transitions == [3029, 1248]
+    assert payload["details"]["context_id"] == "owned-context"
+    assert payload["details"]["session_id"] == "sess_demo"
+    if restore_fails:
+        assert payload["code"] == "shader_inspection_recovery_failed"
+        assert payload["details"]["replay_state_restored"] is False
+        assert current_event["value"] == 3029
+    else:
+        assert payload["code"] == "shader_binding_lookup_failed"
+        assert payload["details"]["replay_state_restored"] is True
+        assert payload["details"]["restored_event_id"] == 1248
+        assert current_event["value"] == 1248
 
 
 def test_get_source_reports_dxil_readonly_fallback_when_debug_source_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1548,6 +1609,55 @@ def test_revert_patch_rebinds_target_event(monkeypatch: pytest.MonkeyPatch) -> N
     assert controller.set_frame_event_calls[-1] == (314, True)
 
 
+def test_get_disassembly_rejects_unknown_target_before_replay_effects(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _TargetsController(_SupportedController):
+        def GetDisassemblyTargets(self, include_custom: bool) -> list[str]:
+            assert include_custom is True
+            return ["SPIR-V ASM", "GLSL"]
+
+    _install_shader_replace_env(monkeypatch, _TargetsController())
+
+    async def _unexpected_ensure_event(session_id: str, event_id: int | None) -> int:
+        raise AssertionError("validation must not set a replay event")
+
+    monkeypatch.setattr(server.server_runtime, "_ensure_event", _unexpected_ensure_event)
+    payload = json.loads(asyncio.run(server._dispatch_shader(
+        "get_disassembly", {"session_id": "sess_demo", "event_id": 101, "stage": "ps", "target": "unknown"},
+    )))
+
+    assert payload["success"] is False
+    assert payload["code"] == "shader_disassembly_unavailable"
+    assert payload["category"] == "validation"
+    assert payload["details"]["effects_attempted"] is False
+    assert payload["details"]["context_preserved"] is True
+    assert payload["details"]["available_targets"] == ["SPIR-V ASM", "GLSL"]
+
+
+@pytest.mark.parametrize("action", ["get_source", "get_disassembly", "compile", "edit_and_replace"])
+def test_shader_operations_reject_noncanonical_stage_before_replay_effects(
+    monkeypatch: pytest.MonkeyPatch, action: str,
+) -> None:
+    async def _unexpected_get_controller(session_id: str) -> object:
+        raise AssertionError("stage validation must precede controller access")
+
+    async def _unexpected_ensure_event(session_id: str, event_id: int | None) -> int:
+        raise AssertionError("stage validation must not set a replay event")
+
+    monkeypatch.setattr(server.server_runtime, "_get_controller", _unexpected_get_controller)
+    monkeypatch.setattr(server.server_runtime, "_ensure_event", _unexpected_ensure_event)
+    payload = json.loads(asyncio.run(server._dispatch_shader(
+        action, {"session_id": "sess_demo", "event_id": 101, "stage": "pixel"},
+    )))
+
+    assert payload["success"] is False
+    assert payload["code"] == "invalid_shader_stage"
+    assert payload["category"] == "validation"
+    assert payload["details"]["requested_stage"] == "pixel"
+    assert payload["details"]["allowed_stages"] == ["vs", "hs", "ds", "gs", "ps", "cs", "ms", "as"]
+    assert payload["details"]["effects_attempted"] is False
+    assert payload["details"]["context_preserved"] is True
+
+
 def test_get_disassembly_reports_raw_spirv_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_shader_replace_env(monkeypatch, _SupportedController())
     server.server_runtime._session_manager = _FakeSessionManager()
@@ -1580,6 +1690,15 @@ def test_get_disassembly_reports_raw_spirv_metadata(monkeypatch: pytest.MonkeyPa
     assert payload["edit_plan"]["input_kind"] == "text_ir"
     assert payload["edit_plan"]["can_replace"] is True
     assert payload["edit_plan"]["allowed_ops"] == ["force_full_precision"]
+
+
+def test_renderdoc_spirv_view_points_to_raw_asm_without_claiming_editability() -> None:
+    plan = patch_engine_mod.PatchEngine._edit_plan_for_source(
+        encoding_name="SPIRV", disassembly_target="SPIR-V (RenderDoc)", source="SPIR-V 1.0 module",
+    )
+    assert plan["can_replace"] is False
+    assert plan["recommended_next_tool"] == "rd.shader.get_disassembly"
+    assert "target='SPIR-V ASM'" in plan["blocked_reason"]
 
 
 def test_get_disassembly_reports_dxil_readonly_edit_plan(monkeypatch: pytest.MonkeyPatch) -> None:

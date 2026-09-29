@@ -50,6 +50,27 @@ def test_upgrade_removes_owned_launchers_and_preserves_unrelated_files(tmp_path)
     assert (target / 'notes.txt').read_text() == 'keep'
 
 
+def test_upgrade_skips_identical_runtime_files_and_updates_changed_files(tmp_path):
+    source, target = tmp_path / 'source', tmp_path / 'target'
+    for root in (source, target):
+        (root / 'cli').mkdir(parents=True)
+        (root / 'cli/run_cli.py').write_text('entry', encoding='utf-8')
+        (root / 'binaries').mkdir()
+        (root / 'binaries/python.exe').write_bytes(b'unchanged runtime')
+        (root / 'rdc_tool').mkdir()
+    (source / 'rdc_tool/operation.py').write_text('updated', encoding='utf-8')
+    (target / 'rdc_tool/operation.py').write_text('previous', encoding='utf-8')
+    unchanged = target / 'binaries/python.exe'
+    os.utime(unchanged, (946684800, 946684800))
+    before = unchanged.stat().st_mtime_ns
+
+    result = powershell(installer_functions() + f"Copy-RdcToolTools -SourceRoot '{source}' -TargetRoot '{target}'")
+
+    assert result.returncode == 0, result.stderr
+    assert unchanged.stat().st_mtime_ns == before
+    assert (target / 'rdc_tool/operation.py').read_text(encoding='utf-8') == 'updated'
+
+
 def test_thin_launcher_forwards_unicode_json_cwd_and_exit(tmp_path):
     root = tmp_path / 'space 中文'
     (root / 'bin').mkdir(parents=True)

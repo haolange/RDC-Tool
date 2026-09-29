@@ -114,11 +114,19 @@ class CoreEngine:
                     collect_artifact_candidates(raw),
                     remote=ctx.remote,
                 )
+                source_meta = raw.get("meta")
+                if not isinstance(source_meta, dict):
+                    source_meta = {}
                 return canonical_success(
                     result_kind=str(operation),
                     data=data,
                     artifacts=artifacts,
                     projections=dict(raw.get("projections") or {}),
+                    meta={
+                        key: value
+                        for key, value in source_meta.items()
+                        if key not in {"trace_id", "transport", "duration_ms"}
+                    },
                     trace_id=ctx.trace_id,
                     transport=ctx.transport,
                 )

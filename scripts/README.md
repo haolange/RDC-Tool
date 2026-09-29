@@ -25,4 +25,4 @@ bash scripts/smoke_cli.sh --rdc "C:/path/sample.rdc" --context cli-smoke
 
 `preview_geometry_smoke.py` validates preview window geometry and should stay aligned with CLI preview behavior.
 
-`rdc_tool_install.ps1` handles install, upgrade, uninstall, and doctor for self-contained Windows x64 release packages. Use `-DryRun` before mutating a real machine PATH.
+`rdc_tool_install.ps1` handles install, upgrade, uninstall, and doctor for self-contained Windows x64 release packages. Upgrade compares existing files by size and SHA-256 and leaves byte-identical files untouched, including an in-use bundled Python executable. A changed file that is locked still fails the upgrade; verify the installed catalog and code after retrying. Use `-DryRun` before mutating a real machine PATH.

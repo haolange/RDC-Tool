@@ -6,6 +6,7 @@ import os
 import contextvars
 import threading
 import re
+import shlex
 import shutil
 import socket
 import subprocess
@@ -392,6 +393,71 @@ def _write_renderdoc_conf(package_name: str) -> Path:
     return config_path
 
 
+def _ensure_renderdoc_conf(result: AndroidBootstrapResult) -> None:
+    sdk_probe = _adb_shell(
+        result.adb_path,
+        result.device_serial,
+        "getprop",
+        "ro.build.version.sdk",
+        timeout_s=10.0,
+        error_code="android_sdk_probe_failed",
+        error_message="Failed to query Android SDK level for RenderDoc config path",
+    )
+    sdk_text = sdk_probe.stdout.strip()
+    if not sdk_text.isascii() or not sdk_text.isdigit() or int(sdk_text) < 1:
+        raise AndroidRemoteBootstrapError(
+            "android_sdk_probe_failed",
+            "Android SDK level is missing or invalid",
+            details={"sdk_level": sdk_text},
+        )
+    # Match RenderDoc's Android FileIO::GetTempRootPath: SDK 30+ uses Android/media.
+    storage_dir = "media" if int(sdk_text) >= 30 else "data"
+    remote_dir = f"/sdcard/Android/{storage_dir}/{result.package_name}/files"
+    remote_conf = f"{remote_dir}/renderdoc.conf"
+    quoted_path = shlex.quote(remote_conf)
+    probe = _adb_shell(
+        result.adb_path,
+        result.device_serial,
+        f"if [ -f {quoted_path} ]; then printf existing; "
+        f"elif [ -e {quoted_path} ]; then printf invalid; else printf missing; fi",
+        timeout_s=15.0,
+        error_code="android_config_probe_failed",
+        error_message="Failed to inspect remote RenderDoc config",
+    )
+    state = probe.stdout.strip()
+    if state == "existing":
+        result.config_remote_path = remote_conf
+        return
+    if state != "missing":
+        raise AndroidRemoteBootstrapError(
+            "android_config_probe_failed",
+            "Remote RenderDoc config is not a regular file or its state is unknown",
+            details={"config_remote_path": remote_conf, "state": state},
+        )
+
+    config_path = _write_renderdoc_conf(result.package_name)
+    result.config_local_path = str(config_path)
+    _adb_shell(
+        result.adb_path,
+        result.device_serial,
+        "mkdir",
+        "-p",
+        remote_dir,
+        timeout_s=15.0,
+        error_code="android_config_push_failed",
+        error_message="Failed to create remote RenderDoc config directory",
+    )
+    _run_subprocess(
+        _adb_base_cmd(result.adb_path, result.device_serial) + ["push", str(config_path), remote_conf],
+        timeout_s=30.0,
+        error_code="android_config_push_failed",
+        error_message="Failed to push renderdoc.conf to Android device",
+    )
+    result.config_remote_path = remote_conf
+    result.pushed_config = True
+    result.cleanup_actions.append("config-pushed")
+
+
 def _adb_shell(adb_path: str, device_serial: str, *args: str, timeout_s: float, error_code: str, error_message: str) -> subprocess.CompletedProcess[str]:
     cmd = _adb_base_cmd(adb_path, device_serial)
     cmd.extend(["shell", *args])
@@ -571,29 +637,7 @@ def _prepare_android_service_steps(result: AndroidBootstrapResult, opts: Android
             _ensure_android_helper_installed(adb_path, device.serial, package_name, str(apk_path), result)
 
         if opts.push_config:
-            config_path = _write_renderdoc_conf(package_name)
-            result.config_local_path = str(config_path)
-            remote_dir = f"/sdcard/Android/data/{package_name}/files"
-            remote_conf = f"{remote_dir}/renderdoc.conf"
-            _adb_shell(
-                adb_path,
-                device.serial,
-                "mkdir",
-                "-p",
-                remote_dir,
-                timeout_s=15.0,
-                error_code="android_config_push_failed",
-                error_message="Failed to create remote RenderDoc config directory",
-            )
-            _run_subprocess(
-                _adb_base_cmd(adb_path, device.serial) + ["push", str(config_path), remote_conf],
-                timeout_s=30.0,
-                error_code="android_config_push_failed",
-                error_message="Failed to push renderdoc.conf to Android device",
-            )
-            result.config_remote_path = remote_conf
-            result.pushed_config = True
-            result.cleanup_actions.append("config-pushed")
+            _ensure_renderdoc_conf(result)
 
 
         launch_error: AndroidRemoteBootstrapError | None = None
@@ -754,6 +798,21 @@ def cleanup_android_remote(result: AndroidBootstrapResult) -> list[str]:
     return errors
 
 
+def retain_android_helper_ownership(result: AndroidBootstrapResult, prior: AndroidBootstrapResult) -> None:
+    """Carry an owned helper across a fresh forward only while its PID identity is unchanged."""
+    if (
+        result.started_activity
+        or not prior.started_activity
+        or not prior.owned_pids
+        or result.device_serial != prior.device_serial
+        or result.package_name != prior.package_name
+    ):
+        return
+    if _package_pids(result.adb_path, result.device_serial, result.package_name) == prior.owned_pids:
+        result.started_activity = True
+        result.owned_pids = list(prior.owned_pids)
+
+
 def describe_android_remote(result: AndroidBootstrapResult) -> dict[str, object]:
     return {
         "transport": "adb_android",
@@ -770,6 +829,7 @@ def describe_android_remote(result: AndroidBootstrapResult) -> dict[str, object]
         "installed_apk": result.installed_apk,
         "pushed_config": result.pushed_config,
         "started_activity": result.started_activity,
+        "owned_pids": list(result.owned_pids),
         "created_forward": result.created_forward,
         "install_mode": result.install_mode,
         "install_reason": result.install_reason,

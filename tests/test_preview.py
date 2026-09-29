@@ -392,7 +392,6 @@ def test_choose_visual_output_target_uses_event_binding_texture_when_outputs_are
         server.server_runtime._choose_visual_output_target(
             "sess-preview",
             66,
-            allow_framebuffer_fallback=False,
         )
     )
 
@@ -427,7 +426,6 @@ def test_choose_visual_output_target_honors_requested_rt_index(
             "sess-preview",
             1847,
             target={"rt_index": 0},
-            allow_framebuffer_fallback=False,
         )
     )
 
@@ -451,12 +449,34 @@ def test_choose_visual_output_target_rejects_missing_explicit_rt_index(
                 "sess-preview",
                 1847,
                 target={"rt_index": 0},
-                allow_framebuffer_fallback=True,
             )
         )
 
     assert getattr(exc_info.value, "code", "") == "preview_event_output_unavailable"
     assert "requested RT slot 0" in str(getattr(exc_info.value, "message", ""))
+
+
+def test_choose_visual_output_target_rejects_unrelated_texture_when_event_has_no_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _no_output_targets(session_id: str, event_id: int):  # type: ignore[no-untyped-def]
+        return []
+
+    async def _no_event_bindings(session_id: str, event_id: int):  # type: ignore[no-untyped-def]
+        return []
+
+    async def _unexpected_descriptor(*args: object, **kwargs: object):  # type: ignore[no-untyped-def]
+        raise AssertionError("an unrelated texture must never become framebuffer evidence")
+
+    monkeypatch.setattr(server.server_runtime, "_output_target_resource_ids", _no_output_targets)
+    monkeypatch.setattr(server.server_runtime, "_binding_texture_candidates_for_event", _no_event_bindings)
+    monkeypatch.setattr(server.server_runtime, "_get_texture_descriptor", _unexpected_descriptor)
+
+    with pytest.raises(Exception) as exc_info:
+        asyncio.run(server.server_runtime._choose_visual_output_target("sess-preview", 3029))
+
+    assert getattr(exc_info.value, "code", "") == "preview_event_output_unavailable"
+    assert "no previewable output target" in str(getattr(exc_info.value, "message", ""))
 
 
 def test_choose_visual_output_target_defaults_to_rt0_before_visual_scoring(
@@ -500,7 +520,6 @@ def test_choose_visual_output_target_defaults_to_rt0_before_visual_scoring(
         server.server_runtime._choose_visual_output_target(
             "sess-preview",
             1847,
-            allow_framebuffer_fallback=False,
         )
     )
 
@@ -547,7 +566,6 @@ def test_choose_visual_output_target_scores_available_slot_when_rt0_is_missing(
         server.server_runtime._choose_visual_output_target(
             "sess-preview",
             1847,
-            allow_framebuffer_fallback=False,
         )
     )
 
@@ -732,7 +750,6 @@ def test_export_screenshot_falls_back_when_swapchain_target_is_unavailable(
         event_id: int,
         *,
         target=None,
-        allow_framebuffer_fallback=True,
     ):
         return (
             "ResourceId::777",
@@ -796,6 +813,47 @@ def test_export_screenshot_falls_back_when_swapchain_target_is_unavailable(
     assert "swapchain_target_unavailable" in payload["summary_degraded_reasons"]
 
 
+def test_export_screenshot_fails_when_swapchain_and_event_target_are_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    async def _no_swapchain(session_id: str, requested_event_id: int):  # type: ignore[no-untyped-def]
+        raise server.server_runtime._preview_error(
+            "swapchain_target_unavailable",
+            "no present usage",
+            context_id="default",
+            session_id=session_id,
+            event_id=requested_event_id,
+        )
+
+    async def _no_event_target(session_id: str, event_id: int, *, target=None):  # type: ignore[no-untyped-def]
+        raise server.server_runtime._preview_error(
+            "preview_event_output_unavailable",
+            "no event output or binding",
+            context_id="default",
+            session_id=session_id,
+            event_id=event_id,
+        )
+
+    monkeypatch.setattr(server.server_runtime, "_resolve_swapchain_present_target", _no_swapchain)
+    monkeypatch.setattr(server.server_runtime, "_choose_visual_output_target", _no_event_target)
+
+    output = tmp_path / "unavailable.png"
+    payload = json.loads(asyncio.run(server.server_runtime._dispatch_export("screenshot", {
+        "session_id": "sess-preview",
+        "event_id": 103,
+        "file_format": "png",
+        "output_path": str(output),
+        "target": {"semantic": "swapchain"},
+    })))
+
+    assert payload["success"] is False
+    assert payload["code"] == "preview_event_output_unavailable"
+    assert payload["details"]["failure_stage"] == "resolve_visual_target"
+    assert payload["details"]["swapchain_error"]["code"] == "swapchain_target_unavailable"
+    assert not output.exists()
+
+
 def test_export_screenshot_event_output_semantic_preserves_visual_selection(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -811,7 +869,6 @@ def test_export_screenshot_event_output_semantic_preserves_visual_selection(
         event_id: int,
         *,
         target=None,
-        allow_framebuffer_fallback=True,
     ):
         return (
             "ResourceId::event",
@@ -884,7 +941,6 @@ def test_export_screenshot_preserves_event_binding_target_source(
         event_id: int,
         *,
         target=None,
-        allow_framebuffer_fallback=True,
     ):
         return (
             "ResourceId::777",
@@ -961,7 +1017,6 @@ def test_export_screenshot_returns_structured_save_texture_failure(
         event_id: int,
         *,
         target=None,
-        allow_framebuffer_fallback=True,
     ):
         return (
             "ResourceId::777",
@@ -1274,3 +1329,55 @@ def test_preview_docs_and_catalog_are_synchronized() -> None:
     if frameworks_root.is_dir():
         cli_mode = (frameworks_root / "common" / "docs" / "cli-mode-reference.md").read_text(encoding="utf-8-sig")
         assert "session preview on|off|status" in cli_mode
+
+
+@pytest.mark.parametrize(
+    "original_event, restore_fails, expected_proof",
+    [(11, False, True), (11, True, False), (0, False, False)],
+)
+def test_export_screenshot_target_failure_restores_original_event(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    original_event: int,
+    restore_fails: bool,
+    expected_proof: bool,
+) -> None:
+    state = {"event": original_event}
+    runtime = server.server_runtime
+    monkeypatch.setattr(runtime, "_active_event", lambda _session_id: state["event"])
+
+    async def _missing_target(session_id: str, event_id: int, *, target=None):  # type: ignore[no-untyped-def]
+        state["event"] = event_id
+        raise runtime._preview_error(
+            "preview_event_output_unavailable", "No target",
+            context_id="default", session_id=session_id, event_id=event_id,
+        )
+
+    async def _restore(_session_id: str, event_id: int) -> int:
+        if restore_fails:
+            raise RuntimeError("native restore failed")
+        state["event"] = event_id
+        return event_id
+
+    monkeypatch.setattr(runtime, "_resolve_visual_target_for_event", _missing_target)
+    monkeypatch.setattr(runtime, "_ensure_event", _restore)
+    output = tmp_path / "missing.png"
+    payload = json.loads(asyncio.run(runtime._dispatch_export("screenshot", {
+        "session_id": "sess-preview", "event_id": 103,
+        "output_path": str(output), "target": {"semantic": "event_output"},
+    })))
+
+    assert payload["success"] is False
+    assert not output.exists()
+    if expected_proof:
+        assert payload["code"] == "preview_event_output_unavailable"
+        assert payload["details"]["replay_state_restored"] is True
+        assert payload["details"]["restored_event_id"] == original_event
+        assert payload["details"]["artifact_write_attempted"] is False
+        assert state["event"] == original_event
+    elif restore_fails:
+        assert payload["code"] == "screenshot_target_recovery_failed"
+        assert payload["details"]["replay_state_restored"] is False
+    else:
+        assert payload["code"] == "preview_event_output_unavailable"
+        assert "replay_state_restored" not in payload["details"]

@@ -14,7 +14,7 @@ from multiprocessing.connection import Listener
 from pathlib import Path
 from typing import Any, Dict
 
-from rdc_tool.context_snapshot import clear_context_snapshot
+from rdc_tool.context_snapshot import clear_context_snapshot, load_context_snapshot
 from rdc_tool.daemon.client import (
     DEFAULT_IDLE_TIMEOUT_S,
     DEFAULT_LEASE_TIMEOUT_S,
@@ -97,6 +97,14 @@ def _is_process_running(pid: int) -> bool:
         return bool(code.value == 259)
     finally:
         ctypes.windll.kernel32.CloseHandle(handle)
+
+
+def _context_has_owned_resources(context: str) -> bool:
+    state = load_context_state(context)
+    if state.get("sessions") or state.get("captures"):
+        return True
+    remote = load_context_snapshot(context).get("remote") or {}
+    return remote.get("state") in {"live_handle", "session_owned", "expired"}
 
 
 class DaemonRuntime(ProgressSink):
@@ -557,7 +565,8 @@ class DaemonRuntime(ProgressSink):
                         reason = f"owner pid {owner_pid} lost and lease expired"
                     if not should_stop and not attached and active_request_count == 0:
                         idle_ms = self.idle_timeout_seconds * 1000
-                        if last_activity_ms > 0 and (now_ms - last_activity_ms) >= idle_ms:
+                        if last_activity_ms > 0 and (now_ms - last_activity_ms) >= idle_ms \
+                                and not _context_has_owned_resources(self.daemon_context):
                             should_stop = True
                             reason = f"idle timeout exceeded ({self.idle_timeout_seconds}s)"
                 self._persist_state()

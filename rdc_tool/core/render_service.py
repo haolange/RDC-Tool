@@ -631,12 +631,24 @@ class RenderService:
                 "texture_id": str(resolved_id),
                 "file_format": fmt,
                 "byte_size": byte_size,
+                "export_method": "SaveTexture",
                 "subresource": {
                     "mip": int(getattr(save_data, "mip", 0)),
                     "slice": int(getattr(save_data.slice, "sliceIndex", 0)),
                     "sample": int(getattr(save_data.sample, "sampleIndex", 0)),
                 },
             }
+            if fmt in {"png", "jpg"}:
+                try:
+                    from PIL import Image
+
+                    with Image.open(target_path) as saved_image:
+                        meta["image_width"], meta["image_height"] = saved_image.size
+                except Exception as exc:
+                    raise RuntimeToolError(
+                        "SaveTexture created an image whose pixel dimensions could not be read",
+                        details={"file_format": fmt, "output_path": str(target_path), "failure_stage": "saved_image_dimensions"},
+                    ) from exc
             artifact_ref = await artifact_store.store_file(
                 target_path,
                 mime=mime,
@@ -710,28 +722,50 @@ class RenderService:
         # Decode declared regular components; byte count alone cannot identify a format.
         import re
         format_name = str(tex_desc.format.Name()).upper()
-        components = re.findall(r"([RGBA])(8|16|32|64)", format_name)
-        if not components or len({bits for _, bits in components}) != 1:
-            raise ValueError(f"Unsupported texture readback format: {format_name}")
-        width, count = int(components[0][1]) // 8, len(components)
-        if "FLOAT" in format_name:
-            kind = "f"
-        elif "SINT" in format_name or "SNORM" in format_name:
-            kind = "i"
-        elif any(token in format_name for token in ("UINT", "UNORM", "SRGB")):
-            kind = "u"
+        if format_name == "R11G11B10_FLOAT":
+            expected_bytes = tex_width * tex_height * 4
+            if len(raw_data) != expected_bytes:
+                raise ValueError(f"Texture readback size mismatch: expected {expected_bytes}, received {len(raw_data)}")
+            packed = np.frombuffer(raw_data, dtype="<u4").reshape(tex_height, tex_width)
+
+            def decode_unsigned_float(bits: Any, mantissa_bits: int) -> Any:
+                mantissa_mask = (1 << mantissa_bits) - 1
+                exponent = bits >> mantissa_bits
+                mantissa = bits & mantissa_mask
+                scale = float(1 << mantissa_bits)
+                normal = np.ldexp(1.0 + mantissa / scale, exponent.astype(np.int32) - 15)
+                subnormal = np.ldexp(mantissa.astype(np.float64), -14 - mantissa_bits)
+                return np.where(exponent == 31, np.where(mantissa == 0, np.inf, np.nan),
+                                np.where(exponent == 0, subnormal, normal))
+
+            arr = np.stack((
+                decode_unsigned_float(packed & 0x7FF, 6),
+                decode_unsigned_float((packed >> 11) & 0x7FF, 6),
+                decode_unsigned_float((packed >> 22) & 0x3FF, 5),
+            ), axis=-1)
         else:
-            raise ValueError(f"Unsupported texture component type: {format_name}")
-        expected_bytes = tex_width * tex_height * count * width
-        if len(raw_data) != expected_bytes:
-            raise ValueError(f"Texture readback size mismatch: expected {expected_bytes}, received {len(raw_data)}")
-        arr = np.frombuffer(raw_data, dtype=np.dtype(f"<{kind}{width}")).reshape(tex_height, tex_width, count)
-        if "UNORM" in format_name or "SRGB" in format_name:
-            arr = arr.astype(np.float64) / np.iinfo(arr.dtype).max
-        elif "SNORM" in format_name:
-            arr = np.maximum(arr.astype(np.float64) / np.iinfo(arr.dtype).max, -1.0)
-        if components[0][0] == "B" and count >= 3:
-            arr = arr[..., [2, 1, 0, *range(3, count)]]
+            components = re.findall(r"([RGBA])(8|16|32|64)", format_name)
+            if not components or len({bits for _, bits in components}) != 1:
+                raise ValueError(f"Unsupported texture readback format: {format_name}")
+            width, count = int(components[0][1]) // 8, len(components)
+            if "FLOAT" in format_name:
+                kind = "f"
+            elif "SINT" in format_name or "SNORM" in format_name:
+                kind = "i"
+            elif any(token in format_name for token in ("UINT", "UNORM", "SRGB")):
+                kind = "u"
+            else:
+                raise ValueError(f"Unsupported texture component type: {format_name}")
+            expected_bytes = tex_width * tex_height * count * width
+            if len(raw_data) != expected_bytes:
+                raise ValueError(f"Texture readback size mismatch: expected {expected_bytes}, received {len(raw_data)}")
+            arr = np.frombuffer(raw_data, dtype=np.dtype(f"<{kind}{width}")).reshape(tex_height, tex_width, count)
+            if "UNORM" in format_name or "SRGB" in format_name:
+                arr = arr.astype(np.float64) / np.iinfo(arr.dtype).max
+            elif "SNORM" in format_name:
+                arr = np.maximum(arr.astype(np.float64) / np.iinfo(arr.dtype).max, -1.0)
+            if components[0][0] == "B" and count >= 3:
+                arr = arr[..., [2, 1, 0, *range(3, count)]]
         if region:
             rx, ry = int(region.get("x", 0)), int(region.get("y", 0))
             rw, rh = int(region.get("width", tex_width-rx)), int(region.get("height", tex_height-ry))

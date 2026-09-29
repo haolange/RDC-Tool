@@ -190,6 +190,12 @@ def _get_api_specific_state(controller: Any, rd_api: Any) -> Any:
 # ---------------------------------------------------------------------------
 
 
+def _enum_label(value: Any) -> str:
+    """Expose RenderDoc enum semantics without guessing at unknown numeric values."""
+    projected = native_value(value)
+    return projected if isinstance(projected, str) else f"unknown({projected})"
+
+
 def _extract_blend_state(api_state: Any, api: GraphicsAPI) -> List[BlendState]:
     """Internal helper."""
     blends: List[BlendState] = []
@@ -209,14 +215,14 @@ def _extract_blend_state(api_state: Any, api: GraphicsAPI) -> List[BlendState]:
         for b in raw_blends:
             blends.append(BlendState(
                 enabled=bool(b.enabled),
-                src_color=str(b.colorBlend.source),
-                dst_color=str(b.colorBlend.destination),
-                color_op=str(b.colorBlend.operation),
-                src_alpha=str(b.alphaBlend.source),
-                dst_alpha=str(b.alphaBlend.destination),
-                alpha_op=str(b.alphaBlend.operation),
+                src_color=_enum_label(b.colorBlend.source),
+                dst_color=_enum_label(b.colorBlend.destination),
+                color_op=_enum_label(b.colorBlend.operation),
+                src_alpha=_enum_label(b.alphaBlend.source),
+                dst_alpha=_enum_label(b.alphaBlend.destination),
+                alpha_op=_enum_label(b.alphaBlend.operation),
                 write_mask=int(b.writeMask) if hasattr(b, "writeMask") else None,
-                logic_op=str(b.logicOperation) if hasattr(b, "logicOperation") else None,
+                logic_op=_enum_label(b.logicOperation) if hasattr(b, "logicOperation") else None,
                 logic_op_enabled=bool(b.logicOperationEnabled) if hasattr(b, "logicOperationEnabled") else None,
             ))
     except (AttributeError, TypeError) as exc:
@@ -245,7 +251,7 @@ def _extract_depth_stencil(api_state: Any, api: GraphicsAPI) -> DepthStencilStat
     else:
         raise ValueError("Unsupported graphics API depth/stencil state")
     return DepthStencilState(depth_test_enabled=bool(depth_enable), depth_write_enabled=bool(depth_write),
-        depth_func=str(depth_function), stencil_enabled=bool(stencil_enable),
+        depth_func=_enum_label(depth_function), stencil_enabled=bool(stencil_enable),
         front=native_value(raw.frontFace), back=native_value(raw.backFace), details=native_value(raw))
 
 

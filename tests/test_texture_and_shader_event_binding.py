@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -23,6 +24,11 @@ class _FakeShaderPipe:
             readOnlyResources=[],
             readWriteResources=[],
             constantBlocks=[],
+            debugInfo=SimpleNamespace(
+                debuggable=False,
+                sourceDebugInformation=False,
+                debugStatus="The shader uses an unsupported test feature.",
+            ),
         )
 
     def GetGraphicsPipelineObject(self) -> str:
@@ -148,6 +154,63 @@ def test_texture_event_bound_tools_respect_explicit_event_id(monkeypatch: pytest
     assert "artifact_path" not in stats_payload
     assert stats_payload["texture_id"] == "ResourceId::178817"
     assert seen_events == [314, 314]
+
+
+def test_region_values_stats_describe_exported_stride_samples(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    source = np.full((4, 4, 3), 0.5, dtype=np.float32)
+    source[1, 1, 0] = 7.5
+    artifact_path = tmp_path / "sampled.npz"
+
+    async def _fake_read_texture_array(
+        session_id: str,
+        event_id: int,
+        texture_id: str,
+        session_manager: object,
+        subresource: dict[str, int],
+        *,
+        region: dict[str, int],
+    ) -> tuple[np.ndarray, dict[str, object]]:
+        assert region == {"x": 0, "y": 0, "width": 4, "height": 4}
+        return source, {"shape": [4, 4, 3], "max": 7.5}
+
+    async def _fake_store(data: bytes, *, mime: str, suffix: str) -> SimpleNamespace:
+        assert mime == "application/x-npz" and suffix == ".npz"
+        artifact_path.write_bytes(data)
+        return SimpleNamespace(sha256="sampled")
+
+    async def _fake_ensure_event(session_id: str, event_id: int | None) -> int:
+        return int(event_id or 0)
+
+    async def _fake_resolve_texture_id(session_id: str, texture_id: object, *, event_id: int | None = None) -> str:
+        return str(texture_id)
+
+    async def _fake_event_truth_metadata(session_id: str, event_id: int) -> dict[str, object]:
+        return {"binding_truth_level": "binding_degraded", "evidence_truth_level": "structured_readback"}
+
+    monkeypatch.setattr(server.server_runtime, "_ensure_event", _fake_ensure_event)
+    monkeypatch.setattr(server.server_runtime, "_resolve_texture_id", _fake_resolve_texture_id)
+    monkeypatch.setattr(server.server_runtime, "_event_truth_metadata", _fake_event_truth_metadata)
+    monkeypatch.setattr(server.server_runtime, "_artifact_store", SimpleNamespace(store=_fake_store, get_path=lambda sha: artifact_path))
+    server.server_runtime._session_manager = SimpleNamespace()
+    server.server_runtime._render_service = SimpleNamespace(read_texture_array=_fake_read_texture_array)
+
+    payload = json.loads(asyncio.run(server._dispatch_texture("get_region_values", {
+        "session_id": "sess_demo",
+        "event_id": 314,
+        "texture_id": "tex-a",
+        "rect": {"x": 0, "y": 0, "w": 4, "h": 4},
+        "stride": 2,
+    })))
+
+    assert payload["success"] is True
+    assert payload["values_path"] == str(artifact_path)
+    with np.load(io.BytesIO(artifact_path.read_bytes())) as artifact:
+        exported = artifact["pixels"]
+    assert exported.shape == (2, 2, 3)
+    assert np.all(exported == 0.5)
+    assert payload["stats"]["shape"] == [2, 2, 3]
+    assert payload["stats"]["stride"] == 2
+    assert payload["stats"]["min"] == payload["stats"]["max"] == payload["stats"]["mean"] == 0.5
 
 
 def test_texture_histogram_and_diff_reuse_memory_readback_without_artifacts(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -291,13 +354,13 @@ def test_texture_histogram_and_diff_fail_closed_and_serialize_identical_psnr(mon
     assert diff_nonfinite["success"] is False and diff_nonfinite["code"] == "texture_nonfinite_data"
 
 
-def test_pixel_history_resolves_explicit_output_target_without_framebuffer_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_pixel_history_resolves_explicit_output_target(monkeypatch: pytest.MonkeyPatch) -> None:
     class _Subresource:
         mip = 0
         slice = 0
         sample = 0
 
-    resolution_calls: list[tuple[int, dict[str, int], bool]] = []
+    resolution_calls: list[tuple[int, dict[str, int]]] = []
 
     async def _fake_get_controller(session_id: str) -> object:
         return object()
@@ -310,13 +373,19 @@ def test_pixel_history_resolves_explicit_output_target_without_framebuffer_fallb
         event_id: int,
         *,
         target: dict[str, int],
-        allow_framebuffer_fallback: bool,
     ) -> tuple[str, object, dict[str, object], dict[str, object]]:
-        resolution_calls.append((event_id, dict(target), allow_framebuffer_fallback))
-        return "ResourceId::rt1", object(), {}, {}
+        resolution_calls.append((event_id, dict(target)))
+        return "ResourceId::rt1", SimpleNamespace(format=SimpleNamespace(compType=1)), {}, {}
 
     async def _fake_history(*args: object) -> list[object]:
-        return []
+        value = SimpleNamespace(
+            IsValid=lambda: True,
+            col=SimpleNamespace(floatValue=[0.1, 0.2, 0.3, 1.0]),
+            depth=-1.0,
+            stencil=-1,
+        )
+        return [SimpleNamespace(eventId=77, primitiveID=5, fragIndex=0,
+                                Passed=lambda: True, preMod=value, shaderOut=value, postMod=value)]
 
     async def _fake_truth(session_id: str, event_id: int) -> dict[str, object]:
         return {"binding_truth_level": "binding_verified", "summary_degraded_reasons": []}
@@ -326,7 +395,8 @@ def test_pixel_history_resolves_explicit_output_target_without_framebuffer_fallb
     monkeypatch.setattr(server.server_runtime, "_resolve_visual_target_for_event", _fake_resolve_visual_target_for_event)
     monkeypatch.setattr(server.server_runtime, "_pixel_history_raw_with_timeout", _fake_history)
     monkeypatch.setattr(server.server_runtime, "_event_truth_metadata", _fake_truth)
-    monkeypatch.setattr(server.server_runtime, "_get_rd", lambda: SimpleNamespace(Subresource=_Subresource))
+    monkeypatch.setattr(server.server_runtime, "_get_rd", lambda: SimpleNamespace(
+        Subresource=_Subresource, CompType=SimpleNamespace(Float=1)))
     server.server_runtime._render_service = object()
 
     payload = json.loads(
@@ -355,8 +425,52 @@ def test_pixel_history_resolves_explicit_output_target_without_framebuffer_fallb
     assert payload["success"] is True
     assert payload["texture_id"] == "ResourceId::rt1"
     assert payload["resolved_event_id"] == 77
-    assert resolution_calls == [(77, {"rt_index": 1}, False)]
+    assert payload["history"][0]["shader_out"]["color_rgba"] == [0.1, 0.2, 0.3, 1.0]
+    assert payload["history"][0]["pre_mod"]["valid"] is True
+    assert resolution_calls == [(77, {"rt_index": 1})]
     assert conflict["success"] is False and conflict["code"] == "validation_error"
+
+
+def test_pixel_history_preserves_native_modification_values(monkeypatch: pytest.MonkeyPatch) -> None:
+    runtime = server.server_runtime
+    comp_types = SimpleNamespace(Float=1, UNorm=2, SNorm=3, UInt=4, SInt=5,
+                                 UScaled=6, SScaled=7, Depth=8, UNormSRGB=9)
+    monkeypatch.setattr(runtime, "_get_rd", lambda: SimpleNamespace(CompType=comp_types))
+
+    float_target = SimpleNamespace(format=SimpleNamespace(compType=comp_types.Float))
+    assert runtime._pixel_history_color_type(float_target) == "float"
+    uint_target = SimpleNamespace(format=SimpleNamespace(compType=comp_types.UInt))
+    assert runtime._pixel_history_color_type(uint_target) == "uint"
+    assert runtime._pixel_history_color_type(object()) == "unknown"
+
+    def modification(*, valid: bool, depth: float, stencil: int) -> SimpleNamespace:
+        return SimpleNamespace(
+            IsValid=lambda: valid,
+            col=SimpleNamespace(floatValue=[0.25, float("nan"), 0.75, 1.0],
+                                uintValue=[1, 2, 3, 4]),
+            depth=depth,
+            stencil=stencil,
+        )
+
+    item = SimpleNamespace(
+        eventId=72, primitiveID=3, fragIndex=0, Passed=lambda: True,
+        preMod=modification(valid=True, depth=-1.0, stencil=-2),
+        shaderOut=modification(valid=True, depth=0.4, stencil=2),
+        postMod=modification(valid=False, depth=0.5, stencil=3),
+    )
+    payload = runtime._pixel_history_item_payload(item, "float")
+    assert payload["pre_mod"] == {
+        "valid": True, "color_type": "float", "color_rgba": [0.25, None, 0.75, 1.0],
+        "non_finite_channels": [1], "depth": None, "stencil": None,
+        "stencil_status": "undetermined",
+    }
+    assert payload["shader_out"]["depth"] == 0.4
+    assert payload["shader_out"]["stencil"] == 2
+    assert payload["post_mod"] == {"valid": False, "unavailable_reason": "native_value_invalid"}
+    item.fragIndex = 1
+    second_fragment = runtime._pixel_history_item_payload(item, "uint")
+    assert second_fragment["pre_mod"] == {"valid": False, "unavailable_reason": "non_first_fragment"}
+    assert second_fragment["shader_out"]["color_rgba"] == [1, 2, 3, 4]
 
 
 def test_shader_reflection_and_disassembly_support_stage_only_queries(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -409,11 +523,57 @@ def test_shader_reflection_and_disassembly_support_stage_only_queries(monkeypatc
     assert reflection_payload["resolved_event_id"] == 314
     assert reflection_payload["shader_id"] == "ResourceId::77"
     assert reflection_payload["reflection"]["entry_points"] == ["main"]
+    assert reflection_payload["reflection"]["debug_info"] == {
+        "debuggable": False,
+        "source_debug_information": False,
+        "status": "The shader uses an unsupported test feature.",
+    }
     assert disassembly_payload["success"] is True
     assert disassembly_payload["resolved_event_id"] == 314
     assert disassembly_payload["shader_id"] == "ResourceId::77"
     assert disassembly_payload["target"] == "mock-target"
     assert disassembly_payload["disassembly"] == "disassembly:mock-target"
+
+    monkeypatch.setattr(
+        _FakeShaderPipe,
+        "GetShaderReflection",
+        lambda self, stage: SimpleNamespace(
+            entryPoint="main", readOnlyResources=[], readWriteResources=[], constantBlocks=[]
+        ),
+    )
+    missing_debug_payload = json.loads(
+        asyncio.run(
+            server._dispatch_shader(
+                "get_reflection", {"session_id": "sess_demo", "event_id": 314, "stage": "ps"}
+            )
+        )
+    )
+    assert missing_debug_payload["reflection"]["debug_info"] == {
+        "debuggable": None,
+        "source_debug_information": None,
+        "status": None,
+    }
+
+    monkeypatch.setattr(
+        _FakeShaderPipe,
+        "GetShaderReflection",
+        lambda self, stage: SimpleNamespace(
+            entryPoint="main", readOnlyResources=[], readWriteResources=[], constantBlocks=[],
+            debugInfo=SimpleNamespace(debuggable=True),
+        ),
+    )
+    partial_debug_payload = json.loads(
+        asyncio.run(
+            server._dispatch_shader(
+                "get_reflection", {"session_id": "sess_demo", "event_id": 314, "stage": "ps"}
+            )
+        )
+    )
+    assert partial_debug_payload["reflection"]["debug_info"] == {
+        "debuggable": True,
+        "source_debug_information": None,
+        "status": None,
+    }
 
 
 def test_shader_get_constant_buffer_contents_returns_decoded_payload(monkeypatch: pytest.MonkeyPatch) -> None:

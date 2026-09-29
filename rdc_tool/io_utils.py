@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import secrets
 import shutil
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, TextIO
+from typing import Any, Callable, TextIO
 
 
 class AtomicWriteError(RuntimeError):
@@ -29,16 +30,27 @@ def _sanitize_json_value(payload: Any) -> Any:
             return payload
         except UnicodeEncodeError:
             return payload.encode("utf-8", errors="backslashreplace").decode("utf-8")
+    if isinstance(payload, float) and not math.isfinite(payload):
+        if math.isnan(payload):
+            return "NaN"
+        return "Infinity" if payload > 0 else "-Infinity"
     return payload
 
 
-def safe_json_text(payload: Any, *, indent: int | None = None, sort_keys: bool = False) -> str:
+def safe_json_text(
+    payload: Any,
+    *,
+    indent: int | None = None,
+    sort_keys: bool = False,
+    default: Callable[[Any], Any] = str,
+) -> str:
     return json.dumps(
         _sanitize_json_value(payload),
         ensure_ascii=False,
         indent=indent,
         sort_keys=sort_keys,
-        default=str,
+        default=lambda value: _sanitize_json_value(default(value)),
+        allow_nan=False,
     )
 
 

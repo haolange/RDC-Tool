@@ -1,4 +1,5 @@
 from types import SimpleNamespace as NS
+from enum import IntEnum
 
 import pytest
 
@@ -32,6 +33,33 @@ def test_blend_write_mask_and_logic_are_not_discarded():
     after = pipeline._extract_blend_state(state, GraphicsAPI.D3D12)[0]
     assert before != after
     assert after.write_mask == 0 and after.logic_op_enabled and after.logic_op == 'Copy'
+
+
+def test_native_blend_and_depth_enums_keep_their_names():
+    class Multiplier(IntEnum):
+        Zero = 0
+        SrcAlpha = 6
+        InvSrcAlpha = 7
+
+    class Operation(IntEnum):
+        Add = 0
+
+    class Compare(IntEnum):
+        GreaterEqual = 5
+
+    equation = NS(source=Multiplier.SrcAlpha, destination=Multiplier.InvSrcAlpha,
+                  operation=Operation.Add)
+    blend = NS(enabled=True, colorBlend=equation, alphaBlend=equation,
+               writeMask=15, logicOperation=Operation.Add)
+    state = NS(colorBlend=NS(blends=[blend]), depthStencil=NS(
+        depthTestEnable=True, depthWriteEnable=False, depthFunction=Compare.GreaterEqual,
+        stencilTestEnable=False, frontFace=NS(reference=0), backFace=NS(reference=0)))
+    result = pipeline._extract_blend_state(state, GraphicsAPI.VULKAN)[0]
+    assert result.src_color == 'SrcAlpha' and result.dst_color == 'InvSrcAlpha'
+    assert result.color_op == 'Add' and result.logic_op == 'Add'
+    depth = pipeline._extract_depth_stencil(state, GraphicsAPI.VULKAN)
+    assert depth.depth_func == 'GreaterEqual'
+    assert pipeline._enum_label(6) == 'unknown(6)'
 
 
 def test_stencil_front_and_back_masks_operations_and_reference_are_retained():

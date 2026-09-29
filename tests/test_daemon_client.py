@@ -10,6 +10,26 @@ from rdc_tool import cli
 from rdc_tool.daemon import client as daemon_client
 
 
+def test_idle_daemon_retains_context_with_owned_replay_or_remote(monkeypatch, tmp_path: Path) -> None:
+    from rdc_tool.context_snapshot import save_context_snapshot
+    from rdc_tool.daemon.server import _context_has_owned_resources
+    from rdc_tool.runtime_state import save_context_state
+
+    monkeypatch.setenv("RDC_TOOL_INTERMEDIATE_ROOT", str(tmp_path / "intermediate"))
+    context = "ctx-idle-owner"
+    assert _context_has_owned_resources(context) is False
+
+    save_context_state({"sessions": {"sess-owned": {"session_id": "sess-owned", "backend_type": "remote"}}}, context)
+    assert _context_has_owned_resources(context) is True
+
+    save_context_state({}, context)
+    save_context_snapshot({"remote": {"state": "live_handle", "remote_id": "remote-owned"}}, context)
+    assert _context_has_owned_resources(context) is True
+
+    save_context_snapshot({}, context)
+    assert _context_has_owned_resources(context) is False
+
+
 def _configure_runtime_dir(monkeypatch, tmp_path: Path) -> None:
     state_dir = tmp_path / "runtime"
     state_dir.mkdir(parents=True, exist_ok=True)
@@ -134,6 +154,50 @@ def test_cleanup_stale_daemon_states_clears_orphan_context_artifacts(monkeypatch
     assert "session_state_orphan.json" in cleaned["session_files"]
     assert "worker_state_orphan.json" in cleaned["worker_files"]
     assert all(not path.exists() for path in orphan_paths)
+
+
+def test_dead_daemon_preserves_unreleased_replay_and_refuses_false_clear(monkeypatch, tmp_path: Path) -> None:
+    _configure_runtime_dir(monkeypatch, tmp_path)
+    state_dir = _configure_context_artifact_paths(monkeypatch, tmp_path)
+    context = "owned"
+    daemon_path = state_dir / "daemon_state_owned.json"
+    daemon_path.write_text(json.dumps({"context_id": context, "pid": 99999}), encoding="utf-8")
+    runtime_path = state_dir / "runtime_state_owned.json"
+    runtime_path.write_text(json.dumps({"sessions": {"sess-owned": {"session_id": "sess-owned"}}}), encoding="utf-8")
+    snapshot_path = state_dir / "context_snapshot_owned.json"
+    snapshot_path.write_text(json.dumps({"remote": {"state": "expired", "remote_id": "remote-owned",
+                                                    "bootstrap": {"started_activity": True, "created_forward": True}}}), encoding="utf-8")
+    daemon_client.save_session_state({"session_id": "sess-owned"}, context=context)
+    monkeypatch.setattr(daemon_client, "_is_process_running", lambda pid: False)
+    monkeypatch.setattr(daemon_client, "list_context_ids", lambda: [context])
+
+    cleaned = daemon_client.cleanup_stale_daemon_states()
+    assert daemon_path.name in cleaned["state_files"]
+    assert not daemon_path.exists()
+    assert runtime_path.exists() and snapshot_path.exists()
+    assert daemon_client.session_state_path(context).exists()
+    assert cleaned["context_files"] == cleaned["snapshot_files"] == []
+
+    ok, message, details = daemon_client.clear_context(context)
+    assert ok is False
+    assert "still owns resources" in message
+    assert details["context_id"] == context
+    assert runtime_path.exists() and snapshot_path.exists()
+    stopped, message = daemon_client.stop_daemon(context)
+    assert stopped is False
+    assert "clear it before stopping" in message
+
+
+def test_orphan_cleanup_preserves_unreadable_context_state(monkeypatch, tmp_path: Path) -> None:
+    _configure_runtime_dir(monkeypatch, tmp_path)
+    state_dir = _configure_context_artifact_paths(monkeypatch, tmp_path)
+    runtime_path = state_dir / "runtime_state_unknown.json"
+    runtime_path.write_text("{invalid", encoding="utf-8")
+    monkeypatch.setattr(daemon_client, "list_context_ids", lambda: ["unknown"])
+
+    cleaned = daemon_client.cleanup_stale_daemon_states()
+    assert runtime_path.exists()
+    assert cleaned["context_files"] == []
 
 
 def test_save_daemon_state_uses_atomic_replace(monkeypatch, tmp_path: Path) -> None:

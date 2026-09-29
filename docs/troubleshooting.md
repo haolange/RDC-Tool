@@ -45,11 +45,15 @@ Texture statistics, histograms, and numeric differences read data in memory. An 
 
 If an operation returns `not_found` after upgrading, run `rdc-tool tools search <term>` and `rdc-tool tools describe <name>`. The current runtime does not execute old names. See [tool-interface-upgrade.md](tool-interface-upgrade.md) for the documented destination, then update the caller.
 
+`rd.session.clear_context` 若返回 `context_cleanup_failed`，读取 `details.cleanup_reason_code` 和 `details.cleanup_errors`。会话、连接或重启后过期 remote 的清理失败会保留 context；不要删除状态文件或先停 daemon。Android helper 的原始 `owned_pids` 必须与当前进程一致才可停止；旧快照没有该证明且进程仍在时保持隔离。确认原 helper 已退出后，仍须让 Tool 验证并移除自己创建的 ADB forward，再取得成功的 clear_context 与 daemon stop 回执。
+
 ## Preview
 
 preview 打不开或自动失效：先检查 `session preview status` and the current `session_id` from `context status`.
 
 preview 看着不全、留黑边或像是畸形：检查 `preview.display` and confirm the framebuffer extent is not being confused with viewport / scissor.
+
+`export screenshot` 返回 `preview_event_output_unavailable`：当前事件没有可验证的 Present、输出槽或绑定目标；错误详情保留 Present 解析失败原因。选择有输出的事件，或在已知资源身份时显式使用 `export texture`。不要把纹理列表中的任意资源当作 framebuffer。
 
 ## Facade TSV
 
