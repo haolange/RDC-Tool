@@ -133,3 +133,11 @@ def test_worker_eof_shuts_down_before_thread_executor_closes(monkeypatch):
     monkeypatch.setattr(runtime_worker,"_emit",lambda result: None)
     assert runtime_worker.main(["--context-id","eof-test"]) == 0
     assert closed == [{"clear_context_state":False}]
+
+
+def test_request_does_not_implicitly_spawn_a_missing_worker(monkeypatch):
+    import pytest
+    worker = daemon_worker.RuntimeWorkerProcess(context_id="owned-context")
+    monkeypatch.setattr(worker, "ensure_started", lambda: pytest.fail("request must not replace its controller"))
+    with pytest.raises(RuntimeError, match="unavailable"):
+        worker.request("exec", {"operation": "rd.export.texture"})

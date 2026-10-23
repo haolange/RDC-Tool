@@ -18,13 +18,14 @@ from rdc_tool.context_snapshot import clear_context_snapshot, load_context_snaps
 from rdc_tool.daemon.client import (
     DEFAULT_IDLE_TIMEOUT_S,
     DEFAULT_LEASE_TIMEOUT_S,
+    _context_has_unreleased_resources,
     owner_lost_should_stop,
     save_daemon_state,
 )
 from rdc_tool.daemon.worker import RuntimeWorkerProcess
 from rdc_tool.progress import ProgressEvent, ProgressSink
 from rdc_tool.runtime_paths import cli_runtime_dir
-from rdc_tool.runtime_state import clear_context_state, load_context_state
+from rdc_tool.runtime_state import clear_context_state, load_context_state, save_context_state
 from rdc_tool.runtime_worker_state import load_worker_state
 from rdc_tool.timeout_policy import worker_exec_timeout_s
 
@@ -97,14 +98,6 @@ def _is_process_running(pid: int) -> bool:
         return bool(code.value == 259)
     finally:
         ctypes.windll.kernel32.CloseHandle(handle)
-
-
-def _context_has_owned_resources(context: str) -> bool:
-    state = load_context_state(context)
-    if state.get("sessions") or state.get("captures"):
-        return True
-    remote = load_context_snapshot(context).get("remote") or {}
-    return remote.get("state") in {"live_handle", "session_owned", "expired"}
 
 
 class DaemonRuntime(ProgressSink):
@@ -366,20 +359,45 @@ class DaemonRuntime(ProgressSink):
     def _ensure_worker(self) -> RuntimeWorkerProcess:
         if self._worker is None:
             self._worker = RuntimeWorkerProcess(context_id=self.daemon_context)
+        if not self._worker.is_running():
+            self._mark_replay_requires_restart("Replay worker changed; close and reopen the capture through its owning lifecycle")
         self._worker.ensure_started()
         return self._worker
+
+    def _mark_replay_requires_restart(self, message: str) -> None:
+        state = load_context_state(self.daemon_context)
+        sessions = state.get("sessions") or {}
+        for record in sessions.values():
+            record["state"] = "degraded"
+            record["is_live"] = False
+            record["last_error"] = message
+            record["recovery"] = {**dict(record.get("recovery") or {}),
+                "status": "requires_restart", "last_error": message}
+        if sessions:
+            state["recovery"] = {**dict(state.get("recovery") or {}),
+                "status": "degraded", "last_error": message,
+                "recovered_session_ids": [], "deferred_session_ids": [],
+                "degraded_session_ids": list(sessions)}
+            save_context_state(state, self.daemon_context)
 
     def _request_worker(self, method: str, params: Dict[str, Any], *, timeout: float = 30.0) -> Dict[str, Any]:
         worker = self._ensure_worker()
         try:
             response = worker.request(method, params, timeout=timeout)
-        except Exception:
-            worker.stop()
-            response = worker.request(method, params, timeout=timeout)
-        if not bool(response.get("ok")):
-            error = response.get("error") if isinstance(response.get("error"), dict) else {}
-            raise RuntimeError(str(error.get("message") or f"worker {method} failed"))
-        return dict(response)
+            if not bool(response.get("ok")):
+                error = response.get("error") if isinstance(response.get("error"), dict) else {}
+                raise RuntimeError(str(error.get("message") or f"worker {method} failed"))
+            return dict(response)
+        except Exception as exc:
+            # A lost response can follow an applied mutation. Never resubmit it
+            # to a fresh worker or recover the old controller implicitly.
+            message = f"Replay worker request failed; outcome unknown; clear context before retrying: {exc}"
+            try:
+                worker.stop()
+            except Exception as cleanup_error:
+                message += f"; worker cleanup failed: {cleanup_error}"
+            self._mark_replay_requires_restart(message)
+            raise RuntimeError(message) from exc
 
     def _handle_attach_client(self, params: Dict[str, Any]) -> Dict[str, Any]:
         client_id = str(params.get("client_id") or "").strip()
@@ -566,7 +584,7 @@ class DaemonRuntime(ProgressSink):
                     if not should_stop and not attached and active_request_count == 0:
                         idle_ms = self.idle_timeout_seconds * 1000
                         if last_activity_ms > 0 and (now_ms - last_activity_ms) >= idle_ms \
-                                and not _context_has_owned_resources(self.daemon_context):
+                                and not _context_has_unreleased_resources(self.daemon_context):
                             should_stop = True
                             reason = f"idle timeout exceeded ({self.idle_timeout_seconds}s)"
                 self._persist_state()

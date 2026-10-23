@@ -44,7 +44,8 @@ class _EncodingPipe(_FakePipe):
         self.encoding = encoding
 
     def GetShaderReflection(self, stage: object) -> SimpleNamespace:
-        return SimpleNamespace(entryPoint="main", encoding=self.encoding)
+        return SimpleNamespace(entryPoint="main", encoding=self.encoding,
+                               debugInfo=SimpleNamespace(files=[], encoding="HLSL"))
 
 
 class _EncodingController(_SupportedController):
@@ -385,108 +386,47 @@ def test_edit_and_replace_rejects_replace_expr_patch_op(monkeypatch: pytest.Monk
     assert payload["details"]["agent_text_edit_inputs"] == ["source_text", "diff_text"]
 
 
-def test_revert_replacement_refreshes_remote_session_when_last_patch_is_removed(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class _FakeRevertPatchEngine:
-        async def revert_patch(self, session_id: str, patch_id: str, session_manager: object) -> bool:
-            return True
+@pytest.mark.parametrize("revert_ok", [True, False])
+def test_revert_replacement_preserves_live_remote_replay(monkeypatch: pytest.MonkeyPatch, revert_ok: bool) -> None:
+    class Engine:
+        async def revert_patch(self, session_id, patch_id, manager):
+            return revert_ok
 
-    refresh_calls: list[dict[str, object]] = []
-
-    async def _fake_refresh(session_id: str, *, remaining_replacements: list[dict[str, object]]) -> None:
-        refresh_calls.append(
-            {
-                "session_id": session_id,
-                "remaining_replacements": list(remaining_replacements),
-            }
-        )
-
-    monkeypatch.setattr(
-        server.server_runtime,
-        "_maybe_refresh_remote_session_after_revert",
-        _fake_refresh,
-    )
     _install_shader_replace_env(monkeypatch, _SupportedController())
-    server.server_runtime._patch_engine = _FakeRevertPatchEngine()
-    server.server_runtime._session_manager = _FakeSessionManager()
-    server._runtime.shader_replacements["sess_demo"] = [
-        {
-            "replacement_id": "repl_demo",
-            "stage": "PS",
-            "resolved_event_id": 314,
-            "original_shader_id": "ResourceId::77",
-            "status": "applied",
-        }
-    ]
-
-    payload = json.loads(
-        asyncio.run(
-            server._dispatch_shader(
-                "revert_replacement",
-                {
-                    "session_id": "sess_demo",
-                    "replacement_id": "repl_demo",
-                },
-            )
-        )
-    )
-
-    assert payload["success"] is True
-    assert payload["reverted"] is True
-    assert server._runtime.shader_replacements["sess_demo"] == []
-    assert refresh_calls == [
-        {
-            "session_id": "sess_demo",
-            "remaining_replacements": [],
-        }
-    ]
-
-
-def test_revert_replacement_surfaces_remote_refresh_failure(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class _FakeRevertPatchEngine:
-        async def revert_patch(self, session_id: str, patch_id: str, session_manager: object) -> bool:
-            return True
-
-    async def _failing_refresh(session_id: str, *, remaining_replacements: list[dict[str, object]]) -> None:
-        raise RuntimeError("refresh failed")
-
-    monkeypatch.setattr(
-        server.server_runtime,
-        "_maybe_refresh_remote_session_after_revert",
-        _failing_refresh,
-    )
-    _install_shader_replace_env(monkeypatch, _SupportedController())
-    server.server_runtime._patch_engine = _FakeRevertPatchEngine()
-    server.server_runtime._session_manager = _FakeSessionManager()
-    server._runtime.shader_replacements["sess_demo"] = [
-        {
-            "replacement_id": "repl_demo",
-            "stage": "PS",
-            "resolved_event_id": 314,
-            "original_shader_id": "ResourceId::77",
-            "status": "applied",
-        }
-    ]
-
-    payload = json.loads(
-        asyncio.run(
-            server._dispatch_shader(
-                "revert_replacement",
-                {
-                    "session_id": "sess_demo",
-                    "replacement_id": "repl_demo",
-                },
-            )
-        )
-    )
-
-    assert payload["success"] is False
-    assert payload["code"] == "replacement_revert_recovery_failed"
-    assert payload["details"]["remaining_replacements"] == 0
-    assert payload["details"]["exception_type"] == "RuntimeError"
+    lifecycle_calls = []
+    updates = []
+    live_replay = object()
+    async def close_session(session_id):
+        lifecycle_calls.append(("close", session_id))
+    async def recover(context_id, session_id):
+        lifecycle_calls.append(("recover", session_id))
+    manager = _FakeSessionManager()
+    manager.close_session = close_session
+    monkeypatch.setattr(server.server_runtime, "_patch_engine", Engine())
+    monkeypatch.setattr(server.server_runtime, "_session_manager", manager)
+    monkeypatch.setattr(server.server_runtime, "_context_state", lambda *args: {
+        "sessions": {"sess_demo": {"backend_type": "remote"}}})
+    monkeypatch.setattr(server.server_runtime, "_recover_single_session_from_state", recover)
+    monkeypatch.setattr(server.server_runtime, "_release_remote_session_lease", lambda *args, **kwargs: None)
+    monkeypatch.setattr(server.server_runtime, "_sync_context_session_replacements",
+        lambda session_id, remaining: updates.append((session_id, list(remaining))))
+    monkeypatch.setitem(server._runtime.replays, "sess_demo", live_replay)
+    original = {"replacement_id": "repl_demo", "stage": "PS", "resolved_event_id": 314,
+        "original_shader_id": "ResourceId::77", "status": "applied"}
+    server._runtime.shader_replacements["sess_demo"] = [original]
+    payload = json.loads(asyncio.run(server._dispatch_shader("revert_replacement", {
+        "session_id": "sess_demo", "replacement_id": "repl_demo"})))
+    assert payload["success"] is revert_ok
+    assert lifecycle_calls == []
+    assert server._runtime.replays["sess_demo"] is live_replay
+    if revert_ok:
+        assert payload["reverted"] is True
+        assert server._runtime.shader_replacements["sess_demo"] == []
+        assert updates == [("sess_demo", [])]
+    else:
+        assert payload["code"] == "replacement_not_found"
+        assert server._runtime.shader_replacements["sess_demo"] == [original]
+        assert updates == []
 
 
 def test_catalog_explains_targeted_spirv_precision_patch() -> None:
@@ -1229,6 +1169,53 @@ def test_patch_engine_supports_diff_text_replacement(monkeypatch: pytest.MonkeyP
     assert controller.build_calls[0][2] == (after + "\n").encode("utf-8")
 
 
+@pytest.mark.parametrize("removed", ['OpEntryPoint Fragment %wrong "main"', ' OpEntryPoint Fragment %main "main"'])
+def test_patch_engine_diff_rejection_proves_no_replacement_and_can_retry(
+    monkeypatch: pytest.MonkeyPatch, removed: str,
+) -> None:
+    fake_rd = SimpleNamespace(
+        ResourceId=lambda: "ResourceId::0",
+        ShaderCompileFlags=_FakeShaderCompileFlags,
+        ShaderCompileFlag=_FakeShaderCompileFlag,
+    )
+    monkeypatch.setattr(patch_engine_mod, "_get_rd", lambda: fake_rd)
+    monkeypatch.setattr(patch_engine_mod, "_to_rd_stage", lambda stage: "ps")
+    monkeypatch.setattr(
+        patch_engine_mod.PatchEngine, "_get_best_encoding",
+        staticmethod(lambda controller, session_id: ("SPIRVAsm", "SPIR-V (RenderDoc)")),
+    )
+    controller = _PatchEngineController()
+    engine = patch_engine_mod.PatchEngine()
+    manager = _PatchEngineSessionManager(controller)
+    after = 'OpEntryPoint Fragment %main_changed "main"'
+    def apply(before: str) -> PatchResult:
+        diff = "".join(difflib.unified_diff(
+            [before + "\n"], [after + "\n"], fromfile="before", tofile="after",
+        ))
+        return asyncio.run(engine.apply_patch(
+            session_id="sess_demo", event_id=314, stage=ShaderStage.PS,
+            session_manager=manager, patch_spec=PatchSpec(
+                patch_id="repl_demo", target_event_id=314, target_stage=ShaderStage.PS,
+                target_shader_id="ResourceId::77", diff_text=diff,
+            ),
+        ))
+    rejected = apply(removed)
+    assert rejected.success is False
+    assert rejected.error_code == "shader_patch_diff_failed"
+    assert rejected.error_category == "validation"
+    assert rejected.error_details["failure_stage"] == "apply_patch"
+    assert rejected.error_details["replacement_attempted"] is False
+    assert rejected.error_details["context_preserved"] is True
+    assert "effects_attempted" not in rejected.error_details  # Event navigation already occurred.
+    assert controller.build_calls == []
+    assert controller.replace_calls == []
+    assert engine._patches == {}
+    retry = apply('OpEntryPoint Fragment %main "main"')
+    assert retry.success is True
+    assert controller.build_calls[0][2] == (after + "\n").encode("utf-8")
+    assert len(controller.replace_calls) == 1
+
+
 def test_patch_engine_reports_source_hash_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_rd = SimpleNamespace(
         ResourceId=lambda: "ResourceId::0",
@@ -1824,3 +1811,508 @@ def test_patch_engine_hlsl_compile_failure_does_not_replace(monkeypatch: pytest.
     assert result.error_details["cleanup_attempted"] is True
     assert controller.replace_calls == []
     assert controller.free_calls == ["ResourceId::99"]
+
+
+@pytest.mark.parametrize("mode", ["complete", "empty", "error", "missing"])
+def test_disassembly_success_discovers_native_targets_truthfully(monkeypatch, mode) -> None:
+    class Controller(_SupportedController):
+        def GetDisassemblyTargets(self, with_pipeline):
+            assert with_pipeline is True
+            if mode == "error":
+                raise RuntimeError("native target query failed")
+            return [] if mode == "empty" else ["SPIR-V (RenderDoc)", "GPU ISA"]
+    controller = Controller()
+    if mode == "missing":
+        controller.GetDisassemblyTargets = None
+    _install_shader_replace_env(monkeypatch, controller)
+    server.server_runtime._session_manager = _FakeSessionManager()
+    monkeypatch.setattr(patch_engine_mod.PatchEngine, "_resolve_source", classmethod(
+        lambda cls, *args, **kwargs: ("OpCapability Shader\n", "SPIRVAsm", "SPIR-V ASM", True)))
+    payload = json.loads(asyncio.run(server._dispatch_shader("get_disassembly", {
+        "session_id": "sess_demo", "event_id": 101, "stage": "ps", "target": "SPIR-V ASM",
+    })))
+    assert payload["success"] is True
+    assert payload["available_targets_status"] == ({"error": "unavailable", "missing": "unsupported"}.get(mode, "complete"))
+    assert payload["available_targets"] == (["SPIR-V (RenderDoc)", "GPU ISA"] if mode == "complete" else [])
+    assert payload["available_targets_error"] == ("native target query failed" if mode == "error" else None)
+    assert payload["target"] == "SPIR-V ASM"
+    assert payload["is_raw_spirv_asm"] is True
+
+
+@pytest.mark.parametrize("mode", ["error", "missing"])
+def test_disassembly_target_probe_failure_precedes_event_effects(monkeypatch, mode) -> None:
+    class Controller(_SupportedController):
+        def GetDisassemblyTargets(self, with_pipeline):
+            raise RuntimeError("target query failed")
+    controller = Controller()
+    if mode == "missing":
+        controller.GetDisassemblyTargets = None
+    _install_shader_replace_env(monkeypatch, controller)
+    async def unexpected(*args):
+        raise AssertionError("target query failure must not set event")
+    monkeypatch.setattr(server.server_runtime, "_ensure_event", unexpected)
+    result = json.loads(asyncio.run(server._dispatch_shader("get_disassembly", {
+        "session_id": "sess_demo", "event_id": 101, "stage": "ps", "target": "GPU ISA",
+    })))
+    assert result["success"] is False
+    assert result["details"]["failure_reason"] == "target_discovery_failed"
+    assert result["details"]["effects_attempted"] is False
+    assert result["details"]["context_preserved"] is True
+    assert result["details"]["available_targets_status"] == ("unavailable" if mode == "error" else "unsupported")
+
+
+@pytest.mark.parametrize("text", [
+    "; SPIR-V disassembly not supported; external tool missing",
+    "; SPIR-V\n; OpCapability Shader\n; OpDecorate %1 RelaxedPrecision",
+    "diagnostic mentioning OpCapability without an instruction",
+    "; SPIR-V\n",
+])
+def test_spirv_diagnostic_or_comment_is_not_raw_assembly(text) -> None:
+    assert patch_engine_mod.PatchEngine._looks_like_raw_spirv_asm(text) is False
+    for encoding in ("SPIRV", "SPIRVAsm"):
+        plan = patch_engine_mod.PatchEngine._edit_plan_for_source(
+            encoding_name=encoding, disassembly_target="external ISA", source=text,
+        )
+        assert plan["can_build"] is False
+        assert plan["can_replace"] is False
+        assert plan["allowed_edit_inputs"] == []
+
+
+@pytest.mark.parametrize("text", ["; SPIR-V\nOpCapability Shader", "%name = OpTypeFloat 32", "  OpEntryPoint Fragment %main \"main\""])
+def test_spirv_actual_opcode_lines_are_recognized(text) -> None:
+    assert patch_engine_mod.PatchEngine._looks_like_raw_spirv_asm(text) is True
+    plan = patch_engine_mod.PatchEngine._edit_plan_for_source(
+        encoding_name="SPIRVAsm", disassembly_target="SPIR-V ASM", source=text,
+    )
+    assert plan["can_replace"] is True
+
+
+def test_disassembly_diagnostic_is_observed_text_without_raw_edit_authority(monkeypatch) -> None:
+    diagnostic = "; SPIR-V disassembly not supported, external compiler unavailable"
+    class Controller(_PatchEngineController):
+        def GetDisassemblyTargets(self, with_pipeline):
+            return ["external ISA"]
+        def DisassembleShader(self, *args):
+            return diagnostic
+    monkeypatch.setattr(patch_engine_mod, "_get_rd", lambda: SimpleNamespace(ResourceId=lambda: "ResourceId::0"))
+    monkeypatch.setattr(patch_engine_mod.PatchEngine, "_get_best_encoding", staticmethod(lambda *_: ("SPIRV", "external ISA")))
+    _install_shader_replace_env(monkeypatch, Controller())
+    server.server_runtime._session_manager = _FakeSessionManager()
+    result = json.loads(asyncio.run(server._dispatch_shader("get_disassembly", {
+        "session_id": "sess_demo", "event_id": 101, "stage": "ps", "target": "external ISA",
+    })))
+    assert result["success"] is True  # Native text is preserved, not asserted to be executable ISA.
+    assert result["disassembly"] == diagnostic
+    assert result["is_raw_spirv_asm"] is False
+    assert result["edit_plan"]["can_replace"] is False
+    assert result["edit_plan"]["can_build"] is False
+
+
+def test_explicit_raw_target_requires_actual_instructions_before_build(monkeypatch) -> None:
+    class Controller(_PatchEngineController):
+        def GetDisassemblyTargets(self, with_pipeline):
+            return ["SPIR-V ASM"]
+        def DisassembleShader(self, *args):
+            return "; SPIR-V raw target unavailable"
+    monkeypatch.setattr(patch_engine_mod, "_get_rd", lambda: SimpleNamespace(ResourceId=lambda: "ResourceId::0"))
+    monkeypatch.setattr(patch_engine_mod.PatchEngine, "_disassemble_raw_spirv_bytes", staticmethod(lambda _: "; SPIR-V fallback unavailable"))
+    with pytest.raises(RuntimeError, match="Raw SPIR-V ASM disassembly is unavailable"):
+        patch_engine_mod.PatchEngine._resolve_source(
+            Controller(), _PatchEnginePipe(), SimpleNamespace(), ShaderStage.PS, "sess_demo", requested_target="SPIR-V ASM",
+        )
+
+
+@pytest.mark.parametrize("action", ["apply", "revert"])
+def test_patch_engine_native_thread_affinity(monkeypatch: pytest.MonkeyPatch, action: str) -> None:
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    fake_rd = SimpleNamespace(ResourceId=lambda: "ResourceId::0",
+        ShaderCompileFlags=_FakeShaderCompileFlags, ShaderCompileFlag=_FakeShaderCompileFlag)
+    monkeypatch.setattr(patch_engine_mod, "_get_rd", lambda: fake_rd)
+    monkeypatch.setattr(patch_engine_mod, "_to_rd_stage", lambda stage: "ps")
+
+    class Controller(_PatchEngineController):
+        def __init__(self) -> None:
+            super().__init__()
+            self.native_thread = threading.get_ident()
+
+        def GetTargetShaderEncodings(self) -> list[str]:
+            return ["HLSL"]
+
+        def __getattribute__(self, name: str):
+            value = super().__getattribute__(name)
+            if name[:1].isupper() and callable(value):
+                def checked(*args, **kwargs):
+                    assert threading.get_ident() == self.native_thread, "native controller accessed outside replay thread"
+                    return value(*args, **kwargs)
+                return checked
+            return value
+
+    async def scenario() -> None:
+        loop = asyncio.get_running_loop()
+        loop.set_default_executor(ThreadPoolExecutor(max_workers=1, thread_name_prefix="test-replay"))
+        controller = await loop.run_in_executor(None, Controller)
+        manager = _PatchEngineSessionManager(controller)
+        engine = patch_engine_mod.PatchEngine()
+        spec = PatchSpec(patch_id="thread-bound", target_event_id=314,
+            target_stage=ShaderStage.PS, target_shader_id="ResourceId::77",
+            source_text="float4 main() : SV_Target { return 1; }",
+            source_encoding="hlsl", entry="main", target="ps_6_6")
+        if action == "apply":
+            result = await engine.apply_patch("sess_demo", 314, ShaderStage.PS, manager, spec)
+            assert result.success, result.error_message
+            assert controller.replace_calls == [("ResourceId::77", "ResourceId::99")]
+            assert [item.patch_id for item in engine.list_patches("sess_demo")] == ["thread-bound"]
+        else:
+            engine._patches[spec.patch_id] = SimpleNamespace(session_id="sess_demo", spec=spec,
+                original_shader_id="ResourceId::77", replacement_shader_id="ResourceId::99")
+            assert await engine.revert_patch("sess_demo", spec.patch_id, manager)
+            assert controller.remove_calls == ["ResourceId::77"]
+            assert controller.free_calls == ["ResourceId::99"]
+            assert controller.set_frame_event_calls[-1] == (314, True)
+            assert engine.list_patches("sess_demo") == []
+
+    asyncio.run(scenario())
+
+
+
+def _provenance_patch(monkeypatch, *, mode="source_text", encoding="SPIRV", build_errors=""):
+    import struct
+
+    before = '; SPIR-V\nOpCapability Shader\nOpEntryPoint Fragment %1 "main"\nOpDecorate %2 RelaxedPrecision\n'
+    after = before.replace('OpDecorate %2 RelaxedPrecision\n', '')
+    module = struct.pack('<6I', 0x07230203, 0x00010000, 7, 17, 0, 0x00010000)
+    fake_rd = SimpleNamespace(ResourceId=lambda: "ResourceId::0", ShaderCompileFlags=_FakeShaderCompileFlags,
+                              ShaderCompileFlag=_FakeShaderCompileFlag)
+    monkeypatch.setattr(patch_engine_mod, '_get_rd', lambda: fake_rd)
+    monkeypatch.setattr(patch_engine_mod, '_to_rd_stage', lambda stage: 'ps')
+    monkeypatch.setattr(patch_engine_mod.PatchEngine, '_assemble_spirv_asm', staticmethod(lambda text: module))
+
+    class Controller(_PatchEngineController):
+        def GetDisassemblyTargets(self, include_unsupported):
+            return ['SPIR-V ASM']
+
+        def GetTargetShaderEncodings(self):
+            return [encoding]
+
+        def DisassembleShader(self, pipeline, reflection, target):
+            return before
+
+    controller = Controller(build_errors=build_errors, build_shader_id='ResourceId::99')
+    kwargs = {'source_text': after}
+    if mode == 'diff_text':
+        kwargs = {'diff_text': ''.join(difflib.unified_diff(before.splitlines(True), after.splitlines(True)))}
+    elif mode == 'ops':
+        kwargs = {'ops': [PatchOp(op='force_full_precision', variables=['2'])]}
+    elif mode == 'noop':
+        kwargs = {'ops': [PatchOp(op='force_full_precision', variables=['999'])]}
+    result = asyncio.run(patch_engine_mod.PatchEngine().apply_patch(
+        session_id='sess_build', event_id=314, stage=ShaderStage.PS,
+        session_manager=_PatchEngineSessionManager(controller),
+        patch_spec=PatchSpec(patch_id='repl_build', target_event_id=314, target_stage=ShaderStage.PS,
+                             target_shader_id='ResourceId::77', source_target='SPIR-V ASM',
+                             source_encoding='spirvasm', **kwargs)))
+    return result, controller, module
+
+
+@pytest.mark.parametrize('mode', ['source_text', 'diff_text', 'ops'])
+def test_actual_build_input_is_bound_to_applied_target(monkeypatch, mode):
+    import hashlib
+
+    result, controller, module = _provenance_patch(monkeypatch, mode=mode)
+    assert result.success is True
+    assert controller.replace_calls == [('ResourceId::77', 'ResourceId::99')]
+    actual = controller.build_calls[0][2]
+    assert actual == module
+    assert result.build_input_bytes == actual
+    proof = result.build_input
+    assert proof['status'] == 'available'
+    assert proof['scope'] == 'BuildTargetShader-input'
+    assert proof['original_shader_id'] == controller.replace_calls[0][0]
+    assert proof['target_shader_id'] == controller.replace_calls[0][1]
+    assert proof['sha256'] == hashlib.sha256(actual).hexdigest()
+    assert proof['byte_size'] == len(actual)
+    assert proof['byte_kind'] == 'spirv-module'
+    assert proof['spirv_header']['id_bound'] == 17
+    assert proof['spirv_header']['status'] == 'available'
+    assert proof['device_binary_observed'] is False
+    assert 'build_input_bytes' not in result.model_dump(mode='json')
+
+
+def test_text_build_input_does_not_claim_compiled_binary_or_bound(monkeypatch):
+    result, controller, _ = _provenance_patch(monkeypatch, encoding='SPIRVAsm')
+    assert result.success is True
+    assert result.build_input_bytes == controller.build_calls[0][2]
+    assert result.build_input['byte_kind'] == 'source-text'
+    assert result.build_input['spirv_header']['status'] == 'unavailable'
+    assert 'id_bound' not in result.build_input['spirv_header']
+    assert result.build_input['device_binary_observed'] is False
+
+
+@pytest.mark.parametrize('mode,errors', [('noop', ''), ('source_text', 'error: invalid module')])
+def test_noop_and_failed_build_have_no_applied_build_proof(monkeypatch, mode, errors):
+    result, controller, _ = _provenance_patch(monkeypatch, mode=mode, build_errors=errors)
+    assert controller.replace_calls == []
+    assert result.build_input_bytes == b''
+    assert result.build_input['status'] == 'unavailable'
+    assert 'target_shader_id' not in result.build_input
+
+
+def test_emitted_build_input_preserves_exact_bytes_and_registry_binding(monkeypatch, tmp_path):
+    import hashlib
+    import struct
+    from pathlib import Path
+
+    module = struct.pack('<6I', 0x07230203, 0x00010000, 7, 17, 0, 0x00010000)
+    proof = {'status': 'available', 'scope': 'BuildTargetShader-input', 'encoding': 'spirv',
+             'sha256': hashlib.sha256(module).hexdigest(), 'byte_size': len(module),
+             'original_shader_id': 'ResourceId::77', 'target_shader_id': 'ResourceId::99',
+             'byte_kind': 'spirv-module', 'spirv_header': {'status': 'available', 'id_bound': 17},
+             'device_binary_observed': False}
+    engine = _FakePatchEngine(success=True)
+    original_apply = engine.apply_patch
+
+    async def apply(**kwargs):
+        result = await original_apply(**kwargs)
+        return result.model_copy(update={'build_input': proof, 'build_input_bytes': module})
+
+    engine.apply_patch = apply
+    _install_shader_replace_env(monkeypatch, _SupportedController())
+    monkeypatch.setattr(server.server_runtime, '_patch_engine', engine)
+    monkeypatch.setattr(server.server_runtime, '_session_manager', _FakeSessionManager())
+    monkeypatch.setattr(server.server_runtime, '_artifact_store', None)
+    payload = json.loads(asyncio.run(server._dispatch_shader('edit_and_replace', {
+        'session_id': 'sess_demo', 'event_id': 101, 'stage': 'ps', 'source_text': 'changed',
+        'emit_patch_artifacts': True, 'output_dir': str(tmp_path)})))
+    assert payload['success'] is True
+    replacement = payload['replacement']
+    assert replacement['compile']['build_input'] == proof
+    binary = replacement['artifacts']['build_input']
+    actual = (tmp_path / Path(binary['saved_path']).name).read_bytes()
+    assert actual == module
+    assert hashlib.sha256(actual).hexdigest() == proof['sha256']
+    assert len(payload['artifacts']) == 4
+    assert server._runtime.shader_replacements['sess_demo'][0]['compile']['build_input'] == proof
+
+
+
+@pytest.mark.parametrize('module', [b'', b'not a module', b'\x03\x02\x23\x07',
+    bytes.fromhex('0302230700000100000000000000000000000000'),
+    bytes.fromhex('0302230700000100000000001100000001000000')])
+def test_unavailable_build_header_does_not_invent_zero_bound(module):
+    proof = patch_engine_mod._shader_build_input_provenance(
+        module, encoding='SPIRV', original_shader_id='ResourceId::77', target_shader_id='ResourceId::99')
+    assert proof['spirv_header']['status'] == 'unavailable'
+    assert 'id_bound' not in proof['spirv_header']
+    assert proof['device_binary_observed'] is False
+
+
+def test_big_endian_build_header_preserves_observed_word_values():
+    import struct
+    module = struct.pack('>6I', 0x07230203, 0x00010000, 7, 17, 0, 0x00010000)
+    proof = patch_engine_mod._shader_build_input_provenance(
+        module, encoding='SPIRV', original_shader_id='ResourceId::77', target_shader_id='ResourceId::99')
+    assert proof['spirv_header'] == {'status': 'available', 'byte_order': 'big',
+        'version': 0x00010000, 'generator': 7, 'id_bound': 17, 'schema': 0}
+
+
+def test_build_input_without_artifact_request_does_not_write(monkeypatch):
+    engine = _FakePatchEngine(success=True)
+    original_apply = engine.apply_patch
+
+    async def apply(**kwargs):
+        result = await original_apply(**kwargs)
+        return result.model_copy(update={'build_input': {'status': 'available'}, 'build_input_bytes': b'bytes'})
+
+    async def unexpected_store(*args, **kwargs):
+        pytest.fail('No artifact was requested')
+
+    engine.apply_patch = apply
+    _install_shader_replace_env(monkeypatch, _SupportedController())
+    monkeypatch.setattr(server.server_runtime, '_patch_engine', engine)
+    monkeypatch.setattr(server.server_runtime, '_session_manager', _FakeSessionManager())
+    monkeypatch.setattr(server.server_runtime, '_store_bytes_artifact_payload', unexpected_store)
+    payload = json.loads(asyncio.run(server._dispatch_shader('edit_and_replace', {
+        'session_id': 'sess_demo', 'event_id': 101, 'stage': 'ps', 'source_text': 'changed'})))
+    assert payload['success'] is True
+    assert payload['artifacts'] == []
+    assert payload['replacement']['compile']['build_input']['status'] == 'available'
+
+
+def test_build_input_artifact_write_failure_never_becomes_success(monkeypatch):
+    engine = _FakePatchEngine(success=True)
+    original_apply = engine.apply_patch
+
+    async def apply(**kwargs):
+        result = await original_apply(**kwargs)
+        return result.model_copy(update={'build_input': {'status': 'available'}, 'build_input_bytes': b'bytes'})
+
+    async def store(data, **kwargs):
+        if kwargs.get('title') == 'shader_build_input':
+            raise OSError('artifact storage unavailable')
+        return {'saved_path': 'fixture:' + kwargs['title']}
+
+    engine.apply_patch = apply
+    _install_shader_replace_env(monkeypatch, _SupportedController())
+    monkeypatch.setattr(server.server_runtime, '_patch_engine', engine)
+    monkeypatch.setattr(server.server_runtime, '_session_manager', _FakeSessionManager())
+    monkeypatch.setattr(server.server_runtime, '_store_bytes_artifact_payload', store)
+    with pytest.raises(OSError, match='artifact storage unavailable'):
+        asyncio.run(server._dispatch_shader('edit_and_replace', {
+            'session_id': 'sess_demo', 'event_id': 101, 'stage': 'ps', 'source_text': 'changed',
+            'emit_patch_artifacts': True}))
+    assert len(engine.calls) == 1
+
+
+def test_text_artifact_newlines_remain_distinct_from_exact_build_bytes(monkeypatch, tmp_path):
+    import os
+    from pathlib import Path
+    monkeypatch.setattr(server.server_runtime, '_artifact_store', None)
+    text = asyncio.run(server.server_runtime._store_text_artifact_payload(
+        'first\nsecond\n', stem='source', suffix='.txt', output_dir=str(tmp_path)))
+    binary = asyncio.run(server.server_runtime._store_bytes_artifact_payload(
+        b'first\nsecond\n', stem='build', suffix='.spv', output_dir=str(tmp_path)))
+    assert Path(text['saved_path']).read_bytes() == ('first' + os.linesep + 'second' + os.linesep).encode()
+    assert Path(binary['saved_path']).read_bytes() == b'first\nsecond\n'
+
+
+class _EmbeddedSourceController(_EncodingController):
+    def __init__(self, debug_info: object, encoding: str = "SPIRV") -> None:
+        super().__init__(encoding)
+        self.debug_info = debug_info
+
+    def GetPipelineState(self) -> _EncodingPipe:
+        info, encoding = self.debug_info, self.encoding
+
+        class _Pipe(_EncodingPipe):
+            def GetShaderReflection(self, stage: object) -> SimpleNamespace:
+                return SimpleNamespace(entryPoint="exported_main", encoding=encoding, debugInfo=info)
+
+        return _Pipe("SPIRV")
+
+
+def _embedded_source_result(monkeypatch: pytest.MonkeyPatch, info: object, encoding: str = "SPIRV") -> dict[str, object]:
+    _install_shader_replace_env(monkeypatch, _EmbeddedSourceController(info, encoding))
+    server.server_runtime._session_manager = _FakeSessionManager()
+    return json.loads(asyncio.run(server._dispatch_shader(
+        "get_source", {"session_id": "sess_demo", "event_id": 101, "stage": "ps", "shader_id": "ResourceId::77"},
+    )))
+
+
+def test_get_source_reads_embedded_source_files_without_source_level_debugging(monkeypatch: pytest.MonkeyPatch) -> None:
+    source = '#include "color.h"\r\nfloat4 Entry() : SV_Target { return Color(); } // 颜色\r\n'
+    files = [
+        SimpleNamespace(filename="C:/original/入口.hlsl", contents=source),
+        SimpleNamespace(filename="color.h", contents="float4 Color() { return 1; }\n"),
+    ]
+    info = SimpleNamespace(files=files, encoding="HLSL", entrySourceName="Entry", sourceDebugInformation=False,
+                           compileFlags=SimpleNamespace(flags=[SimpleNamespace(name="optimization", value="0")]))
+    payload = _embedded_source_result(monkeypatch, info)
+    assert payload["success"] is True
+    assert payload["source_available"] is True
+    assert payload["source"] == source
+    assert payload["files"] == [{"filename": f.filename, "contents": f.contents} for f in files]
+    assert payload["source_encoding"].lower() == "hlsl"
+    assert payload["entry_point"] == "Entry"
+    assert payload["source_debug_information"] is False
+    assert payload["compile_flags"] == [{"name": "optimization", "value": "0"}]
+    assert payload["edit_plan"]["input_kind"] == "debug_source"
+    assert "fallback_tool" not in payload
+    assert "failure_reason" not in payload
+
+
+@pytest.mark.parametrize("shader_encoding", ["SPIRV", "HLSL", "GLSL", "DXIL"])
+def test_get_source_retains_include_text_when_entry_contents_are_unavailable(monkeypatch: pytest.MonkeyPatch, shader_encoding: str) -> None:
+    files = [SimpleNamespace(filename="entry.hlsl", contents=""), SimpleNamespace(filename="helper.h", contents="float Value;\n")]
+    payload = _embedded_source_result(monkeypatch, SimpleNamespace(files=files, encoding="HLSL"), shader_encoding)
+    assert payload["success"] is True
+    assert payload["source_available"] is False
+    assert payload["source"] is None
+    assert payload["files"] == [{"filename": f.filename, "contents": f.contents} for f in files]
+    assert payload["failure_reason"] == "entry_source_contents_unavailable"
+    assert payload["edit_plan"]["can_replace"] is False
+
+
+@pytest.mark.parametrize("bad_contents", [None, b"not native text"])
+def test_get_source_does_not_turn_invalid_native_source_into_absence(monkeypatch: pytest.MonkeyPatch, bad_contents: object) -> None:
+    info = SimpleNamespace(files=[SimpleNamespace(filename="entry.hlsl", contents=bad_contents)], encoding="HLSL")
+    payload = _embedded_source_result(monkeypatch, info)
+    assert payload["success"] is False
+    assert payload["code"] == "shader_source_lookup_failed"
+    assert payload["details"]["failure_stage"] == "source_lookup"
+    assert "source_available" not in payload
+
+
+def test_get_source_reports_native_source_read_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _UnreadableDebugInfo:
+        @property
+        def files(self) -> object:
+            raise RuntimeError("native source read failed")
+
+    payload = _embedded_source_result(monkeypatch, _UnreadableDebugInfo())
+    assert payload["success"] is False
+    assert payload["code"] == "shader_source_lookup_failed"
+    assert "native source read failed" in payload["error_message"]
+
+
+def test_get_source_reports_missing_native_metadata_separately_from_empty_files(monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = _embedded_source_result(monkeypatch, None)
+    assert payload["success"] is False
+    assert payload["code"] == "shader_source_metadata_unavailable"
+    assert payload["category"] == "capability"
+
+
+@pytest.mark.parametrize("restore_fails", [False, True])
+def test_get_source_native_read_failure_restores_prior_event(monkeypatch: pytest.MonkeyPatch, restore_fails: bool) -> None:
+    class _UnreadableDebugInfo:
+        @property
+        def files(self) -> object:
+            raise RuntimeError("native source read failed")
+
+    _install_shader_replace_env(monkeypatch, _EmbeddedSourceController(_UnreadableDebugInfo()))
+    server.server_runtime._session_manager = _FakeSessionManager()
+    current_event = {"value": 3029}
+    transitions: list[int] = []
+
+    async def set_event(_session_id: str, event_id: int | None) -> int:
+        requested = int(event_id or 0)
+        transitions.append(requested)
+        if restore_fails and requested == 3029:
+            raise RuntimeError("native restore failed")
+        current_event["value"] = requested
+        return requested
+
+    monkeypatch.setattr(server.server_runtime, "_ensure_event", set_event)
+    monkeypatch.setattr(server.server_runtime, "_active_event", lambda _session_id: current_event["value"])
+    monkeypatch.setattr(server.server_runtime, "_runtime_context_id", lambda: "owned-source-context")
+    payload = json.loads(asyncio.run(server._dispatch_shader(
+        "get_source", {"session_id": "sess_demo", "event_id": 1248, "stage": "ps"},
+    )))
+    assert payload["success"] is False
+    assert transitions == [1248, 3029]
+    assert payload["details"]["context_id"] == "owned-source-context"
+    if restore_fails:
+        assert payload["code"] == "shader_inspection_recovery_failed"
+        assert payload["details"]["original_error_code"] == "shader_source_lookup_failed"
+        assert payload["details"]["replay_state_restored"] is False
+        assert current_event["value"] == 1248
+    else:
+        assert payload["code"] == "shader_source_lookup_failed"
+        assert payload["details"]["replay_state_restored"] is True
+        assert payload["details"]["restored_event_id"] == 3029
+        assert current_event["value"] == 3029
+
+
+@pytest.mark.parametrize("encoding", [None, "Unknown"])
+def test_get_source_does_not_invent_missing_source_metadata(monkeypatch: pytest.MonkeyPatch, encoding: object) -> None:
+    info = SimpleNamespace(files=[SimpleNamespace(filename="main.hlsl", contents="float4 Entry() { return 1; }")],
+                           encoding=encoding, entrySourceName="")
+    payload = _embedded_source_result(monkeypatch, info)
+    assert payload["success"] is True
+    assert payload["source_available"] is True
+    assert payload["source_encoding"] is None
+    assert payload["entry_point"] is None
+    assert payload["compile_flags"] is None
+    assert payload["source_debug_information"] is None
+    assert payload["edit_plan"]["can_replace"] is False

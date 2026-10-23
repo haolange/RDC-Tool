@@ -145,3 +145,88 @@ def input_obj(data: dict[str, Any], include_attributes: bool) -> tuple[str, int]
     for primitive in primitives:
         lines.append(kind+' '+' '.join(f'{i+1}/{i+1}/{i+1}' if include_attributes else str(i+1) for i in primitive))
     return '\n'.join(lines)+'\n', len(primitives)
+
+
+def validate_post_transform_window(first_index: int, index_count: int, max_vertices: int) -> None:
+    if type(first_index) is not int or not 0 <= first_index <= 0xffffffff:
+        raise ValueError("first_index must be a non-negative uint32 index ordinal")
+    if type(index_count) is not int or not 1 <= index_count <= 4096:
+        raise ValueError("index_count must be between 1 and 4096")
+    if type(max_vertices) is not int or not 1 <= max_vertices <= 256:
+        raise ValueError("Index windows require explicit max_vertices between 1 and 256")
+
+
+def read_post_transform_window(controller: Any, mesh: Any, *, first_index: int,
+                               index_count: int, max_vertices: int, indexed: bool) -> dict[str, Any]:
+    """Read a native MeshFormat index window and only its referenced output rows.
+
+    Resource objects come exclusively from GetPostVSData in the owning replay;
+    this does not resolve arbitrary IDs or infer primitive/raster association.
+    """
+    validate_post_transform_window(first_index, index_count, max_vertices)
+    total = int(mesh.numIndices)
+    stride = int(mesh.vertexByteStride)
+    vertex_offset = int(mesh.vertexByteOffset)
+    vertex_size = int(mesh.vertexByteSize)
+    if first_index + index_count > total or stride <= 0 or vertex_offset < 0 or vertex_size < 0:
+        raise MeshReadError("Post-transform window is outside native mesh bounds")
+    unbounded = (1 << 64) - 1
+    index_raw = None
+    index_offset = None
+    index_stride = None
+    index_bound = None
+    base = int(mesh.baseVertex) if indexed else 0
+    if indexed:
+        index_stride = int(mesh.indexByteStride)
+        if index_stride not in (1, 2, 4):
+            raise MeshReadError("Unsupported native post-transform index width")
+        index_size = int(mesh.indexByteSize)
+        relative_offset = first_index * index_stride
+        read_size = index_count * index_stride
+        if index_size != unbounded and relative_offset + read_size > index_size:
+            raise MeshReadError("Post-transform index window exceeds native view")
+        index_offset = int(mesh.indexByteOffset) + relative_offset
+        if index_offset < 0:
+            raise MeshReadError("Negative native post-transform index byte offset")
+        index_raw = bytes(controller.GetBufferData(mesh.indexResourceId, index_offset, read_size))
+        if len(index_raw) != read_size:
+            raise MeshReadError("Incomplete post-transform index readback")
+        values = list(struct.unpack('<' + {1: 'B', 2: 'H', 4: 'I'}[index_stride] * index_count, index_raw))
+        index_bound = None if index_size == unbounded else index_size
+    else:
+        values = list(range(first_index, first_index + index_count))
+    vertex_indices, index_rows = [], []
+    allow_restart = bool(mesh.allowRestart) if indexed else False
+    restart = int(mesh.restartIndex) & ((1 << (8 * index_stride)) - 1) if indexed else None
+    for ordinal, value in enumerate(values, first_index):
+        candidate = allow_restart and value == restart
+        vertex = None if candidate else value + base
+        if vertex is not None and vertex < 0:
+            raise MeshReadError("Post-transform base vertex produces a negative row")
+        if vertex is not None and vertex not in vertex_indices:
+            vertex_indices.append(vertex)
+        index_rows.append({"source_index": ordinal, "index_value": value, "vertex_index": vertex,
+                           "restart_candidate": candidate})
+    if len(vertex_indices) > max_vertices or len(vertex_indices) * stride + len(index_raw or b'') > 1048576:
+        raise MeshReadError("Post-transform window exceeds explicit vertex/1 MiB read budget")
+    chunks, offsets = [], []
+    for vertex in vertex_indices:
+        relative_offset = vertex * stride
+        offset = vertex_offset + relative_offset
+        if offset + stride > (1 << 64) - 1 or (vertex_size != unbounded and relative_offset + stride > vertex_size):
+            raise MeshReadError("Post-transform vertex row exceeds native view")
+        chunk = bytes(controller.GetBufferData(mesh.vertexResourceId, offset, stride))
+        if len(chunk) != stride:
+            raise MeshReadError("Incomplete post-transform vertex row readback")
+        chunks.append(chunk)
+        offsets.append(offset)
+    window = {"source": "post_transform", "first_index": first_index, "index_count": index_count,
+              "index_unit": "element", "total_indices": total, "indexed": indexed,
+              "base_vertex": base if indexed else None, "index_byte_offset": index_offset,
+              "index_byte_stride": index_stride, "index_byte_size_bound": index_bound,
+              "vertex_byte_size_bound": None if vertex_size == unbounded else vertex_size,
+              "index_bytes_hex": index_raw.hex() if index_raw is not None else None,
+              "index_rows": index_rows, "complete": True,
+              "vertex_mapping_complete": not any(row["restart_candidate"] for row in index_rows)}
+    return {"raw": b''.join(chunks), "vertex_indices": vertex_indices, "vertex_byte_offsets": offsets,
+            "window": window}

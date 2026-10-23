@@ -926,3 +926,26 @@ def test_open_replay_uses_default_event_picker_for_initial_active_event(
     assert state["current_session_id"] == session_id
     assert state["sessions"][session_id]["active_event_id"] == 202
 
+
+
+@pytest.mark.parametrize("recover_remote", [False, True])
+def test_recovery_preserves_worker_loss_quarantine(monkeypatch, recover_remote):
+    record = {"session_id": "lost-session", "backend_type": "remote", "is_live": False,
+        "state": "degraded", "last_error": "worker result unknown", "capture_file_id": "capture-a",
+        "shader_replacements": [{"replacement_id": "patch-a"}],
+        "recovery": {"status": "requires_restart", "last_error": "worker result unknown"}}
+    save_context_state({"sessions": {"lost-session": record}}, "default")
+    attempts = []
+    async def recover(context_id, session_id, **kwargs):
+        attempts.append(session_id)
+        return record
+    monkeypatch.setattr(server.server_runtime, "_recover_single_session_from_state", recover)
+    result = asyncio.run(server.server_runtime._recover_context_sessions("default", recover_remote=recover_remote))
+    current = result["sessions"]["lost-session"]
+    assert attempts == []
+    assert current["recovery"]["status"] == "requires_restart"
+    assert current["is_live"] is False
+    assert current["shader_replacements"][0]["replacement_id"] == "patch-a"
+    assert result["recovery"]["deferred_session_ids"] == []
+    assert result["recovery"]["degraded_session_ids"] == ["lost-session"]
+    assert result["recovery"]["status"] == "degraded"

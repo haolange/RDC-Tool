@@ -1,4 +1,4 @@
-﻿"""
+"""
 RDC-Tool daemon/runtime server with registry-driven tool registration.
 
 - Registers all catalog-defined tools from `rdc_tool/spec/tool_catalog.json`
@@ -27,6 +27,7 @@ import sys
 import time
 import textwrap
 import zipfile
+from collections import deque
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -65,7 +66,7 @@ from rdc_tool.core.renderdoc_status import (
 from rdc_tool.progress import ProgressReporter
 from rdc_tool.timeout_policy import PIXEL_HISTORY_TIMEOUT_S, remote_connect_timeout_ms
 from rdc_tool.core.event_graph import EventGraphService
-from rdc_tool.core.patch_engine import PatchEngine
+from rdc_tool.core.patch_engine import PatchEngine, _compiler_output_is_fatal, _shader_build_input_provenance
 from rdc_tool.core.perf_service import PerfService
 from rdc_tool.core.pipeline_service import PipelineService
 from rdc_tool.core.render_service import RenderService
@@ -100,6 +101,7 @@ from rdc_tool.utils.artifact_store import ArtifactStore
 from rdc_tool.core.tsv_projection import project_rows, to_tsv_string
 
 logger = logging.getLogger("rdc_tool.server")
+_CURRENT_REPLAY_HEALTH_SCOPE: contextvars.ContextVar[Dict[str, Any] | None] = contextvars.ContextVar("rdc_tool_replay_health_scope", default=None)
 _CURRENT_CONTEXT_ID: contextvars.ContextVar[str | None] = contextvars.ContextVar('rdc_tool_current_context_id', default=None)
 _CURRENT_PROGRESS_REPORTER: contextvars.ContextVar[ProgressReporter | None] = contextvars.ContextVar(
     "rdc_tool_current_progress_reporter",
@@ -190,9 +192,8 @@ class ShaderDebugHandle:
     resolved_context: Dict[str, Any] = field(default_factory=dict)
     selected_target_source: str = ""
     pixel_history_summary: Dict[str, Any] = field(default_factory=dict)
-    synthetic: bool = False
-    synthetic_states: List[Any] = field(default_factory=list)
-    synthetic_index: int = 0
+    pending_states: deque[Any] = field(default_factory=deque)
+    variables: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     breakpoints: List[Dict[str, Any]] = field(default_factory=list)
     stopped_reason: str = "running"
 
@@ -3933,15 +3934,6 @@ def _load_tool_catalog() -> List[Dict[str, Any]]:
     return tools
 
 
-def _resource_keys(resource_id: Any) -> List[str]:
-    keys = [str(resource_id)]
-    try:
-        keys.append(str(int(resource_id)))
-    except Exception:
-        pass
-    return keys
-
-
 def _is_null_resource_id(resource_id: Any) -> bool:
     if resource_id is None:
         return True
@@ -4141,14 +4133,11 @@ def _truth_matrix_entry(status: str, reason: str, **details: Any) -> Dict[str, A
 def _supported_source_encoding_names(controller: Any) -> List[str]:
     if not hasattr(controller, "GetTargetShaderEncodings"):
         return []
-    try:
-        return [
-            name
-            for name in (_shader_encoding_name(item) for item in list(controller.GetTargetShaderEncodings() or []))
-            if str(name or "").strip()
-        ]
-    except Exception:
-        return []
+    return [
+        name
+        for name in (_shader_encoding_name(item) for item in list(controller.GetTargetShaderEncodings() or []))
+        if str(name or "").strip()
+    ]
 
 
 def _session_remote_capability_matrix(
@@ -4183,21 +4172,27 @@ def _session_remote_capability_matrix(
         except Exception:
             controller = None
 
-    endpoint_status = "verified" if endpoint and origin_remote_id else "blocked_current_session"
+    replay_live = str(session_id or "").strip() in _runtime.replays
+    remote_handle = _runtime.remotes.get(origin_remote_id)
+    endpoint_live = bool(remote_handle is not None and remote_handle.connected)
+    endpoint_status = "verified" if endpoint and origin_remote_id and (endpoint_live or (replay_live and controller is not None)) else "not_currently_probed"
     endpoint_reason = (
-        "Remote session is backed by a live remote handle and endpoint."
+        "Recorded remote endpoint is backed by a live handle or selected replay controller."
         if endpoint_status == "verified"
-        else "Remote session metadata is incomplete for the selected context."
+        else "Recorded endpoint metadata alone does not verify a live connection."
     )
-    replay_status = "verified" if str(session_id or "").strip() in _runtime.replays else "blocked_current_session"
+    replay_status = "verified" if replay_live else "not_currently_probed"
     replay_reason = (
         "Replay session is currently live in the selected context."
-        if replay_status == "verified"
-        else "Replay session is not currently live in the selected context."
+        if replay_live
+        else "Registered replay is not loaded; deferred recovery is not evidence of unsupported replay."
     )
 
-    if not probe_live:
-        not_probed_reason = "Live remote shader capability probing is skipped for non-blocking context reads."
+    if not probe_live or controller is None:
+        not_probed_reason = (
+            "Live remote shader capability probing is skipped for non-blocking context reads."
+            if not probe_live else "No live controller was obtained; shader support has not been probed."
+        )
         return {
             "endpoint": _truth_matrix_entry(
                 endpoint_status,
@@ -4262,18 +4257,25 @@ def _session_remote_capability_matrix(
             inspection_status = "unstable"
             inspection_reason = f"Unable to inspect event-bound shader visibility: {exc}"
 
-    supported_encodings = _supported_source_encoding_names(controller) if controller is not None else []
+    supported_encodings = []
+    encoding_error = None
+    try:
+        supported_encodings = _supported_source_encoding_names(controller)
+    except Exception as exc:
+        encoding_error = str(exc)
     patch_supported = False
     patch_reason = "Replay controller unavailable."
     if controller is not None:
         patch_supported, patch_reason = _session_replace_capability(session_id, controller)
     replace_status = "verified" if patch_supported else "unsupported"
-    compile_status = "verified" if supported_encodings else "unsupported"
+    compile_status = "unstable" if encoding_error is not None else ("verified" if supported_encodings else "unsupported")
     compile_reason = (
         "Replay controller exposes BuildTargetShader encodings."
         if supported_encodings
         else "Replay controller does not expose any compilable source encodings."
     )
+    if encoding_error is not None:
+        compile_reason = f"Unable to query shader compile encodings: {encoding_error}"
     debug_status = "degraded"
     debug_reason = "Remote shader debug remains dependent on replay backend support and target/event binding."
     if controller is None or not hasattr(controller, "DebugPixel"):
@@ -4447,9 +4449,12 @@ def _resource_id_tokens(resource_id: Any) -> List[str]:
         return []
     tokens = [text]
     try:
-        tokens.append(str(int(text)))
+        tokens.append(str(int(resource_id)))
     except Exception:
         pass
+    wrapped = re.fullmatch(r"ResourceId::([0-9]+)", text)
+    if wrapped:
+        tokens.append(str(int(wrapped.group(1))))
     return list(dict.fromkeys(tokens))
 
 
@@ -4790,28 +4795,32 @@ def _artifact_path(artifact_ref: Any) -> Optional[str]:
     return str(_artifact_store.get_path(sha256))
 
 
-async def _store_text_artifact_payload(
-    text: str,
+async def _store_bytes_artifact_payload(
+    data: bytes,
     *,
     stem: str,
     suffix: str,
     output_dir: str = "",
     title: str = "",
     mime: str = "text/plain",
+    text_mode: bool = False,
 ) -> Dict[str, Any]:
-    if not text:
+    if not data:
         return {}
     saved_path = ""
     if output_dir:
         out_dir = Path(str(output_dir))
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / f"{_safe_name_token(stem)}{suffix}"
-        out_path.write_text(text, encoding="utf-8")
+        if text_mode:
+            out_path.write_text(data.decode("utf-8"), encoding="utf-8")
+        else:
+            out_path.write_bytes(data)
         saved_path = str(out_path)
     artifact_path = ""
     if _artifact_store is not None:
         artifact = await _artifact_store.store(
-            text.encode("utf-8"),
+            data,
             mime=mime,
             suffix=suffix,
         )
@@ -4828,6 +4837,15 @@ async def _store_text_artifact_payload(
     if payload:
         payload["type"] = "saved_path"
     return payload
+
+
+async def _store_text_artifact_payload(
+    text: str, *, stem: str, suffix: str, output_dir: str = "", title: str = "", mime: str = "text/plain",
+) -> Dict[str, Any]:
+    return await _store_bytes_artifact_payload(
+        text.encode("utf-8"), stem=stem, suffix=suffix, output_dir=output_dir, title=title, mime=mime,
+        text_mode=True,
+    )
 
 
 def _format_size(value: int) -> str:
@@ -4873,7 +4891,7 @@ async def _ensure_live_session(session_id: str) -> ReplayHandle:
     assert _session_manager is not None
     record = (_context_state(_runtime_context_id()).get("sessions") or {}).get(str(session_id), {})
     if (record.get("recovery") or {}).get("status") == "requires_restart":
-        raise CoreError(code="session_requires_restart", message="Replay restoration failed; close and reopen the capture",
+        raise CoreError(code="session_requires_restart", message="Replay requires controlled recovery; close and reopen the capture",
                         category="runtime", details={"session_id": session_id, "last_error": record.get("last_error")})
     replay = _runtime.replays.get(str(session_id))
     if replay is not None:
@@ -4898,8 +4916,63 @@ async def _ensure_live_session(session_id: str) -> ReplayHandle:
 async def _get_controller(session_id: str) -> Any:
     assert _session_manager is not None
     await _ensure_live_session(session_id)
-    return _session_manager.get_controller(session_id)
+    controller = _session_manager.get_controller(session_id)
+    health_scope = _CURRENT_REPLAY_HEALTH_SCOPE.get()
+    if health_scope is not None:
+        await _check_replay_operation_health(controller, session_id, health_scope["operation"], "before_native_access")
+        health_scope["controllers"][session_id] = controller
+    return controller
 
+
+@asynccontextmanager
+async def _replay_operation_health(operation: str):
+    """Check controllers actually accessed, without preceding semantic argument validation."""
+    scope = {"operation": operation, "controllers": {}}
+    token = _CURRENT_REPLAY_HEALTH_SCOPE.set(scope)
+    try:
+        yield
+    finally:
+        try:
+            for session_id, controller in tuple(scope["controllers"].items()):
+                await _check_replay_operation_health(controller, session_id, operation, "after_operation")
+        finally:
+            _CURRENT_REPLAY_HEALTH_SCOPE.reset(token)
+
+
+async def _check_replay_operation_health(controller: Any, session_id: str, operation: str, stage: str) -> None:
+    """Reject native default/null results after a fatal replay error, before publication."""
+    from rdc_tool.core.renderdoc_status import status_code_name, status_code_raw
+
+    def probe():
+        getter = getattr(controller, "GetFatalErrorStatus", None)
+        if not callable(getter):
+            raise RuntimeError("Replay controller does not expose GetFatalErrorStatus")
+        status = getter()
+        if status is None or not callable(getattr(status, "OK", None)):
+            raise RuntimeError("Replay fatal-status probe returned no valid ResultDetails")
+        return status, bool(status.OK())
+
+    details = {"session_id": session_id, "operation": operation, "failure_stage": stage,
+               "source_layer": "renderdoc", "recovery_required": True}
+    try:
+        status, healthy = await _offload(probe)
+    except Exception as exc:
+        message = f"Cannot establish native replay health: {exc}"
+        code = "replay_health_unavailable"
+        details["probe_error"] = str(exc)
+    else:
+        if healthy:
+            return
+        native_code = status.code
+        details["renderdoc_status"] = {
+            "result_code_name": status_code_name(native_code),
+            "result_code_raw": status_code_raw(native_code),
+            "status_text": _rd_status_text(status),
+        }
+        message = f"Native replay fatal error: {details['renderdoc_status']['status_text']}"
+        code = "replay_fatal_error"
+    _update_context_session_record(session_id, recovery_status="requires_restart", last_error=message)
+    raise CoreError(code=code, message=message, category="runtime", details=details)
 
 async def _get_output(session_id: str) -> Any:
     assert _session_manager is not None
@@ -4979,6 +5052,10 @@ async def _ensure_event(session_id: str, event_id: Optional[int]) -> int:
     return resolved_event
 
 
+class ResourceLookupMiss(ValueError):
+    """A completed read-only inventory lookup found no matching resource."""
+
+
 async def _resolve_resource_id(session_id: str, resource_id: Any) -> Any:
     controller = await _get_controller(session_id)
     wanted = str(resource_id)
@@ -4990,9 +5067,9 @@ async def _resolve_resource_id(session_id: str, resource_id: Any) -> Any:
             rid = getattr(obj, "resourceId", None)
             if rid is None:
                 continue
-            if wanted in _resource_keys(rid):
+            if wanted in _resource_id_tokens(rid):
                 return rid
-    raise ValueError(f"Resource not found: {resource_id}")
+    raise ResourceLookupMiss(f"Resource not found: {resource_id}")
 
 
 async def _resolve_texture_id(session_id: str, texture_id: Optional[Any], *, event_id: Optional[int] = None) -> Any:
@@ -5410,27 +5487,6 @@ def _pixel_history_summary(items: Sequence[Dict[str, Any]], event_id: int) -> Di
     }
 
 
-def _build_synthetic_debug_states(
-    resolved_context: Dict[str, Any],
-    pixel_history_summary: Dict[str, Any],
-) -> List[Any]:
-    variables = [
-        SimpleNamespace(name="event_id", value=resolved_context.get("event_id")),
-        SimpleNamespace(name="primitive", value=resolved_context.get("primitive")),
-        SimpleNamespace(name="x", value=resolved_context.get("x")),
-        SimpleNamespace(name="y", value=resolved_context.get("y")),
-        SimpleNamespace(name="pixel_history_hits", value=pixel_history_summary.get("hit_count", 0)),
-    ]
-    return [
-        SimpleNamespace(
-            stepIndex=index,
-            changes=variables,
-            callstack=[SimpleNamespace(function="main", file="", line=0, address=str(index))],
-        )
-        for index in range(3)
-    ]
-
-
 async def _pipeline_snapshot(session_id: str, event_id: Optional[int] = None) -> Any:
     assert _pipeline_service is not None
     evt = await _ensure_event(session_id, event_id)
@@ -5779,63 +5835,6 @@ async def _recover_single_session_from_state(
         raise
 
 
-async def _maybe_refresh_remote_session_after_revert(
-    session_id: str,
-    *,
-    remaining_replacements: Sequence[Dict[str, Any]],
-) -> None:
-    if remaining_replacements:
-        return
-    ctx = _runtime_context_id()
-    state = _context_state(ctx)
-    sessions = state.setdefault("sessions", {})
-    session_record = dict(sessions.get(str(session_id)) or {})
-    if not session_record:
-        return
-    if str(session_record.get("backend_type") or "local") != "remote":
-        return
-
-    try:
-        await _session_manager.close_session(str(session_id))
-    except Exception:
-        logger.debug(
-            "Best-effort close_session during replacement revert refresh failed",
-            exc_info=True,
-        )
-
-    _runtime.replays.pop(str(session_id), None)
-    owned_handle = _release_remote_session_lease(str(session_id), context_id=ctx)
-    remote_meta = _session_record_remote_metadata(session_record)
-    origin_remote_id = str(
-        remote_meta.get("origin_remote_id")
-        or getattr(owned_handle, "remote_id", "")
-        or "",
-    ).strip()
-
-    live_handle = _runtime.remotes.get(origin_remote_id) if origin_remote_id else None
-    if live_handle is None:
-        live_handle = owned_handle
-    if live_handle is not None:
-        try:
-            cleanup_errors = await _offload(_disconnect_remote_handle_sync, live_handle)
-        except Exception as exc:
-            raise RuntimeToolError(
-                "Remote disconnect failed during replacement revert recovery",
-                details={"session_id": str(session_id), "error": str(exc)},
-            ) from exc
-        if cleanup_errors:
-            raise RuntimeToolError(
-                "Remote cleanup failed during replacement revert recovery",
-                details={"session_id": str(session_id), "cleanup_errors": cleanup_errors},
-            )
-
-    if origin_remote_id:
-        _runtime.remotes.pop(origin_remote_id, None)
-        _clear_context_remote_live(origin_remote_id, context_id=ctx)
-
-    await _recover_single_session_from_state(ctx, str(session_id))
-
-
 async def _recover_context_sessions(context_id: str, *, recover_remote: bool = False) -> Dict[str, Any]:
     ctx = normalize_context_id(context_id)
     state = _context_state(ctx)
@@ -5876,6 +5875,12 @@ async def _recover_context_sessions(context_id: str, *, recover_remote: bool = F
     for session_id, session_record in list(sessions.items()):
         session_record = dict(session_record or {})
         backend_type = str(session_record.get("backend_type") or "local")
+        if dict(session_record.get("recovery") or {}).get("status") == "requires_restart":
+            session_record["state"] = "degraded"
+            session_record["is_live"] = False
+            sessions[str(session_id)] = session_record
+            degraded.append(str(session_id))
+            continue
         if live_count >= session_limit and session_id not in _runtime.replays:
             session_record["state"] = "degraded"
             session_record["is_live"] = False
@@ -5922,7 +5927,7 @@ async def _recover_context_sessions(context_id: str, *, recover_remote: bool = F
             degraded.append(str(session_id))
 
     recovery = dict(state.get("recovery") or {})
-    recovery["status"] = "ready"
+    recovery["status"] = "degraded" if degraded else "ready"
     recovery["last_scan_ms"] = _now_ms()
     recovery["last_success_ms"] = _now_ms() if recovered else int(recovery.get("last_success_ms") or 0)
     recovery["recovered_session_ids"] = recovered
@@ -6271,11 +6276,15 @@ async def _core_capabilities(*, detail: str) -> Dict[str, Any]:
         default="local",
     )
     current_controller = None
-    if current_session_id:
+    session_probe = {"status": "not_currently_probed", "reason": "Summary reads do not resume or probe replay controllers."}
+    if detail == "full" and current_session_id:
         try:
-            current_controller = _session_manager.get_controller(current_session_id) if _session_manager is not None else None
-        except Exception:
-            current_controller = None
+            current_controller = await _get_controller(current_session_id)
+            session_probe = {"status": "verified", "reason": "Selected replay controller is live."}
+        except Exception as exc:
+            session_probe = {"status": "unavailable", "reason": str(exc), "code": getattr(exc, "code", "session_probe_failed")}
+    elif detail == "full":
+        session_probe = {"status": "not_currently_probed", "reason": "No replay session is selected."}
     remote_connected = any(handle.connected for handle in _runtime.remotes.values())
     remote_reason = (
         "Remote tools are disabled by config."
@@ -6341,13 +6350,18 @@ async def _core_capabilities(*, detail: str) -> Dict[str, Any]:
         "context_id": context_id,
         "current_session_id": current_session_id,
         "current_backend": current_backend,
+        "current_session_probe": session_probe,
     }
     if current_backend == "remote" and current_session_id:
-        summary["remote_capability_matrix"] = _session_remote_capability_matrix(
-            current_session_id,
-            context_id=context_id,
-            controller=current_controller,
-        )
+        if detail == "full" and current_controller is not None:
+            summary["remote_capability_matrix"] = await _offload(
+                _session_remote_capability_matrix, current_session_id,
+                context_id=context_id, controller=current_controller, probe_live=True,
+            )
+        else:
+            summary["remote_capability_matrix"] = _session_remote_capability_matrix(
+                current_session_id, context_id=context_id, controller=None, probe_live=False,
+            )
     elif remote_connected:
         handle = next((item for item in _runtime.remotes.values() if item.connected), None)
         if handle is not None:
@@ -6805,6 +6819,8 @@ async def _dispatch_session(action: str, args: Dict[str, Any]) -> str:
             active_operation = dict(daemon_state.get("active_operation") or {})
         except Exception:
             active_operation = {}
+        from rdc_tool.runtime_process_identity import runtime_process_identity
+
         return _ok(
             **snapshot,
             session_locator=_session_locator_projection(snapshot, state),
@@ -6813,6 +6829,7 @@ async def _dispatch_session(action: str, args: Dict[str, Any]) -> str:
             recovery=dict(state.get("recovery") or {}),
             limits=dict(state.get("limits") or {}),
             active_operation=active_operation,
+            process_identity=runtime_process_identity(),
             recent_operations=list(state.get("recent_operations") or []),
             remote_capability_matrix=remote_capability_matrix,
             remote_context_locality=str(remote_snapshot.get("context_locality") or "strict"),
@@ -7504,6 +7521,23 @@ async def _dispatch_event(action: str, args: Dict[str, Any]) -> str:
             child_offset=int(args.get("child_offset", 0)), value_offset=int(args.get("value_offset", 0)))))
     _require(args, "session_id")
     session_id = str(args["session_id"])
+    flag_filters: Dict[str, List[Any]] = {}
+    if action == "search_actions":
+        query = _parse_query_like(args.get("query"))
+        validation_details = {"session_id": session_id, "failure_stage": "validate_query",
+                              "effects_attempted": False, "context_preserved": True}
+        action_flags = _get_rd().ActionFlags
+        for filter_name in ("flags_include", "flags_exclude"):
+            requested = query.get(filter_name, [])
+            if not isinstance(requested, list) or any(not isinstance(name, str) or not name for name in requested):
+                return _err(f"{filter_name} must be an array of ActionFlags names", code="validation_error", category="validation", details=validation_details)
+            members = []
+            for name in requested:
+                member = getattr(action_flags, name, None)
+                if member is None:
+                    return _err(f"Unknown ActionFlags name in {filter_name}: {name}", code="validation_error", category="validation", details=validation_details)
+                members.append(member)
+            flag_filters[filter_name] = members
     controller = await _get_controller(session_id)
 
     roots, flat, by_event = await _load_action_index(session_id, controller=controller)
@@ -7617,21 +7651,7 @@ async def _dispatch_event(action: str, args: Dict[str, Any]) -> str:
         return _ok(parent_chain=out)
 
     if action == "search_actions":
-        query = _parse_query_like(args.get("query"))
         max_results = _as_int(args.get("max_results"), 200)
-        flag_filters: Dict[str, List[Any]] = {}
-        action_flags = _get_rd().ActionFlags
-        for filter_name in ("flags_include", "flags_exclude"):
-            requested = query.get(filter_name, [])
-            if not isinstance(requested, list) or any(not isinstance(name, str) or not name for name in requested):
-                return _err(f"{filter_name} must be an array of ActionFlags names", code="validation_error", category="validation")
-            members = []
-            for name in requested:
-                member = getattr(action_flags, name, None)
-                if member is None:
-                    return _err(f"Unknown ActionFlags name in {filter_name}: {name}", code="validation_error", category="validation")
-                members.append(member)
-            flag_filters[filter_name] = members
         name_regex = query.get("name_regex")
         pattern = re.compile(str(name_regex)) if name_regex else None
         name_contains = str(query.get("name_contains", "")).lower().strip()
@@ -7778,7 +7798,12 @@ async def _dispatch_pipeline(action: str, args: Dict[str, Any]) -> str:
             ["shaders", "output_targets", "topology", "viewports_scissors"])
         snapshot = await _pipeline_service.snapshot_pipeline(
             session_id=session_id, event_id=resolved_event_id, session_manager=_session_manager, sections=selected)
-        snapshot_dict = snapshot.model_dump(mode="json")
+        keys = {k for section in selected for k in fields[section]}
+        snapshot_dict = {
+            k: v for k, v in snapshot.model_dump(mode="json").items() if k in keys or k == "api"
+        }
+        # Model defaults for uncollected sections are not failed native reads.
+        # Qualify only the requested facts that will actually be returned.
         truth_meta = _pipeline_truth_metadata(session_id, snapshot_dict)
         if "output_targets" in selected:
             try:
@@ -7786,8 +7811,7 @@ async def _dispatch_pipeline(action: str, args: Dict[str, Any]) -> str:
                     session_id, resolved_event_id, target={"semantic": "event_output"})
             except Exception as exc:
                 visual_target_payload = {"unavailable_reason": str(exc)}
-        keys = {k for section in selected for k in fields[section]}
-        snapshot_dict = {k: v for k, v in snapshot_dict.items() if k in keys or k == "api"}
+
         snapshot_dict.update(truth_meta)
         if "output_targets" in selected:
             snapshot_dict.update(selected_visual_target=visual_target_payload,
@@ -7956,8 +7980,9 @@ async def _dispatch_resource(action: str, args: Dict[str, Any]) -> str:
             "event_resolvable": resolvable,
         }
 
-    async def list_textures() -> List[Dict[str, Any]]:
-        textures = await _offload(controller.GetTextures)
+    async def list_textures(textures: Optional[Sequence[Any]] = None) -> List[Dict[str, Any]]:
+        if textures is None:
+            textures = await _offload(controller.GetTextures)
         binding_index = await get_binding_index()
         out = []
         for tex in textures:
@@ -7989,8 +8014,9 @@ async def _dispatch_resource(action: str, args: Dict[str, Any]) -> str:
             )
         return out
 
-    async def list_buffers() -> List[Dict[str, Any]]:
-        buffers = await _offload(controller.GetBuffers)
+    async def list_buffers(buffers: Optional[Sequence[Any]] = None) -> List[Dict[str, Any]]:
+        if buffers is None:
+            buffers = await _offload(controller.GetBuffers)
         out = []
         for buf in buffers:
             rid = getattr(buf, "resourceId", None)
@@ -8006,9 +8032,15 @@ async def _dispatch_resource(action: str, args: Dict[str, Any]) -> str:
             )
         return out
 
-    async def list_descriptor_stores() -> List[Dict[str, Any]]:
+    async def load_identity_inventory() -> Tuple[Any, Any, Any, Any]:
+        # The same native census qualifies both details resolution and public absence checks.
+        return (await _offload(controller.GetTextures), await _offload(controller.GetBuffers),
+                await _offload(controller.GetDescriptorStores), await _offload(controller.GetResources))
+
+    async def list_descriptor_stores(stores: Optional[Sequence[Any]] = None) -> List[Dict[str, Any]]:
         from rdc_tool.core.native_values import native_value
-        stores = await _offload(controller.GetDescriptorStores)
+        if stores is None:
+            stores = await _offload(controller.GetDescriptorStores)
         return [{"resource_id": str(store.resourceId), "kind": "descriptor_store",
                  **native_value(store)} for store in stores]
 
@@ -8048,32 +8080,57 @@ async def _dispatch_resource(action: str, args: Dict[str, Any]) -> str:
         kind = args.get("kind", "all")
         if kind not in {"all", "texture", "buffer", "descriptor_store"}:
             return _err("Invalid resource kind", code="validation_error")
-        textures = await list_textures() if kind in {"all", "texture"} else []
-        buffers = await list_buffers() if kind in {"all", "buffer"} else []
-        stores = await list_descriptor_stores() if kind in {"all", "descriptor_store"} else []
+        payload: Dict[str, Any] = {}
+        if kind == "all":
+            native_textures, native_buffers, native_stores, descriptions = await load_identity_inventory()
+            textures = await list_textures(native_textures)
+            buffers = await list_buffers(native_buffers)
+            stores = await list_descriptor_stores(native_stores)
+            ids: Dict[str, str] = {}
+            for collection in (native_textures, native_buffers, native_stores, descriptions):
+                for item in collection:
+                    tokens = _resource_id_tokens(item.resourceId)
+                    if not tokens:
+                        raise ValueError("Native resource inventory contains an empty identity")
+                    ids.setdefault(tokens[-1], str(item.resourceId))
+            payload["identity_inventory"] = {
+                "scope": "all_native_resource_identities", "complete": True,
+                "resource_ids": list(ids.values()), "count": len(ids),
+                "source_counts": {"textures": len(native_textures), "buffers": len(native_buffers),
+                                  "descriptor_stores": len(native_stores), "descriptions": len(descriptions)},
+            }
+        else:
+            textures = await list_textures() if kind == "texture" else []
+            buffers = await list_buffers() if kind == "buffer" else []
+            stores = await list_descriptor_stores() if kind == "descriptor_store" else []
         resources = textures + buffers + stores
+        payload["resources"] = resources
         projection = _projection_request(args, "rd.resource.list_all")
         if projection:
-            return _ok(
-                resources=resources,
-                projections=_resource_rows_projection(
-                    resources,
-                    include_tsv_text=bool(projection.get("include_tsv_text", False)),
-                ),
-            )
-        return _ok(resources=resources)
+            payload["projections"] = _resource_rows_projection(
+                resources, include_tsv_text=bool(projection.get("include_tsv_text", False)))
+        return _ok(**payload)
     if action == "get_details":
         _require(args, "resource_id")
-        rid = str(args["resource_id"])
-        from rdc_tool.core.native_values import native_value
-        resources = (await list_textures()) + (await list_buffers()) + (await list_descriptor_stores())
-        descriptions = await _offload(controller.GetResources)
-        description = next((item for item in descriptions if str(item.resourceId) == rid), None)
+        requested = args["resource_id"]
+        # Complete the read-only inventory before optional binding enrichment,
+        # which can inspect/repair a replay position. Only this miss is pre-effect.
+        textures, buffers, stores, descriptions = await load_identity_inventory()
+        matched = next((item.resourceId
+                        for collection in (textures, buffers, stores, descriptions)
+                        for item in collection if _resource_id_matches(item.resourceId, requested)), None)
+        if matched is None:
+            return _err(f"Resource not found: {requested}", code="resource_not_found", category="validation",
+                        details={"session_id": session_id, "failure_stage": "resolve_resource",
+                                 "effects_attempted": False, "context_preserved": True})
+        rid = str(matched)
+        resources = (await list_textures(textures)) + (await list_buffers(buffers)) + (await list_descriptor_stores(stores))
+        description = next((item for item in descriptions if _resource_id_matches(item.resourceId, matched)), None)
         details = next((item for item in resources if item.get("resource_id") == rid), None)
         if details is None and description is not None:
             details = {"resource_id": rid, "name": str(description.name)}
         if details is None:
-            return _err(f"Resource not found: {rid}", code="resource_not_found")
+            return _err(f"Resource metadata unavailable: {rid}", code="resource_details_unavailable")
         if args.get("include_initialization", False):
             details["initialization"] = ({"status": "available",
                 "chunk_indices": [int(index) for index in description.initialisationChunks],
@@ -8504,7 +8561,12 @@ async def _dispatch_buffer(action: str, args: Dict[str, Any]) -> str:
     session_id = str(args["session_id"])
     buffer_id = args["buffer_id"]
     controller = await _get_controller(session_id)
-    rid = await _resolve_resource_id(session_id, buffer_id)
+    try:
+        rid = await _resolve_resource_id(session_id, buffer_id)
+    except ResourceLookupMiss as exc:
+        return _err(str(exc), code="resource_not_found", category="validation",
+                    details={"session_id": session_id, "failure_stage": "resolve_buffer",
+                             "effects_attempted": False, "context_preserved": True})
     offset = _as_int(args.get("offset"), 0)
     size = args.get("size")
     if size is None:
@@ -8514,13 +8576,19 @@ async def _dispatch_buffer(action: str, args: Dict[str, Any]) -> str:
         descriptions = await _offload(controller.GetBuffers)
         descriptor = next((item for item in descriptions if item.resourceId == rid), None)
         if descriptor is None:
-            return _err("Buffer not found", code="resource_not_found")
+            return _err("Buffer not found", code="resource_not_found", category="validation",
+                        details={"session_id": session_id, "failure_stage": "resolve_buffer",
+                                 "effects_attempted": False, "context_preserved": True})
         expected = int(descriptor.length)-offset if size == 0 else size
         if offset < 0 or expected < 0 or offset+expected > int(descriptor.length):
-            return _err("Buffer range exceeds resource", code="validation_error")
+            return _err("Buffer range exceeds resource", code="validation_error", category="validation",
+                        details={"session_id": session_id, "failure_stage": "validate_buffer_range",
+                                 "effects_attempted": False, "context_preserved": True})
         inline = _as_bool(args.get("as_base64"), False)
         if inline and expected > 1048576:
-            return _err("Inline buffer limit is 1 MiB; request a smaller range or export", code="output_budget_exceeded")
+            return _err("Inline buffer limit is 1 MiB; request a smaller range or export", code="output_budget_exceeded", category="validation",
+                        details={"session_id": session_id, "failure_stage": "validate_buffer_read_budget",
+                                 "effects_attempted": False, "context_preserved": True})
         async def read_buffer(event):
             data = await _offload(controller.GetBufferData, rid, offset, expected) if expected else b""
             if len(data) != expected:
@@ -8645,6 +8713,10 @@ def _mesh_format_payload(mesh: Any) -> Dict[str, Any]:
         "index_byte_stride": int(getattr(mesh, "indexByteStride", 0) or 0),
         "num_indices": int(getattr(mesh, "numIndices", 0) or 0),
         "topology": str(getattr(mesh, "topology", "") or ""),
+        "topology_name": getattr(getattr(mesh, "topology", None), "name", None),
+        "base_vertex": int(mesh.baseVertex) if hasattr(mesh, "baseVertex") else None,
+        "allow_restart": getattr(mesh, "allowRestart", None),
+        "restart_index": getattr(mesh, "restartIndex", None),
         "status": str(getattr(mesh, "status", "") or ""),
         "format": _resource_format_payload(getattr(mesh, "format", None)),
     }
@@ -8684,6 +8756,17 @@ async def _dispatch_mesh(action: str, args: Dict[str, Any]) -> str:
         return _ok(mesh_config={"event_id": event_id, "topology": snap.topology, "bindings": [b.model_dump(mode="json") for b in snap.bindings], "vertex_input": inputs})
     if action == "get_post_transform_data":
         stage = str(args.get("stage", "")).lower()
+        from rdc_tool.core.mesh_data import read_post_transform_window, validate_post_transform_window
+        window_requested = args.get("index_count") is not None or args.get("first_index") is not None
+        if window_requested:
+            try:
+                if stage != "vs":
+                    raise ValueError("Index windows currently require VS output")
+                validate_post_transform_window(args.get("first_index", 0), args.get("index_count"), args.get("max_vertices", 0))
+            except ValueError as exc:
+                return _err(str(exc), code="validation_error", category="validation",
+                            details={"session_id": str(args.get("session_id", "")), "failure_stage": "validate_mesh_window",
+                                     "effects_attempted": False, "context_preserved": True})
         if stage not in {"vs", "gs"}:
             return _err("stage must be vs or gs", code="validation_error", category="validation")
         _require(args, "session_id")
@@ -8748,9 +8831,21 @@ async def _dispatch_mesh(action: str, args: Dict[str, Any]) -> str:
             return _err("Invalid post-transform vertex layout", code="mesh_post_transform_unavailable")
         unbounded = vertex_size == (1 << 64) - 1
         read_size = (max_vertices * vertex_stride if max_vertices > 0 else 0) if unbounded else (min(vertex_size, max_vertices * vertex_stride) if max_vertices > 0 and vertex_size > 0 else vertex_size)
-        raw = await _offload(controller.GetBufferData, vertex_resource_id, vertex_offset, read_size)
-        if read_size > 0 and not unbounded and len(raw) != read_size:
-            return _err("Incomplete post-transform vertex readback", code="mesh_post_transform_failed")
+        window_data = None
+        if window_requested:
+            try:
+                window_data = await _offload(read_post_transform_window, controller, mesh,
+                    first_index=args.get("first_index", 0), index_count=args["index_count"],
+                    max_vertices=max_vertices, indexed=not _is_null_resource_id(getattr(mesh, "indexResourceId", None)))
+                raw = window_data["raw"]
+            except (ValueError, TypeError, AttributeError) as exc:
+                return _err(str(exc), code="mesh_post_transform_window_failed", category="runtime",
+                            details={"session_id": session_id, "resolved_event_id": int(event_id),
+                                     "failure_stage": "read_mesh_window", "effects_attempted": True})
+        else:
+            raw = await _offload(controller.GetBufferData, vertex_resource_id, vertex_offset, read_size)
+            if read_size > 0 and not unbounded and len(raw) != read_size:
+                return _err("Incomplete post-transform vertex readback", code="mesh_post_transform_failed")
         mesh_format = _mesh_format_payload(mesh)
         rows = _mesh_vertex_rows(raw, stride=vertex_stride, max_vertices=max_vertices)
         from rdc_tool.core.replay_facts import mesh_attributes, post_transform_outputs
@@ -8760,14 +8855,23 @@ async def _dispatch_mesh(action: str, args: Dict[str, Any]) -> str:
             pipe = await _offload(controller.GetPipelineState)
             reflection = await _offload(pipe.GetShaderReflection, _rd_stage(stage))
             api = await _offload(controller.GetAPIProperties)
-            outputs = post_transform_outputs(reflection, "D3D11" if api.pipelineType == rd.GraphicsAPI.D3D11 else "D3D12" if api.pipelineType == rd.GraphicsAPI.D3D12 else "unverified", vertex_stride, raw, rows)
+            outputs = post_transform_outputs(reflection, "D3D11" if api.pipelineType == rd.GraphicsAPI.D3D11 else "D3D12" if api.pipelineType == rd.GraphicsAPI.D3D12 else "Vulkan" if stage == "vs" and api.pipelineType == rd.GraphicsAPI.Vulkan else "unverified", vertex_stride, raw, rows)
+        if window_data is not None:
+            for row, vertex, offset in zip(rows, window_data["vertex_indices"], window_data["vertex_byte_offsets"]):
+                row["vertex_index"] = vertex
+                row["source_byte_offset"] = offset
+        truncated = (None if unbounded and max_vertices > 0 and len(rows) == max_vertices else bool(max_vertices > 0 and not unbounded and vertex_size // vertex_stride > len(rows)))
+        if window_data is not None:
+            window = window_data["window"]
+            truncated = window["first_index"] > 0 or window["first_index"] + window["index_count"] < window["total_indices"] or not window["vertex_mapping_complete"]
         return _ok(
             mesh_data={
                 "mesh_format": mesh_format,
                 "vertex_rows": rows,
+                **({"index_window": window_data["window"]} if window_data is not None else {}),
                 "attributes": attributes, "outputs": outputs, "source": "post_transform",
                 "vertex_count": len(rows),
-                "truncated": (None if unbounded and max_vertices > 0 and len(rows) == max_vertices else bool(max_vertices > 0 and not unbounded and vertex_size // vertex_stride > len(rows))),
+                "truncated": truncated,
                 "stage": stage.upper(), "stage_bound": True, "view_index": view_index,
             },
             resolved_event_id=int(event_id),
@@ -8803,6 +8907,30 @@ async def _dispatch_mesh(action: str, args: Dict[str, Any]) -> str:
             indices.append(struct.unpack(fmt, raw[i : i + size])[0])
         return _ok(indices=indices)
     return _err(f"Unsupported mesh action: {action}")
+
+
+def _sampled_texture_stats(arr: Any, source_stats: Dict[str, Any], stride: int) -> Dict[str, Any]:
+    import numpy as np
+    finite = arr[np.isfinite(arr)]
+    stats = {
+        **source_stats, "shape": list(arr.shape), "dtype": str(arr.dtype), "stride": stride,
+        "nan_count": int(np.isnan(arr).sum()), "inf_count": int(np.isinf(arr).sum()),
+        "min": float(finite.min()) if finite.size else None,
+        "max": float(finite.max()) if finite.size else None,
+        "mean": float(finite.mean()) if finite.size else None,
+        "channels": {},
+    }
+    if arr.ndim == 3:
+        for index, name in enumerate("rgba"[:arr.shape[2]]):
+            channel = arr[..., index]
+            valid = channel[np.isfinite(channel)]
+            stats["channels"][name] = {
+                "min": float(valid.min()) if valid.size else None,
+                "max": float(valid.max()) if valid.size else None,
+                "mean": float(valid.mean()) if valid.size else None,
+                "nan_count": int(np.isnan(channel).sum()), "inf_count": int(np.isinf(channel).sum()),
+            }
+    return stats
 
 
 async def _dispatch_texture(action: str, args: Dict[str, Any]) -> str:
@@ -8937,18 +9065,18 @@ async def _dispatch_texture(action: str, args: Dict[str, Any]) -> str:
         if as_type != "float" and not np.isfinite(arr).all():
             return _err("Cannot convert non-finite region to integers", code="texture_nonfinite_data")
         arr = arr.astype({"float": np.float64, "uint": np.uint32, "int": np.int32}[as_type])
-        finite_samples = arr[np.isfinite(arr)]
-        stats.update(shape=list(arr.shape), dtype=str(arr.dtype), stride=stride,
-                     nan_count=int(np.isnan(arr).sum()), inf_count=int(np.isinf(arr).sum()),
-                     min=float(finite_samples.min()) if finite_samples.size else None,
-                     max=float(finite_samples.max()) if finite_samples.size else None,
-                     mean=float(finite_samples.mean()) if finite_samples.size else None)
+        stats = _sampled_texture_stats(arr, stats, stride)
+        inline_value_limit = 256
+        inline_complete = arr.size <= inline_value_limit
         container = io.BytesIO()
         np.savez_compressed(container, pixels=arr)
         artifact_ref = await _artifact_store.store(container.getvalue(), mime="application/x-npz", suffix=".npz")
         artifact_path = _artifact_path(artifact_ref)
         truth_meta = await _event_truth_metadata(session_id, int(resolved_event_id))
         return _ok(
+            values=arr.tolist() if inline_complete else None,
+            values_status="complete" if inline_complete else "omitted_limit",
+            inline_value_limit=inline_value_limit,
             values_path=artifact_path,
             stats=stats,
             resolved_event_id=int(resolved_event_id),
@@ -9169,18 +9297,7 @@ async def _dispatch_texture(action: str, args: Dict[str, Any]) -> str:
         if stride < 1:
             return _err("Statistics stride must be positive", code="validation_error")
         arr = arr[::stride, ::stride]
-        finite_samples = arr[np.isfinite(arr)]
-        stats.update(shape=list(arr.shape), stride=stride, nan_count=int(np.isnan(arr).sum()), inf_count=int(np.isinf(arr).sum()),
-                     min=float(finite_samples.min()) if finite_samples.size else None,
-                     max=float(finite_samples.max()) if finite_samples.size else None,
-                     mean=float(finite_samples.mean()) if finite_samples.size else None)
-        stats["channels"] = {}
-        for i, name in enumerate("rgba"[:arr.shape[2]]):
-            channel = arr[..., i]
-            finite = channel[np.isfinite(channel)]
-            stats["channels"][name] = {"min": float(finite.min()) if finite.size else None,
-                                       "max": float(finite.max()) if finite.size else None,
-                                       "nan_count": int(np.isnan(channel).sum()), "inf_count": int(np.isinf(channel).sum())}
+        stats = _sampled_texture_stats(arr, stats, stride)
         truth_meta = await _event_truth_metadata(session_id, int(resolved_event_id))
         return _ok(
             stats={**dict(stats or {}), "event_id": int(resolved_event_id)},
@@ -9327,6 +9444,10 @@ def _shader_edit_plan(
     )
     if source_available:
         return plan
+    plan.update({
+        "can_edit_text": False, "can_build": False, "can_replace": False,
+        "allowed_edit_inputs": [], "allowed_ops": [], "build_input_kind": "unsupported", "requires_toolchain": [],
+    })
     encoding_key = str(source_encoding or "").strip().lower().replace("_", "")
     if encoding_key in {"dxil", "dxbc"}:
         plan["input_kind"] = "renderdoc_disassembly"
@@ -9341,13 +9462,6 @@ def _shader_edit_plan(
         return plan
     if encoding_key in {"spirv", "spirvasm", "openglspirv", "openglspirvasm"}:
         plan["input_kind"] = "source_unavailable"
-        plan["can_edit_text"] = False
-        plan["can_build"] = False
-        plan["can_replace"] = False
-        plan["allowed_edit_inputs"] = []
-        plan["allowed_ops"] = []
-        plan["build_input_kind"] = "unsupported"
-        plan["requires_toolchain"] = []
         plan["recommended_next_tool"] = "rd.shader.get_disassembly"
         plan["fallback_tools"] = ["rd.shader.get_disassembly"]
         plan["blocked_reason"] = (
@@ -9733,53 +9847,31 @@ def _pipeline_object_for_cbuffer(pipe: Any, stage_name: str) -> Any:
     return rd.ResourceId()
 
 
-def _constant_buffer_binding_info(bound_block: Any, block: Any, array_index: int) -> Dict[str, Any]:
-    resource = None
-    resource_id = ""
-    offset = 0
-    size = 0
-    set_or_space = 0
-    slot_value = int(getattr(block, "bindPoint", 0) or 0)
-
-    descriptor = getattr(bound_block, "descriptor", None) if bound_block is not None else None
-    access = getattr(bound_block, "access", None) if bound_block is not None else None
-    if descriptor is not None:
-        resource = getattr(descriptor, "resource", None)
-        if resource is not None and not _is_null_resource_id(resource):
-            resource_id = str(resource)
-        offset = _as_int(getattr(descriptor, "byteOffset", getattr(descriptor, "offset", 0)), 0)
-        size = _as_int(getattr(descriptor, "byteSize", getattr(descriptor, "size", 0)), 0)
-        slot_value = _as_int(getattr(access, "index", slot_value), slot_value)
-        set_or_space = _as_int(getattr(access, "type", getattr(access, "bindset", 0)), 0)
-        return {
-            "resource": resource,
-            "resource_id": resource_id,
-            "offset": offset,
-            "size": size,
-            "slot": slot_value,
-            "set_or_space": set_or_space,
-        }
-
-    bind_point = getattr(bound_block, "bindPoint", None) if bound_block is not None else None
-    if bind_point is not None:
-        slot_value = _as_int(getattr(bind_point, "bind", slot_value), slot_value)
-        set_or_space = _as_int(getattr(bind_point, "bindset", 0), 0)
-    buffers = list(getattr(bound_block, "buffers", None) or []) if bound_block is not None else []
-    if 0 <= int(array_index) < len(buffers):
-        buffer = buffers[int(array_index)]
-        resource = getattr(buffer, "resourceId", None)
-        if resource is not None and not _is_null_resource_id(resource):
-            resource_id = str(resource)
-        offset = _as_int(getattr(buffer, "byteOffset", 0), 0)
-        size = _as_int(getattr(buffer, "byteSize", 0), 0)
+def _constant_buffer_binding_info(bound_block: Any, block: Any, block_index: int) -> Dict[str, Any]:
+    descriptor = getattr(bound_block, "descriptor", None)
+    resource = getattr(descriptor, "resource", None)
     return {
         "resource": resource,
-        "resource_id": resource_id,
-        "offset": offset,
-        "size": size,
-        "slot": slot_value,
-        "set_or_space": set_or_space,
+        "resource_id": str(resource) if resource is not None and not _is_null_resource_id(resource) else "",
+        "offset": _as_int(getattr(descriptor, "byteOffset", 0), 0),
+        "size": _as_int(getattr(descriptor, "byteSize", 0), 0),
+        "slot": int(block_index),
+        "set_or_space": _as_int(getattr(block, "fixedBindSetOrSpace", 0), 0),
     }
+
+
+def _constant_buffer_byte_window(block_bytes: int, binding_bytes: int, max_bytes: int) -> Dict[str, Any]:
+    if max_bytes < 0:
+        raise CoreError(code="invalid_max_bytes", category="validation", message="max_bytes must be non-negative; zero means no per-block byte cap")
+    block_bytes = max(0, int(block_bytes))
+    binding_bytes = max(0, int(binding_bytes))
+    required = block_bytes or binding_bytes
+    available = binding_bytes or required
+    permitted = min(available, max_bytes) if max_bytes > 0 else available
+    status = "unknown_extent" if required <= 0 else "binding_limited" if available < required else "budget_limited" if permitted < required else "complete_range_permitted"
+    return {"required_bytes": required, "required_source": "reflection" if block_bytes else "binding" if binding_bytes else "unknown",
+            "binding_bytes": binding_bytes, "byte_budget": int(max_bytes), "permitted_bytes": permitted,
+            "complete_range_permitted": status == "complete_range_permitted", "status": status}
 
 
 async def _collect_constant_buffers(
@@ -9809,7 +9901,7 @@ async def _collect_constant_buffers(
     results: List[Dict[str, Any]] = []
 
     for block_index, block in enumerate(block_defs):
-        block_slot = _as_int(getattr(block, "bindPoint", 0), 0)
+        block_slot = int(block_index)
         if requested_slot is not None and int(block_slot) != requested_slot:
             continue
 
@@ -9820,7 +9912,7 @@ async def _collect_constant_buffers(
             except Exception:
                 bound_block = None
 
-        binding = _constant_buffer_binding_info(bound_block, block, int(array_index))
+        binding = _constant_buffer_binding_info(bound_block, block, block_index)
         vars_layout = [
             _shader_variable_layout_payload(variable)
             for variable in (getattr(block, "variables", None) or [])
@@ -9839,45 +9931,71 @@ async def _collect_constant_buffers(
             "vars": vars_layout,
         }
 
-        if include_contents and hasattr(controller, "GetCBufferVariableContents"):
-            resource = binding.get("resource")
-            if resource is None:
-                resource = rd.ResourceId()
-            requested_length = int(binding.get("size", 0) or 0)
-            if requested_length <= 0:
-                requested_length = int(getattr(block, "byteSize", 0) or 0)
-            if requested_length > 0 and max_bytes > 0:
-                requested_length = min(requested_length, int(max_bytes))
-            try:
-                raw_contents = await _offload(
-                    controller.GetCBufferVariableContents,
-                    pipeline_obj,
-                    shader_id,
-                    rd_stage,
-                    entry_point,
-                    int(block_index),
-                    resource,
-                    int(binding.get("offset", 0) or 0),
-                    int(requested_length),
-                )
-                serialized_contents = [
-                    _shader_variable_payload(variable)
-                    for variable in list(raw_contents or [])
-                ]
-                entry["contents"] = serialized_contents
-                if flatten:
-                    flattened: Dict[str, Any] = {}
-                    for variable in list(raw_contents or []):
-                        _flatten_shader_variable_values(variable, "", flattened)
-                    entry["flattened_contents"] = flattened
-            except Exception as exc:
-                entry["contents"] = []
-                entry["flattened_contents"] = {} if flatten else None
-                entry["decode_error"] = str(exc)
+        if include_contents:
+            coverage = _constant_buffer_byte_window(entry["byte_size"], entry["size"], int(max_bytes))
+            entry.update(input_coverage=coverage, decode_input_bytes=0, decode_status="unavailable",
+                         contents=[], flattened_contents={} if flatten else None)
+            if not coverage["complete_range_permitted"]:
+                entry["decode_error"] = "Complete reflected input range is unavailable: " + coverage["status"]
+            elif getattr(block, "bufferBacked", None) is True and not entry["resource_id"]:
+                entry["decode_error"] = "Buffer-backed constant block has no bound resource"
+            elif not hasattr(controller, "GetCBufferVariableContents"):
+                entry["decode_error"] = "Native constant buffer decoding is unavailable"
+            else:
+                resource = binding.get("resource")
+                if resource is None:
+                    resource = rd.ResourceId()
+                requested_length = int(coverage["permitted_bytes"])
+                entry["decode_input_bytes"] = requested_length
+                try:
+                    raw_contents = list(await _offload(
+                        controller.GetCBufferVariableContents, pipeline_obj, shader_id, rd_stage, entry_point,
+                        int(block_index), resource, int(binding.get("offset", 0) or 0), requested_length,
+                    ) or [])
+                    serialized_contents = [_shader_variable_payload(variable) for variable in raw_contents]
+                    if not serialized_contents:
+                        raise ValueError("Native constant buffer decoder returned no variables")
+                    if flatten:
+                        flattened: Dict[str, Any] = {}
+                        for variable in raw_contents:
+                            _flatten_shader_variable_values(variable, "", flattened)
+                        entry["flattened_contents"] = flattened
+                    entry["contents"] = serialized_contents
+                    entry["decode_status"] = "decoded"
+                except Exception as exc:
+                    entry["contents"] = []
+                    entry["flattened_contents"] = {} if flatten else None
+                    entry["decode_error"] = str(exc)
 
         results.append(entry)
 
     return results
+
+
+def _require_shader_debug_handle(session_id: str, debug_id: str) -> ShaderDebugHandle:
+    handle = _runtime.shader_debugs.get(debug_id)
+    reason = "unknown_handle" if handle is None else "session_mismatch" if handle.session_id != session_id else ""
+    if reason:
+        raise CoreError(
+            code="shader_debug_handle_invalid", category="validation",
+            message="Shader debugger handle is unavailable for the owning replay session; historical handles cannot be reused after replay recovery.",
+            details={"session_id": session_id, "failure_stage": "validate_debug_handle",
+                     "failure_reason": reason, "effects_attempted": False, "context_preserved": True},
+        )
+    return handle
+
+
+async def _disassembly_target_metadata(controller: Any) -> Dict[str, Any]:
+    result = {"available_targets": [], "available_targets_status": "unsupported", "available_targets_error": None}
+    native_targets = getattr(controller, "GetDisassemblyTargets", None)
+    if callable(native_targets):
+        try:
+            result["available_targets"] = [str(item) for item in await _offload(native_targets, True)]
+            result["available_targets_status"] = "complete"
+        except Exception as exc:
+            result["available_targets_status"] = "unavailable"
+            result["available_targets_error"] = str(exc)
+    return result
 
 
 async def _dispatch_shader(action: str, args: Dict[str, Any]) -> str:
@@ -9927,6 +10045,8 @@ async def _dispatch_shader(action: str, args: Dict[str, Any]) -> str:
                     "entry": str(args.get("entry") or "main"),
                     "target": str(args.get("target") or ""),
                     "failure_stage": "validate_compile_input",
+                    "effects_attempted": False,
+                    "context_preserved": True,
                 },
             )
         source = str(source_payload["source"])
@@ -9941,10 +10061,12 @@ async def _dispatch_shader(action: str, args: Dict[str, Any]) -> str:
                 requested_encoding_name = "spirvasm"
             else:
                 requested_encoding_name = "hlsl"
-        requested_encoding = _shader_encoding_from_name(requested_encoding_name)
         supported_encodings = list(await _offload(controller.GetTargetShaderEncodings) or [])
         supported_encoding_names = [_shader_encoding_name(item) for item in supported_encodings]
-        supported_encoding_name_set = {str(name).lower() for name in supported_encoding_names}
+        # Resolve the same native encoding and ASM-to-binary route as PatchEngine.
+        build_encoding = PatchEngine._find_requested_encoding(supported_encodings, requested_encoding_name)
+        if build_encoding is None and requested_encoding_name in {"spirvasm", "spirv_asm"}:
+            build_encoding = PatchEngine._find_requested_encoding(supported_encodings, "spirv")
         replacement_supported, replacement_reason = _session_replace_capability(session_id, controller)
         edit_plan = _shader_edit_plan(
             source_encoding=requested_encoding_name,
@@ -9958,32 +10080,21 @@ async def _dispatch_shader(action: str, args: Dict[str, Any]) -> str:
             "entry": entry,
             "target": str(args.get("target") or ""),
         }
-        if requested_encoding is None:
-            return _err(
-                f"Unsupported shader source encoding: {requested_encoding_name}",
-                code="shader_compile_encoding_unsupported",
-                category="validation",
-                details={
-                    "requested_source_encoding": requested_encoding_name,
-                    "supported_source_encodings": supported_encoding_names,
-                    "runtime_replacement_supported": bool(replacement_supported),
-                    "runtime_replacement_reason": replacement_reason,
-                    "edit_plan": edit_plan,
-                    **source_details,
-                },
-            )
-        if requested_encoding_name not in supported_encoding_name_set:
+        prebuild_proof = {
+            "failure_stage": "validate_compile_input",
+            "effects_attempted": False,
+            "context_preserved": True,
+        }
+        if build_encoding is None:
             return _err(
                 f"Requested shader source encoding is unsupported for this session: {requested_encoding_name}",
-                code="shader_compile_encoding_unsupported",
-                category="validation",
+                code="shader_compile_encoding_unsupported", category="validation",
                 details={
                     "requested_source_encoding": requested_encoding_name,
                     "supported_source_encodings": supported_encoding_names,
                     "runtime_replacement_supported": bool(replacement_supported),
                     "runtime_replacement_reason": replacement_reason,
-                    "edit_plan": edit_plan,
-                    **source_details,
+                    "edit_plan": edit_plan, **source_details, **prebuild_proof,
                 },
             )
         if requested_encoding_name in {"dxil", "dxbc"}:
@@ -9998,20 +10109,42 @@ async def _dispatch_shader(action: str, args: Dict[str, Any]) -> str:
                     "runtime_replacement_reason": replacement_reason,
                     "edit_plan": edit_plan,
                     "failure_stage": "validate_compile_input",
+                    "effects_attempted": False,
+                    "context_preserved": True,
                     "failure_reason": "binary_container_text_input_unsupported",
                     "recommended_next_tool": "rd.shader.extract_binary",
                     **source_details,
                 },
             )
+        build_encoding_name = _shader_encoding_name(build_encoding)
+        try:
+            build_bytes = await _offload(
+                PatchEngine._source_bytes_for_build, source, build_encoding_name, "SPIR-V ASM"
+            )
+        except (OSError, ValueError, RuntimeError) as exc:
+            return _err(
+                str(exc), code="shader_compile_assembly_failed", category="validation",
+                details={"requested_source_encoding": requested_encoding_name,
+                         "build_encoding": build_encoding_name, **source_details,
+                         **prebuild_proof, "failure_stage": "assemble_compile_input"},
+            )
         compile_flags = rd.ShaderCompileFlags()
         shader_id, messages = await _offload(
             controller.BuildTargetShader,
             entry,
-            requested_encoding,
-            source.encode("utf-8"),
+            build_encoding,
+            build_bytes,
             compile_flags,
             _rd_stage(stage),
         )
+        if not _is_null_resource_id(shader_id) and _compiler_output_is_fatal(messages):
+            await _offload(controller.FreeTargetResource, shader_id)
+            return _err(
+                str(messages), code="shader_compile_failed", category="runtime",
+                details={"session_id": session_id, "stage": stage.upper(),
+                         "requested_source_encoding": requested_encoding_name,
+                         "failure_stage": "native_build_diagnostics", **source_details},
+            )
         if _is_null_resource_id(shader_id):
             return _err(
                 str(messages or "BuildTargetShader returned a null shader id"),
@@ -10035,6 +10168,11 @@ async def _dispatch_shader(action: str, args: Dict[str, Any]) -> str:
             "entry": entry,
             "stage": stage.upper(),
             "source_encoding": requested_encoding_name,
+            "build_encoding": build_encoding_name,
+            "build_input": _shader_build_input_provenance(
+                build_bytes, encoding=build_encoding_name,
+                original_shader_id="", target_shader_id=shader_id,
+            ),
             "supported_source_encodings": supported_encoding_names,
             "runtime_replacement_supported": bool(replacement_supported),
             "runtime_replacement_reason": replacement_reason,
@@ -10043,18 +10181,29 @@ async def _dispatch_shader(action: str, args: Dict[str, Any]) -> str:
             "edit_plan": edit_plan,
             **source_details,
         }
-        try:
-            entry_points = await _offload(controller.GetShaderEntryPoints, shader_id)
-            if entry_points:
-                reflection = await _offload(controller.GetShader, rd.ResourceId(), shader_id, entry_points[0])
-                raw_bytes = _shader_raw_bytes(reflection)
-            else:
+        assembled_input = (
+            build_encoding_name in {"spirv", "openglspirv"}
+            and PatchEngine._looks_like_raw_spirv_asm(source)
+        )
+        if assembled_input:
+            # Publish the exact accepted module as build input, never inferred device code.
+            raw_bytes = build_bytes
+            artifact_kind = "assembled-spirv-build-input"
+        else:
+            artifact_kind = "native-shader-readback"
+            try:
+                entry_points = await _offload(controller.GetShaderEntryPoints, shader_id)
+                if entry_points:
+                    reflection = await _offload(controller.GetShader, rd.ResourceId(), shader_id, entry_points[0])
+                    raw_bytes = _shader_raw_bytes(reflection)
+                else:
+                    raw_bytes = b""
+            except Exception:
                 raw_bytes = b""
-        except Exception:
-            raw_bytes = b""
         if raw_bytes:
+            result["artifact_kind"] = artifact_kind
             output_path = args.get("output_path")
-            suffix = _shader_binary_suffix(requested_encoding_name)
+            suffix = _shader_binary_suffix(build_encoding_name)
             if output_path:
                 out = Path(str(output_path))
                 if out.suffix == "":
@@ -10071,12 +10220,29 @@ async def _dispatch_shader(action: str, args: Dict[str, Any]) -> str:
 
     _require(args, "session_id")
     session_id = str(args["session_id"])
+    if action == "get_debug_state":
+        try:
+            _require_shader_debug_handle(session_id, str(args.get("shader_debug_id", "")))
+            if args.get("detail_level", "full") not in ("summary", "full"):
+                return _err("detail_level must be summary or full", code="validation_error", category="validation",
+                            details={"session_id": session_id, "effects_attempted": False, "context_preserved": True,
+                                     "failure_stage": "validate_debug_request"})
+        except CoreError as exc:
+            return _err(exc.message, code=exc.code, category=exc.category, details=dict(exc.details))
     controller = await _get_controller(session_id)
     if action == "get_disassembly":
         requested_target = str(args.get("target", "auto")).strip()
         requested_encoding = str(args.get("source_encoding") or "")
         if requested_target and requested_target.lower() != "auto" and not PatchEngine._is_raw_spirv_asm_request(requested_target, requested_encoding):
-            targets = [str(target) for target in await _offload(controller.GetDisassemblyTargets, True)]
+            target_discovery = await _disassembly_target_metadata(controller)
+            if target_discovery["available_targets_status"] != "complete":
+                return _err(
+                    "Unable to discover native disassembly targets", code="shader_disassembly_unavailable", category="runtime",
+                    details={"session_id": session_id, "requested_target": requested_target,
+                             "failure_stage": "validate_target", "failure_reason": "target_discovery_failed",
+                             "effects_attempted": False, "context_preserved": True, **target_discovery},
+                )
+            targets = target_discovery["available_targets"]
             if not PatchEngine._find_matching_target(targets, requested_target):
                 return _err(
                     f"Requested disassembly target is unavailable: {requested_target}",
@@ -10092,7 +10258,7 @@ async def _dispatch_shader(action: str, args: Dict[str, Any]) -> str:
                         "context_preserved": True,
                     },
                 )
-    source_original_event = _active_event(session_id) if action == "get_source" else 0
+    inspection_original_event = _active_event(session_id) if action in {"get_source", "get_constant_buffer_contents"} else 0
     event_id = await _ensure_event(session_id, args.get("event_id"))
     pipe = await _offload(controller.GetPipelineState)
 
@@ -10111,7 +10277,7 @@ async def _dispatch_shader(action: str, args: Dict[str, Any]) -> str:
                 bound = await _offload(pipe.GetShader, rd_stage)
                 if _is_null_resource_id(bound):
                     continue
-                if requested_shader_id in _resource_keys(bound):
+                if requested_shader_id in _resource_id_tokens(bound):
                     reflection = await _offload(pipe.GetShaderReflection, rd_stage)
                     matches.append((candidate_stage, str(bound), reflection))
             if not matches:
@@ -10211,9 +10377,8 @@ async def _dispatch_shader(action: str, args: Dict[str, Any]) -> str:
             primitive_override = None
 
         rd = _get_rd()
-        remote_capability_matrix = _session_remote_capability_matrix(
-            session_id,
-            controller=controller,
+        remote_capability_matrix = await _offload(
+            _session_remote_capability_matrix, session_id, controller=controller, context_id=_runtime_context_id(),
         )
         debug_capability = dict(remote_capability_matrix.get("shader_debug") or {})
         if debug_capability and str(debug_capability.get("status") or "") in {"unsupported", "blocked_current_session"}:
@@ -10659,16 +10824,9 @@ async def _dispatch_shader(action: str, args: Dict[str, Any]) -> str:
         return _err(f"Unsupported shader action: {action}")
 
     if action == "get_debug_state":
-        debug_id = str(args.get("shader_debug_id", ""))
-        if not debug_id:
-            return _err("Missing required parameter(s): shader_debug_id")
-        handle = _runtime.shader_debugs.get(debug_id)
-        if handle is None:
-            return _err(f"Unknown shader_debug_id: {debug_id}")
-        state = handle.current_state
-        payload = {"pc": int(getattr(state, "stepIndex", 0)) if state is not None else 0}
+        handle = _require_shader_debug_handle(session_id, str(args.get("shader_debug_id", "")))
         return _ok(
-            state=payload,
+            state=_shader_debug_state_payload(handle, args.get("detail_level", "full")),
             resolved_event_id=int(handle.event_id or 0),
             resolved_context=handle.resolved_context,
             selected_target_source=handle.selected_target_source,
@@ -10699,25 +10857,6 @@ async def _dispatch_shader(action: str, args: Dict[str, Any]) -> str:
         _runtime.shader_replacements[session_id] = remaining_replacements
         _runtime.restored_shader_sessions.add(session_id)
         _sync_context_session_replacements(session_id, remaining_replacements)
-        try:
-            await _maybe_refresh_remote_session_after_revert(
-                session_id,
-                remaining_replacements=remaining_replacements,
-            )
-        except Exception as exc:
-            return _err(
-                "Replacement reverted but replay session recovery failed",
-                code="replacement_revert_recovery_failed",
-                category="runtime",
-                details={
-                    "replacement_id": replacement_id,
-                    "session_id": session_id,
-                    "remaining_replacements": len(remaining_replacements),
-                    "error": str(exc),
-                    "exception_type": type(exc).__name__,
-                    "recovery_error_code": str(getattr(exc, "code", type(exc).__name__)),
-                },
-            )
         return _ok(replacement_id=replacement_id, reverted=True)
 
     if action == "edit_and_replace":
@@ -10884,6 +11023,7 @@ async def _dispatch_shader(action: str, args: Dict[str, Any]) -> str:
                 "disassembly_target": str(patch_result.disassembly_target or ""),
                 "entry_point": str(patch_result.entry_point or ""),
                 "compile_flags": list(patch_result.compile_flags or []),
+                "build_input": dict(patch_result.build_input),
             },
             "patch_spec": _patch_spec_payload_from_args(
                 patch_spec,
@@ -10944,6 +11084,13 @@ async def _dispatch_shader(action: str, args: Dict[str, Any]) -> str:
                 "source_after": after_payload,
                 "patch_diff": diff_payload,
             }
+            if patch_result.build_input_bytes:
+                is_spirv = patch_result.build_input.get("byte_kind") == "spirv-module"
+                patch_artifacts["build_input"] = await _store_bytes_artifact_payload(
+                    patch_result.build_input_bytes, stem=f"{base_stem}_build_input",
+                    suffix=".spv" if is_spirv else ".txt", output_dir=patch_output_dir,
+                    title="shader_build_input", mime="application/octet-stream" if is_spirv else "text/plain",
+                )
             replacement["artifacts"] = {
                 key: value
                 for key, value in patch_artifacts.items()
@@ -11074,71 +11221,101 @@ async def _dispatch_shader(action: str, args: Dict[str, Any]) -> str:
 
             result["base64"] = base64.b64encode(raw_bytes).decode("ascii")
         return _ok(**result)
+    async def _inspection_error(message: str, code: str, details: Dict[str, Any], category: str = "runtime") -> str:
+        if inspection_original_event > 0:
+            try:
+                restored_event = await _ensure_event(session_id, inspection_original_event)
+                if restored_event != inspection_original_event or _active_event(session_id) != inspection_original_event:
+                    raise RuntimeError("Replay event did not match the original event after restoration")
+            except Exception as restore_error:
+                return _err(
+                    f"Failed to restore replay after shader inspection failed: {restore_error}",
+                    code="shader_inspection_recovery_failed", category="runtime",
+                    details={**details, "context_id": _runtime_context_id(), "session_id": session_id,
+                             "resolved_event_id": int(event_id), "original_error_code": code,
+                             "replay_state_restored": False},
+                )
+            details = {**details, "context_id": _runtime_context_id(),
+                       "replay_state_restored": True, "restored_event_id": inspection_original_event}
+        return _err(message, code=code, category=category, details=details)
+
     if action == "get_source":
         requested_shader_id = str(args.get("shader_id", "")).strip()
         try:
             stage_name, resolved_shader_id, reflection = await _resolve_shader_binding(
                 shader_id=requested_shader_id,
                 stage_name=args.get("stage"),
-                require_reflection=False,
+                require_reflection=True,
             )
         except CoreError as exc:
-            details = dict(exc.details)
-            if exc.code == "shader_binding_lookup_failed" and source_original_event > 0:
-                try:
-                    restored_event = await _ensure_event(session_id, source_original_event)
-                    if restored_event != source_original_event or _active_event(session_id) != source_original_event:
-                        raise RuntimeError("Replay event did not match the original event after restoration")
-                except Exception as restore_error:
-                    return _err(
-                        f"Failed to restore replay after shader binding lookup failed: {restore_error}",
-                        code="shader_inspection_recovery_failed",
-                        category="runtime",
-                        details={
-                            "context_id": _runtime_context_id(),
-                            "session_id": session_id,
-                            "resolved_event_id": int(event_id),
-                            "failure_stage": "resolve_binding",
-                            "original_error_code": exc.code,
-                            "replay_state_restored": False,
-                        },
-                    )
-                details.update({
-                    "context_id": _runtime_context_id(),
-                    "replay_state_restored": True,
-                    "restored_event_id": source_original_event,
-                })
-            return _err(exc.message, code=exc.code, category=exc.category, details=details)
-        source_encoding = _shader_encoding_name(getattr(reflection, "encoding", "")) if reflection is not None else ""
-        edit_plan = _shader_edit_plan(
-            source_encoding=source_encoding,
-            source_available=False,
-        )
+            if exc.code in {"shader_binding_lookup_failed", "shader_reflection_unavailable"}:
+                return await _inspection_error(exc.message, exc.code, dict(exc.details))
+            return _err(exc.message, code=exc.code, category=exc.category, details=dict(exc.details))
+        try:
+            source_encoding = _shader_encoding_name(getattr(reflection, "encoding", ""))
+            debug_info = getattr(reflection, "debugInfo", None)
+            native_files = getattr(debug_info, "files", None) if debug_info is not None else None
+            if native_files is None:
+                return await _inspection_error(
+                    "Native shader source metadata is unavailable", "shader_source_metadata_unavailable",
+                    {"failure_stage": "source_lookup", "failure_reason": "source_metadata_unavailable",
+                     "shader_id": resolved_shader_id, "stage": stage_name.upper()}, category="capability",
+                )
+            # Native files contain captured text; filenames never authorize host file reads.
+            files = []
+            for native_file in native_files:
+                filename, contents = native_file.filename, native_file.contents
+                if not isinstance(filename, str) or not isinstance(contents, str):
+                    raise TypeError("Native shader source filename and contents must be text")
+                files.append({"filename": filename, "contents": contents})
+            debug_encoding = _shader_encoding_name(getattr(debug_info, "encoding", ""))
+            if debug_encoding in {"unknown", "none"}:
+                debug_encoding = ""
+            entry_point = getattr(debug_info, "entrySourceName", None)
+            if entry_point is not None and not isinstance(entry_point, str):
+                raise TypeError("Native source entry name must be text")
+            entry_point = entry_point or None
+            source_debug = getattr(debug_info, "sourceDebugInformation", None)
+            if source_debug is not None and not isinstance(source_debug, bool):
+                raise TypeError("Native source debugging availability must be boolean")
+            native_flags = getattr(debug_info, "compileFlags", None)
+            compile_flags = None
+            if native_flags is not None:
+                compile_flags = []
+                for flag in native_flags.flags:
+                    if not isinstance(flag.name, str) or not isinstance(flag.value, str):
+                        raise TypeError("Native shader compile flags must contain text names and values")
+                    compile_flags.append({"name": flag.name, "value": flag.value})
+        except Exception as exc:
+            return await _inspection_error(
+                f"Failed to read native shader source: {exc}", "shader_source_lookup_failed",
+                {"failure_stage": "source_lookup", "failure_reason": "native_source_read_failed",
+                 "shader_id": resolved_shader_id, "stage": stage_name.upper()},
+            )
+        # RenderDoc defines the first file as the entry source, not the first nonempty include.
+        source = files[0]["contents"] if files and files[0]["contents"].strip() else None
+        common = {
+            "source": source, "files": files, "source_available": source is not None,
+            "source_encoding": debug_encoding or None, "entry_point": entry_point,
+            "compile_flags": compile_flags,
+            "source_debug_information": bool(source_debug) if source_debug is not None else None,
+            "shader_id": resolved_shader_id, "stage": stage_name.upper(), "resolved_event_id": int(event_id),
+        }
+        if source is not None:
+            return _ok(**common, edit_plan=_shader_edit_plan(source_encoding=debug_encoding, source=source))
+        edit_plan = _shader_edit_plan(source_encoding=source_encoding, source_available=False)
         fallback_args = _shader_source_fallback_args(
-            session_id=session_id,
-            event_id=int(event_id),
-            stage=stage_name,
-            shader_id=resolved_shader_id,
-            source_encoding=source_encoding,
+            session_id=session_id, event_id=int(event_id), stage=stage_name,
+            shader_id=resolved_shader_id, source_encoding=source_encoding,
         )
         fallback = {
-            "tool": "rd.shader.get_disassembly",
-            "args": fallback_args,
-            "reason": "original shader source is unavailable from capture debug information",
+            "tool": "rd.shader.get_disassembly", "args": fallback_args,
+            "reason": "entry shader source contents are unavailable" if files else "original shader source is unavailable from capture debug information",
         }
         return _ok(
-            source=None,
-            files=[],
-            source_available=False,
-            fallback=fallback,
-            fallback_tool="rd.shader.get_disassembly",
-            fallback_args=fallback["args"],
-            edit_plan=edit_plan,
-            failure_stage="source_lookup",
-            failure_reason="source_debug_info_unavailable",
-            shader_id=resolved_shader_id,
-            stage=stage_name.upper(),
-            resolved_event_id=int(event_id),
+            **common, fallback=fallback, fallback_tool="rd.shader.get_disassembly", fallback_args=fallback_args,
+            edit_plan=edit_plan, failure_stage="source_lookup",
+            failure_reason="entry_source_contents_unavailable" if files else "source_debug_info_unavailable",
         )
 
     if action == "get_constant_buffer_contents":
@@ -11152,12 +11329,13 @@ async def _dispatch_shader(action: str, args: Dict[str, Any]) -> str:
         except CoreError as exc:
             return _err(exc.message, code=exc.code, category=exc.category, details=dict(exc.details))
         slot_value = _as_int(args.get("slot"), 0) if args.get("slot") is not None else None
+        native_shader_id = await _offload(pipe.GetShader, _rd_stage(stage_name))
         cbuffer_entries = await _collect_constant_buffers(
             controller,
             pipe,
             reflection,
             stage_name,
-            resolved_shader_id,
+            native_shader_id,
             slot=slot_value,
             array_index=_as_int(args.get("array_index"), 0),
             include_contents=True,
@@ -11170,33 +11348,40 @@ async def _dispatch_shader(action: str, args: Dict[str, Any]) -> str:
             resource_id = str(cbuffer_payload.get("resource_id") or "").strip()
             offset = _as_int(cbuffer_payload.get("offset"), 0)
             byte_size = _as_int(cbuffer_payload.get("byte_size") or cbuffer_payload.get("size"), 0)
-            if resource_id and byte_size > 0:
+            window = _constant_buffer_byte_window(byte_size, _as_int(cbuffer_payload.get("size"), 0), _as_int(args.get("max_bytes"), 1048576))
+            read_length = min(window["required_bytes"], window["permitted_bytes"])
+            if resource_id and read_length > 0:
                 try:
                     rid = await _resolve_resource_id(session_id, resource_id)
-                    raw = await _offload(controller.GetBufferData, rid, offset, min(byte_size, _as_int(args.get("max_bytes"), 1048576)))
+                    raw = await _offload(controller.GetBufferData, rid, offset, read_length)
                     raw_bytes = bytes(raw or b"")
+                    if len(raw_bytes) != read_length:
+                        raise ValueError(f"Native constant buffer read returned {len(raw_bytes)} bytes for {read_length} requested")
                     cbuffer_payload["raw_fallback"] = {
                         "resource_id": resource_id,
                         "offset": offset,
                         "byte_size": len(raw_bytes),
                         "hex_preview": raw_bytes[:256].hex(),
-                        "truncated": len(raw_bytes) < byte_size,
+                        "preview_bytes": min(len(raw_bytes), 256),
+                        "preview_truncated": len(raw_bytes) > 256,
+                        "block_bytes": window["required_bytes"],
+                        "requested_bytes": read_length,
+                        "truncated": len(raw_bytes) < window["required_bytes"],
                         "recommended_next_tool": "rd.export.buffer",
                         "recommended_args": {
                             "session_id": session_id,
                             "buffer_id": resource_id,
                             "offset": offset,
-                            "size": byte_size,
+                            "size": min(window["required_bytes"], window["binding_bytes"] or window["required_bytes"]),
                         },
                     }
                     cbuffer_payload["decode_status"] = "raw_fallback"
                     return _ok(cbuffer=cbuffer_payload, shader_id=resolved_shader_id, resolved_event_id=int(event_id))
                 except Exception as exc:
                     cbuffer_payload["raw_fallback_error"] = str(exc)
-            return _err(
+            return await _inspection_error(
                 "Constant buffer reflection data is unavailable and raw buffer data could not be read",
                 code="constant_buffer_data_unavailable",
-                category="runtime",
                 details={
                     "session_id": session_id,
                     "shader_id": resolved_shader_id,
@@ -11205,15 +11390,15 @@ async def _dispatch_shader(action: str, args: Dict[str, Any]) -> str:
                     "slot": slot_value,
                     "cbuffer": cbuffer_payload,
                     "failure_stage": "decode_constant_buffer",
-                    "failure_reason": "reflection_unavailable_without_raw_fallback",
+                    "failure_reason": window["status"] if not window["complete_range_permitted"] else "reflection_unavailable_without_raw_fallback",
                 },
             )
         if not cbuffer_payload:
-            return _err(
+            return await _inspection_error(
                 "No constant buffer data is available for the requested stage/slot",
                 code="constant_buffer_data_unavailable",
-                category="runtime",
-                details={"session_id": session_id, "shader_id": resolved_shader_id, "resolved_event_id": int(event_id), "stage": stage_name.upper(), "slot": slot_value},
+                details={"session_id": session_id, "shader_id": resolved_shader_id, "resolved_event_id": int(event_id), "stage": stage_name.upper(), "slot": slot_value,
+                         "failure_stage": "decode_constant_buffer", "failure_reason": "slot_unavailable"},
             )
         return _ok(cbuffer=cbuffer_payload, shader_id=resolved_shader_id, resolved_event_id=int(event_id))
 
@@ -11323,6 +11508,7 @@ async def _dispatch_shader(action: str, args: Dict[str, Any]) -> str:
                         "failure_reason": "source_unavailable",
                     },
                 )
+            target_discovery = await _disassembly_target_metadata(controller)
             source_encoding_name = _shader_encoding_name(resolved_encoding)
             if PatchEngine._is_raw_spirv_asm_request(requested_target, requested_encoding) or bool(is_raw_spirv_asm):
                 source_encoding_name = "spirvasm"
@@ -11342,6 +11528,7 @@ async def _dispatch_shader(action: str, args: Dict[str, Any]) -> str:
                     shader_id=shader_id,
                     resolved_event_id=int(event_id),
                     source_hash="",
+                    **target_discovery,
                 )
             return _ok(
                 disassembly=str(text),
@@ -11352,9 +11539,65 @@ async def _dispatch_shader(action: str, args: Dict[str, Any]) -> str:
                 shader_id=shader_id,
                 resolved_event_id=int(event_id),
                 source_hash=hashlib.sha256(str(text).encode("utf-8")).hexdigest(),
+                **target_discovery,
             )
 
     return _err(f"Unsupported shader action: {action}")
+
+
+def _bounded_debug_variable(variable: Dict[str, Any], depth: int) -> Dict[str, Any]:
+    result = dict(variable)
+    members = variable.get("members") or []
+    result["members"] = [_bounded_debug_variable(member, depth - 1) for member in members] if depth > 0 else []
+    if members and depth == 0:
+        result["members_truncated"] = True
+    return result
+
+
+def _shader_debug_state_payload(handle: ShaderDebugHandle, detail_level: str = "summary") -> Dict[str, Any]:
+    state = handle.current_state
+    instruction = getattr(state, "nextInstruction", None) if state is not None else None
+    payload = {"pc": int(state.stepIndex) if state is not None else 0,
+               "has_native_state": state is not None,
+               "next_instruction": int(instruction) if instruction is not None else None,
+               "source_location": None}
+    # Native instInfo is a sparse sorted interval map, not an instruction-indexed array.
+    infos = getattr(handle.trace, "instInfo", None) or []
+    if instruction is not None:
+        low, high = 0, len(infos)
+        while low < high:
+            middle = (low + high) // 2
+            if int(infos[middle].instruction) <= int(instruction):
+                low = middle + 1
+            else:
+                high = middle
+        if low:
+            info = infos[low - 1]
+            line = info.lineInfo
+            file_index = int(getattr(line, "fileIndex", -1))
+            def positive(name: str) -> Optional[int]:
+                value = int(getattr(line, name, 0))
+                return value if value > 0 else None
+            payload["source_location"] = {
+                "mapping_instruction": int(info.instruction),
+                "mapping_end_instruction_exclusive": int(infos[low].instruction) if low < len(infos) else None,
+                "disassembly_line": positive("disassemblyLine"),
+                "disassembly_source": "renderdoc_native_debug_disassembly",
+                "file_index": file_index if file_index >= 0 else None,
+                "line_start": positive("lineStart") if file_index >= 0 else None,
+                "line_end": positive("lineEnd") if file_index >= 0 else None,
+                "column_start": positive("colStart") if file_index >= 0 else None,
+                "column_end": positive("colEnd") if file_index >= 0 else None,
+            }
+    if detail_level == "full":
+        variables = list(handle.variables.values())
+        stack = list(getattr(state, "callstack", None) or []) if state is not None else []
+        payload.update(variables=[_bounded_debug_variable(value, 2) for value in variables[:64]],
+                       variable_count=len(variables), variables_truncated=len(variables) > 64,
+                       variable_member_depth=2,
+                       callstack=[str(name) for name in stack[:64]],
+                       callstack_count=len(stack), callstack_truncated=len(stack) > 64)
+    return payload
 
 
 async def _dispatch_debug(action: str, args: Dict[str, Any]) -> str:
@@ -11365,36 +11608,53 @@ async def _dispatch_debug(action: str, args: Dict[str, Any]) -> str:
 
     _require(args, "shader_debug_id")
     debug_id = str(args["shader_debug_id"])
-    handle = _runtime.shader_debugs.get(debug_id)
-    if handle is None:
-        return _err(f"Unknown shader_debug_id: {debug_id}")
-    if handle.session_id != session_id:
-        return _err("shader_debug_id does not belong to session_id")
+    try:
+        handle = _require_shader_debug_handle(session_id, debug_id)
+    except CoreError as exc:
+        return _err(exc.message, code=exc.code, category=exc.category, details=dict(exc.details))
+    validation_details = {"session_id": session_id, "failure_stage": "validate_debug_request",
+                          "effects_attempted": False, "context_preserved": True}
+    if action == "step" and args.get("step_mode", "instruction") != "instruction":
+        return _err("Only instruction stepping is supported", code="validation_error", category="validation", details=validation_details)
+    if action == "run_to":
+        target = args.get("target")
+        if not isinstance(target, dict) or set(target) != {"pc"} or type(target["pc"]) is not int or target["pc"] < 0:
+            return _err("run_to requires non-negative target.pc", code="validation_error", category="validation", details=validation_details)
+        if handle.current_state is not None and target["pc"] < handle.current_state.stepIndex:
+            return _err("run_to cannot move backwards", code="validation_error", category="validation", details=validation_details)
+    if action == "set_breakpoints":
+        requested = args.get("breakpoints")
+        if not isinstance(requested, list) or any(not isinstance(bp, dict) or set(bp) != {"pc"}
+                or type(bp["pc"]) is not int or bp["pc"] < 0 for bp in requested):
+            return _err("Breakpoints require non-negative pc only", code="validation_error", category="validation", details=validation_details)
+    if action == "get_variables" and (type(args.get("expand_depth", 2)) is not int or args.get("expand_depth", 2) < 0
+            or type(args.get("max_variables", 2048)) is not int or args.get("max_variables", 2048) < 1):
+        return _err("Variable depth must be non-negative and count positive", code="validation_error", category="validation", details=validation_details)
     controller = await _get_controller(session_id)
 
     async def continue_once() -> Optional[Any]:
-        if handle.synthetic:
-            next_index = min(handle.synthetic_index + 1, max(len(handle.synthetic_states) - 1, 0))
-            if next_index == handle.synthetic_index and handle.current_state is not None and handle.synthetic_index >= max(len(handle.synthetic_states) - 1, 0):
+        if not handle.pending_states:
+            states = await _offload(controller.ContinueDebug, handle.debugger)
+            if not states:
                 return None
-            handle.synthetic_index = next_index
-            handle.current_state = handle.synthetic_states[next_index] if handle.synthetic_states else None
-            return handle.current_state
-        states = await _offload(controller.ContinueDebug, handle.debugger)
-        if not states:
-            return None
-        handle.current_state = states[-1]
-        return handle.current_state
+            handle.pending_states.extend(states)
+        state = handle.pending_states.popleft()
+        for change in state.changes:
+            before_name = str(change.before.name or "")
+            after_name = str(change.after.name or "")
+            if before_name and before_name != after_name:
+                handle.variables.pop(before_name, None)
+            if after_name:
+                handle.variables[after_name] = _shader_variable_payload(change.after)
+        handle.current_state = state
+        return state
 
     if action == "step":
-        if handle.synthetic and handle.current_state is None and handle.synthetic_states:
-            handle.current_state = handle.synthetic_states[0]
-            return _ok(state={"pc": int(getattr(handle.current_state, "stepIndex", 0))})
         state = await continue_once()
         if state is None:
             handle.stopped_reason = "finished"
             return _ok(state={}, stopped_reason="finished")
-        return _ok(state={"pc": int(getattr(state, "stepIndex", 0))})
+        return _ok(state=_shader_debug_state_payload(handle))
     if action == "continue":
         timeout_ms = _as_int(args.get("timeout_ms"), 10000)
         deadline = _now_ms() + timeout_ms
@@ -11408,20 +11668,20 @@ async def _dispatch_debug(action: str, args: Dict[str, Any]) -> str:
                 pc = int(getattr(state, "stepIndex", 0))
                 if any(bp.get("pc") == pc for bp in handle.breakpoints):
                     handle.stopped_reason = "breakpoint"
-                    return _ok(state={"pc": pc}, stopped_reason="breakpoint")
+                    return _ok(state=_shader_debug_state_payload(handle), stopped_reason="breakpoint")
         handle.stopped_reason = "timeout"
-        return _ok(state={"pc": int(getattr(state, "stepIndex", 0)) if state is not None else 0}, stopped_reason="timeout")
+        return _ok(state=_shader_debug_state_payload(handle), stopped_reason="timeout")
     if action == "run_to":
         target = _as_dict(args.get("target"), default={})
         target_pc = target.get("pc")
         if target_pc is None:
             return _err("run_to currently supports target.pc only")
         if handle.current_state is None and int(target_pc) == 0:
-            return _ok(state={"pc": 0})
+            return _ok(state=_shader_debug_state_payload(handle))
         if handle.current_state is not None:
             current_pc = int(getattr(handle.current_state, "stepIndex", 0))
             if current_pc == int(target_pc):
-                return _ok(state={"pc": current_pc})
+                return _ok(state=_shader_debug_state_payload(handle))
         timeout_ms = _as_int(args.get("timeout_ms"), 10000)
         deadline = _now_ms() + timeout_ms
         while _now_ms() < deadline:
@@ -11431,7 +11691,7 @@ async def _dispatch_debug(action: str, args: Dict[str, Any]) -> str:
                 return _ok(state={}, stopped_reason="finished")
             pc = int(getattr(state, "stepIndex", 0))
             if pc == int(target_pc):
-                return _ok(state={"pc": pc})
+                return _ok(state=_shader_debug_state_payload(handle))
         return _err("run_to timeout")
     if action == "set_breakpoints":
         bps = _as_list(args.get("breakpoints"), default=[])
@@ -11441,18 +11701,13 @@ async def _dispatch_debug(action: str, args: Dict[str, Any]) -> str:
         handle.breakpoints = []
         return _ok()
     if action == "get_variables":
-        state = handle.current_state
-        if state is None:
-            return _ok(variables=[])
-        changes = getattr(state, "changes", None) or []
-        variables = []
-        for change in changes:
-            name = str(getattr(change, "name", ""))
-            if not name:
-                continue
-            value = getattr(change, "value", None)
-            variables.append({"name": name, "type": str(type(value).__name__), "value": str(value)})
-        return _ok(variables=variables[: _as_int(args.get("max_variables"), 2048)])
+        name_filter = str(args.get("name_filter", ""))
+        expand_depth = _as_int(args.get("expand_depth"), 2)
+        max_variables = _as_int(args.get("max_variables"), 2048)
+
+        variables = [_bounded_debug_variable(variable, expand_depth) for name, variable in handle.variables.items()
+                     if name_filter in name]
+        return _ok(variables=variables[:max_variables], truncated=len(variables) > max_variables)
     if action == "evaluate_expression":
         _require(args, "expression")
         expr = str(args["expression"])
@@ -11472,25 +11727,14 @@ async def _dispatch_debug(action: str, args: Dict[str, Any]) -> str:
         return _err(f"Unknown expression or variable: {expr}")
     if action == "get_callstack":
         state = handle.current_state
-        callstack = []
-        if state is not None:
-            raw = getattr(state, "callstack", None) or []
-            for frame in raw:
-                callstack.append(
-                    {
-                        "function": str(getattr(frame, "function", "")),
-                        "file": str(getattr(frame, "file", "")),
-                        "line": int(getattr(frame, "line", 0)),
-                        "pc": str(getattr(frame, "address", "")),
-                    },
-                )
+        callstack = [] if state is None else [
+            {"function": str(name), "file": None, "line": None, "pc": int(state.stepIndex)}
+            for name in state.callstack
+        ]
         return _ok(callstack=callstack)
     if action == "finish":
-        try:
-            if handle.trace is not None:
-                await _offload(controller.FreeTrace, handle.trace)
-        except Exception:
-            pass
+        if handle.trace is not None:
+            await _offload(controller.FreeTrace, handle.trace)
         _runtime.shader_debugs.pop(debug_id, None)
         return _ok()
 
@@ -11827,6 +12071,7 @@ async def _dispatch_export(action: str, args: Dict[str, Any]) -> str:
         include_binaries = _as_bool(args.get("include_binaries"), True)
         include_reflection = _as_bool(args.get("include_reflection"), True)
         include_disassembly = _as_bool(args.get("include_disassembly"), True)
+        disassembly_target = str(args.get("disassembly_target") or "auto")
         stage_payloads = []
         failures = []
         for stage in _stage_candidates():
@@ -11860,7 +12105,7 @@ async def _dispatch_export(action: str, args: Dict[str, Any]) -> str:
                     if kind == "binary":
                         call_args["output_path"] = str(output_dir / f"{stage_name}-shader")
                     elif kind == "disassembly":
-                        call_args["target"] = "auto"
+                        call_args["target"] = disassembly_target
                     result = json.loads(await _dispatch_shader(shader_action, call_args))
                     if not result.get("success"):
                         failure = {
@@ -11869,6 +12114,13 @@ async def _dispatch_export(action: str, args: Dict[str, Any]) -> str:
                             "code": result.get("code") or "shader_export_unavailable",
                             "message": result.get("error_message") or result.get("message") or "Shader export unavailable",
                         }
+                        failures.append(failure)
+                        entry["exports"][kind] = {"available": False, "error": failure}
+                        continue
+                    if kind == "disassembly" and disassembly_target != "auto" and result.get("target") != disassembly_target:
+                        failure = {"stage": stage_name, "kind": kind, "code": "shader_disassembly_target_mismatch",
+                                   "message": "Disassembly export did not return the explicitly requested target",
+                                   "requested_target": disassembly_target, "actual_target": result.get("target")}
                         failures.append(failure)
                         entry["exports"][kind] = {"available": False, "error": failure}
                         continue
@@ -11898,7 +12150,9 @@ async def _dispatch_export(action: str, args: Dict[str, Any]) -> str:
                         "path": str(saved_path),
                         "sha256": hashlib.sha256(content).hexdigest(),
                         "size_bytes": len(content),
-                        **({"target": result.get("target"), "source_encoding": result.get("source_encoding")} if kind == "disassembly" else {}),
+                        **({"target": result.get("target"), "source_encoding": result.get("source_encoding"),
+                            "is_raw_spirv_asm": result.get("is_raw_spirv_asm"), "source_hash": result.get("source_hash"),
+                            "edit_plan": result.get("edit_plan")} if kind == "disassembly" else {}),
                     }
                 stage_payloads.append(entry)
         if not stage_payloads:
@@ -11914,6 +12168,7 @@ async def _dispatch_export(action: str, args: Dict[str, Any]) -> str:
                 {
                     "requested_event_id": _as_int(args.get("event_id"), 0),
                     "resolved_event_id": int(resolved_event_id),
+                    "disassembly_target": disassembly_target,
                     "shaders": stage_payloads,
                     "complete": not failures,
                     "failures": failures,
@@ -11923,7 +12178,7 @@ async def _dispatch_export(action: str, args: Dict[str, Any]) -> str:
             ),
             encoding="utf-8",
         )
-        return _ok(output_dir=str(output_dir), bundle_path=str(bundle_json), resolved_event_id=int(resolved_event_id), complete=not failures, failures=failures)
+        return _ok(output_dir=str(output_dir), bundle_path=str(bundle_json), resolved_event_id=int(resolved_event_id), complete=not failures, failures=failures, disassembly_target=disassembly_target)
     if action == "cbuffer_dump":
         _require(args, "output_dir")
         output_dir = Path(str(args["output_dir"]))
@@ -11933,6 +12188,7 @@ async def _dispatch_export(action: str, args: Dict[str, Any]) -> str:
         slots = [_as_int(item) for item in _as_list(slots_arg, default=[])] if slots_arg is not None else []
         dumped: List[str] = []
         failures: List[Dict[str, Any]] = []
+        limited_raw_export = False
         for stage in stages:
             call_args: Dict[str, Any] = {
                 "session_id": session_id,
@@ -11949,20 +12205,29 @@ async def _dispatch_export(action: str, args: Dict[str, Any]) -> str:
             buffers = list(payload.get("constant_buffers", []) or [])
             if slots:
                 buffers = [item for item in buffers if _as_int((item or {}).get("slot"), -1) in slots]
+            if _as_bool(args.get("include_decoded"), True):
+                for item in buffers:
+                    if item.get("decode_error"):
+                        failures.append({"stage": stage, "slot": item.get("slot"), "code": "constant_buffer_decode_unavailable", "error": item["decode_error"]})
             if _as_bool(args.get("include_raw"), False):
                 for item in buffers:
                     resource_id = str((item or {}).get("resource_id") or "").strip()
                     byte_size = _as_int((item or {}).get("byte_size") or (item or {}).get("size"), 0)
                     offset = _as_int((item or {}).get("offset"), 0)
-                    if not resource_id or byte_size <= 0:
+                    window = _constant_buffer_byte_window(byte_size, _as_int((item or {}).get("size"), 0), _as_int(args.get("max_bytes"), 1048576))
+                    raw_length = min(window["required_bytes"], window["permitted_bytes"])
+                    if not resource_id or raw_length <= 0:
                         continue
+                    limited_raw_export = limited_raw_export or raw_length < window["required_bytes"]
+                    item["raw_export_coverage"] = {"block_bytes": window["required_bytes"], "requested_bytes": raw_length,
+                                                   "truncated": raw_length < window["required_bytes"]}
                     try:
                         raw_resp = await _export_buffer_file(
                             {
                                 "session_id": session_id,
                                 "buffer_id": resource_id,
                                 "offset": offset,
-                                "size": min(byte_size, _as_int(args.get("max_bytes"), 1048576)),
+                                "size": raw_length,
                                 "output_path": str(output_dir / f"cbuffer_{stage}_slot{_as_int((item or {}).get('slot'), 0)}.bin"),
                             }
                         )
@@ -11978,7 +12243,7 @@ async def _dispatch_export(action: str, args: Dict[str, Any]) -> str:
             dumped.append(str(file_path))
         if failures and not dumped:
             return _err("All constant buffer exports failed", code="cbuffer_export_failed", details={"failures": failures})
-        return _ok(dumped_paths=dumped, saved_files=dumped, failures=failures, partial=bool(failures), stages=stages, slots=slots)
+        return _ok(dumped_paths=dumped, saved_files=dumped, failures=failures, partial=bool(failures) or limited_raw_export, stages=stages, slots=slots)
     return _err(f"Unsupported export action: {action}")
 
 
@@ -12072,28 +12337,81 @@ async def _dispatch_util(action: str, args: Dict[str, Any]) -> str:
 
     if action == "diff_images":
         _require(args, "image_a_path", "image_b_path")
+        selected = args.get("metrics", ["mse", "max_abs", "psnr"])
+        supported = {"mse", "max_abs", "psnr", "ssim"}
+        if (not isinstance(selected, list) or not selected
+                or any(not isinstance(item, str) or item not in supported for item in selected)):
+            return _err("metrics must be a non-empty list of mse, max_abs, psnr or ssim", code="validation_error")
         try:
             import numpy as np
             from PIL import Image
         except Exception as exc:
             return _err(f"Image diff dependencies missing: {exc}")
-        a = np.array(Image.open(str(args["image_a_path"])).convert("RGBA")).astype("float32") / 255.0
-        b = np.array(Image.open(str(args["image_b_path"])).convert("RGBA")).astype("float32") / 255.0
+        with Image.open(str(args["image_a_path"])) as image:
+            a = np.asarray(image.convert("RGBA"), dtype="float32") / 255.0
+        with Image.open(str(args["image_b_path"])) as image:
+            b = np.asarray(image.convert("RGBA"), dtype="float32") / 255.0
         if a.shape != b.shape:
             return _err("Image shapes differ", code="image_shape_mismatch")
+        source_height, source_width = a.shape[:2]
+        region = args.get("region")
+        if region is not None:
+            fields = {"x", "y", "width", "height"}
+            if (not isinstance(region, dict) or set(region) != fields
+                    or any(type(region[key]) is not int for key in fields)):
+                return _err("region requires integer x/y/width/height", code="invalid_image_region")
+            x, y, width, height = (region[key] for key in ("x", "y", "width", "height"))
+            if x < 0 or y < 0 or width < 1 or height < 1 or x + width > source_width or y + height > source_height:
+                return _err("region must be nonempty and inside both images; no clamping or resizing", code="invalid_image_region")
+            a, b = a[y:y + height, x:x + width], b[y:y + height, x:x + width]
+        if "ssim" in selected and min(a.shape[:2]) < 11:
+            return _err("SSIM requires both dimensions to be at least 11 pixels", code="ssim_window_too_large")
         diff = a - b
-        mse = float((diff ** 2).mean()) if diff.size else 0.0
-        max_abs = float(abs(diff).max()) if diff.size else 0.0
-        psnr = float(20 * np.log10(1.0 / np.sqrt(mse))) if mse > 0 else None
-        out = {"mse": mse, "max_abs": max_abs, "psnr": psnr, "identical": mse == 0,
-               "psnr_status": "infinite" if mse == 0 else "finite"}
+        mse = float((diff ** 2).mean())
+        out = {"identical": bool(np.array_equal(a, b)),
+               "source_size": {"width": source_width, "height": source_height},
+               "region": region or {"x": 0, "y": 0, "width": source_width, "height": source_height}}
+        if "mse" in selected:
+            out["mse"] = mse
+        if "max_abs" in selected:
+            out["max_abs"] = float(abs(diff).max())
+        if "psnr" in selected:
+            out["psnr"] = float(20 * np.log10(1.0 / np.sqrt(mse))) if mse > 0 else None
+            out["psnr_status"] = "infinite" if mse == 0 else "finite"
+        if "ssim" in selected:
+            # Wang et al. 2004: 11x11 Gaussian, sigma 1.5, population covariance.
+            # Average valid windows per RGBA channel; no hidden color conversion.
+            kernel = np.exp(-(np.arange(-5, 6, dtype="float64") ** 2) / (2 * 1.5 ** 2))
+            kernel /= kernel.sum()
+
+            def average(values):
+                height, width = values.shape
+                horizontal = sum(weight * values[:, i:i + width - 10] for i, weight in enumerate(kernel))
+                return sum(weight * horizontal[i:i + height - 10, :] for i, weight in enumerate(kernel))
+
+            scores = []
+            for channel in range(4):
+                x, y = a[:, :, channel].astype("float64"), b[:, :, channel].astype("float64")
+                mx, my = average(x), average(y)
+                vx, vy = np.maximum(average(x * x) - mx * mx, 0), np.maximum(average(y * y) - my * my, 0)
+                covariance = average(x * y) - mx * my
+                score = ((2 * mx * my + 0.01 ** 2) * (2 * covariance + 0.03 ** 2)
+                         / ((mx * mx + my * my + 0.01 ** 2) * (vx + vy + 0.03 ** 2)))
+                scores.append(float(score.mean()))
+            out["ssim"] = float(np.mean(scores))
+            out["ssim_method"] = {"channels": "RGBA", "window": 11, "sigma": 1.5,
+                                  "data_range": 1, "covariance": "population", "boundary": "valid"}
         output_path = args.get("output_path")
         if output_path:
-            diff_img = (np.clip(np.abs(diff), 0.0, 1.0) * 255.0).astype("uint8")
+            # An alpha difference is data to visualize, never the output opacity.
+            absolute = np.abs(diff)
+            visible = np.maximum(absolute[:, :, :3], absolute[:, :, 3:4])
+            diff_img = (np.clip(visible, 0.0, 1.0) * 255.0).astype("uint8")
             out_path = Path(str(output_path))
             out_path.parent.mkdir(parents=True, exist_ok=True)
-            Image.fromarray(diff_img, mode="RGBA").save(out_path)
+            Image.fromarray(diff_img).save(out_path)
             out["diff_path"] = str(out_path)
+            out["diff_visualization"] = "opaque-rgb-absolute-difference-with-alpha-difference-as-gray"
         return _ok(metrics=out)
 
 

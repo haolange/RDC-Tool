@@ -143,7 +143,8 @@ class RuntimeWorkerProcess:
 
     def request(self, method: str, params: Optional[Dict[str, Any]] = None, *, timeout: float = REQUEST_TIMEOUT_S) -> Dict[str, Any]:
         with self._io_lock:
-            self.ensure_started()
+            if not self.is_running():
+                raise RuntimeError("worker process is unavailable; use the owning daemon lifecycle")
             proc = self._proc
             if proc is None or proc.stdin is None:
                 raise RuntimeError("worker process is unavailable")

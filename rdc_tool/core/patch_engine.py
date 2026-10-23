@@ -30,6 +30,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from rdc_tool.core.session_manager import SessionManager
+from rdc_tool.runtime_paths import cli_runtime_dir
 from rdc_tool.models import (
     PatchOp,
     PatchResult,
@@ -131,6 +133,35 @@ def _compiler_output_is_fatal(output: Any) -> bool:
     return any(marker in text for marker in fatal_markers)
 
 
+def _shader_build_input_provenance(
+    data: bytes, *, encoding: str, original_shader_id: Any, target_shader_id: Any,
+) -> Dict[str, Any]:
+    """Identify the exact BuildTargetShader input, never inferred device code."""
+    normalized = str(encoding).strip().lower().replace("_", "")
+    is_spirv = normalized in {"spirv", "openglspirv"}
+    header: Dict[str, Any] = {
+        "status": "unavailable", "reason": "Build input is source text, not a SPIR-V module."
+    }
+    if is_spirv:
+        header = {"status": "unavailable", "reason": "Invalid or incomplete SPIR-V header."}
+        order = {b"\x03\x02\x23\x07": "little", b"\x07\x23\x02\x03": "big"}.get(data[:4])
+        if order and len(data) >= 20 and len(data) % 4 == 0:
+            words = [int.from_bytes(data[i:i + 4], order) for i in range(0, 20, 4)]
+            if words[3] > 0 and words[4] == 0:
+                header = {
+                    "status": "available", "byte_order": order, "version": words[1],
+                    "generator": words[2], "id_bound": words[3], "schema": words[4],
+                }
+    return {
+        "status": "available", "scope": "BuildTargetShader-input", "encoding": str(encoding),
+        "original_shader_id": _shader_id_str(original_shader_id),
+        "target_shader_id": _shader_id_str(target_shader_id),
+        "sha256": hashlib.sha256(data).hexdigest(), "byte_size": len(data),
+        "byte_kind": "spirv-module" if is_spirv else "source-text", "spirv_header": header,
+        "device_binary_observed": False,
+    }
+
+
 def _pipeline_output_resource_ids(pipe: Any) -> Optional[List[str]]:
     get_outputs = getattr(pipe, "GetOutputTargets", None)
     if not callable(get_outputs):
@@ -215,6 +246,14 @@ class PatchEngine:
 
         返回 :class:`PatchResult` 表示成功或失败。
         """
+        return await SessionManager._offload(
+            self._apply_patch_sync, session_id, event_id, stage, session_manager, patch_spec,
+        )
+
+    def _apply_patch_sync(
+        self, session_id: str, event_id: int, stage: ShaderStage,
+        session_manager: Any, patch_spec: PatchSpec,
+    ) -> PatchResult:
         try:
             controller = session_manager.get_controller(session_id)
 
@@ -468,6 +507,8 @@ class PatchEngine:
                             "disassembly_target": str(disasm_target),
                             "failure_stage": "apply_patch",
                             "failure_reason": "diff_apply_failed",
+                            "replacement_attempted": False,
+                            "context_preserved": True,
                         },
                         source_before_text=source,
                         source_after_text=source,
@@ -944,6 +985,10 @@ class PatchEngine:
                 encoding=encoding_name,
                 entry_point=str(entry_point),
                 compile_flags=compile_flag_payload,
+                build_input=_shader_build_input_provenance(
+                    source_bytes, encoding=encoding_name, original_shader_id=shader_id, target_shader_id=new_id,
+                ),
+                build_input_bytes=source_bytes,
             )
 
         except Exception as exc:
@@ -1039,11 +1084,12 @@ class PatchEngine:
         compile_flags = self._build_compile_flags(refl)
         compile_flag_payload = self._compile_flag_payload(compile_flags)
         messages = ["Applied full source replacement input."]
+        source_bytes = source.encode("utf-8")
         try:
             new_id, errors = controller.BuildTargetShader(
                 entry_point,
                 encoding,
-                source.encode("utf-8"),
+                source_bytes,
                 compile_flags,
                 rd_stage,
             )
@@ -1248,7 +1294,12 @@ class PatchEngine:
             encoding=encoding_name,
             entry_point=entry_point,
             compile_flags=compile_flag_payload,
+            build_input=_shader_build_input_provenance(
+                source_bytes, encoding=encoding_name, original_shader_id=shader_id, target_shader_id=new_id,
+            ),
+            build_input_bytes=source_bytes,
         )
+
     async def revert_patch(
         self,
         session_id: str,
@@ -1261,6 +1312,9 @@ class PatchEngine:
 
         成功返回 ``True``；若 patch 不存在或回滚失败则返回 ``False``。
         """
+        return await SessionManager._offload(self._revert_patch_sync, session_id, patch_id, session_manager)
+
+    def _revert_patch_sync(self, session_id: str, patch_id: str, session_manager: Any) -> bool:
         record = self._patches.get(patch_id)
         if record is None:
             logger.warning("revert_patch: patch %s not found", patch_id)
@@ -1566,7 +1620,11 @@ class PatchEngine:
         if not target_name and not encoding_name:
             encoding, disasm_target = cls._get_best_encoding(controller, session_id)
             source = controller.DisassembleShader(pipeline_obj, refl, disasm_target)
-            return str(source or ""), encoding, str(disasm_target), cls._looks_like_raw_spirv_asm(str(source or ""))
+            return (
+                str(source or ""), encoding, str(disasm_target),
+                cls._encoding_name(encoding) in {"spirv", "openglspirv", "spirvasm", "openglspirvasm"}
+                and cls._looks_like_raw_spirv_asm(str(source or "")),
+            )
 
         targets = [str(t) for t in controller.GetDisassemblyTargets(True)]
         supported_encodings = list(controller.GetTargetShaderEncodings())
@@ -1583,10 +1641,10 @@ class PatchEngine:
             raw_target = cls._find_raw_spirv_asm_target(targets)
             if raw_target:
                 source = controller.DisassembleShader(pipeline_obj, refl, raw_target)
-                if source:
+                if cls._looks_like_raw_spirv_asm(str(source or "")):
                     return str(source), encoding, str(raw_target), True
             source = cls._disassemble_raw_spirv_bytes(refl)
-            if source:
+            if cls._looks_like_raw_spirv_asm(source):
                 return source, encoding, "SPIR-V ASM", True
             raise RuntimeError(
                 "Raw SPIR-V ASM disassembly is unavailable: no raw SPIR-V target was exposed and external spirv-dis was not found"
@@ -1605,7 +1663,11 @@ class PatchEngine:
         encoding = cls._find_requested_encoding(supported_encodings, encoding_name) if encoding_name else None
         if encoding is None:
             encoding, _ = cls._get_best_encoding(controller, session_id)
-        return str(source), encoding, str(target), cls._looks_like_raw_spirv_asm(str(source))
+        return (
+            str(source), encoding, str(target),
+            cls._encoding_name(encoding) in {"spirv", "openglspirv", "spirvasm", "openglspirvasm"}
+            and cls._looks_like_raw_spirv_asm(str(source)),
+        )
 
     @staticmethod
     def _is_raw_spirv_asm_request(target: str, encoding: str) -> bool:
@@ -1669,7 +1731,8 @@ class PatchEngine:
         text = str(source or "")
         if not text:
             return False
-        return "OpCapability" in text or "OpDecorate" in text or text.lstrip().startswith("; SPIR-V")
+        # A header, comment, or diagnostic mentioning SPIR-V is not an instruction.
+        return re.search(r"^[ \t]*(?:%[^\s=]+[ \t]*=[ \t]*)?Op[A-Z][A-Za-z0-9_]*\b", text, re.MULTILINE) is not None
 
     @staticmethod
     def _disassemble_raw_spirv_bytes(refl: Any) -> str:
@@ -1686,7 +1749,7 @@ class PatchEngine:
         tool = shutil.which("spirv-dis") or shutil.which("spirv-dis.exe")
         if not tool:
             return ""
-        runtime_dir = Path(__file__).resolve().parents[2] / "intermediate" / "runtime" / "rdc_tool_cli" / "patch_engine"
+        runtime_dir = cli_runtime_dir() / "patch_engine"
         runtime_dir.mkdir(parents=True, exist_ok=True)
         stem = f"spirv_{uuid.uuid4().hex[:10]}"
         source_path = runtime_dir / f"{stem}.spv"
@@ -1738,7 +1801,10 @@ class PatchEngine:
         normalized = str(encoding_name or "").strip().lower().replace("_", "")
         target = str(disassembly_target or "").strip()
         target_key = target.lower()
-        is_spirv_asm = normalized in {"spirvasm", "openglspirvasm"} or cls._looks_like_raw_spirv_asm(source)
+        is_spirv_asm = (
+            normalized in {"spirv", "openglspirv", "spirvasm", "openglspirvasm"}
+            and cls._looks_like_raw_spirv_asm(source)
+        )
         if normalized in {"hlsl", "glsl"}:
             return {
                 "shader_format": {
@@ -1819,6 +1885,8 @@ class PatchEngine:
                 "rd.shader.edit_and_replace."
             ),
         }
+        if normalized in {"spirvasm", "openglspirvasm"}:
+            plan["blocked_reason"] = "No raw SPIR-V instruction lines were observed; an encoding hint, header, or native diagnostic is not editable assembly."
         if normalized in {"spirv", "openglspirv"}:
             plan["recommended_next_tool"] = "rd.shader.get_disassembly"
             plan["blocked_reason"] = (
@@ -1834,7 +1902,7 @@ class PatchEngine:
             raise RuntimeError(
                 "Raw SPIR-V ASM replacement requires spirv-as when the replay backend only accepts SPIRV binary encoding"
             )
-        runtime_dir = Path(__file__).resolve().parents[2] / "intermediate" / "runtime" / "rdc_tool_cli" / "patch_engine"
+        runtime_dir = cli_runtime_dir() / "patch_engine"
         runtime_dir.mkdir(parents=True, exist_ok=True)
         stem = f"spirv_asm_{uuid.uuid4().hex[:10]}"
         source_path = runtime_dir / f"{stem}.spvasm"

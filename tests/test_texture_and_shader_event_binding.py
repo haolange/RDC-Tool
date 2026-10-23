@@ -586,7 +586,15 @@ def test_shader_get_constant_buffer_contents_returns_decoded_payload(monkeypatch
     async def _fake_ensure_event(session_id: str, event_id: int | None) -> int:
         return int(event_id or 314)
 
+    class NativeShaderId:
+        def __str__(self):
+            return "ResourceId::77"
+
+    native_shader = NativeShaderId()
+    monkeypatch.setattr(_FakeShaderPipe, "GetShader", lambda self, stage: native_shader if stage == "ps" else "ResourceId::0")
+
     async def _fake_collect_constant_buffers(*args, **kwargs):  # type: ignore[no-untyped-def]
+        assert args[4] is native_shader, "native decoder requires ResourceId, not its serialized string"
         return [
             {
                 "stage": "PS",
@@ -714,7 +722,8 @@ def test_texture_get_data_rejects_non_npz_output_path(monkeypatch: pytest.Monkey
     assert payload["code"] == "texture_output_path_extension_mismatch"
 
 
-def test_shader_get_constant_buffer_contents_returns_raw_fallback_when_decode_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("budget,expected_size,truncated", [(4, 4, True), (8, 8, False), (0, 8, False)])
+def test_shader_get_constant_buffer_contents_returns_raw_fallback_when_decode_unavailable(monkeypatch: pytest.MonkeyPatch, budget, expected_size, truncated) -> None:
     async def _inline_offload(fn, *args, **kwargs):  # type: ignore[no-untyped-def]
         return fn(*args, **kwargs)
 
@@ -722,8 +731,8 @@ def test_shader_get_constant_buffer_contents_returns_raw_fallback_when_decode_un
         def GetBufferData(self, resource_id: object, offset: int, size: int) -> bytes:
             assert resource_id == "ResourceId::cb0"
             assert offset == 16
-            assert size == 8
-            return b"ABCDEFGH"
+            assert size == expected_size
+            return b"ABCDEFGH"[:expected_size]
 
     async def _fake_get_controller(session_id: str):  # type: ignore[no-untyped-def]
         return _RawController()
@@ -764,7 +773,7 @@ def test_shader_get_constant_buffer_contents_returns_raw_fallback_when_decode_un
                     "event_id": 314,
                     "stage": "ps",
                     "slot": 2,
-                    "max_bytes": 8,
+                    "max_bytes": budget,
                 },
             )
         )
@@ -772,6 +781,169 @@ def test_shader_get_constant_buffer_contents_returns_raw_fallback_when_decode_un
 
     assert payload["success"] is True
     assert payload["cbuffer"]["decode_status"] == "raw_fallback"
-    assert payload["cbuffer"]["raw_fallback"]["byte_size"] == 8
-    assert payload["cbuffer"]["raw_fallback"]["hex_preview"] == "4142434445464748"
+    assert payload["cbuffer"]["raw_fallback"]["byte_size"] == expected_size
+    assert payload["cbuffer"]["raw_fallback"]["hex_preview"] == b"ABCDEFGH"[:expected_size].hex()
+    assert payload["cbuffer"]["raw_fallback"]["truncated"] is truncated
+    assert payload["cbuffer"]["raw_fallback"]["preview_truncated"] is False
     assert payload["cbuffer"]["raw_fallback"]["recommended_next_tool"] == "rd.export.buffer"
+
+
+def test_constant_buffer_slot_is_reflection_index_not_removed_bindpoint(monkeypatch):
+    runtime = server.server_runtime
+    reads = []
+    blocks = [SimpleNamespace(name=f"block{i}", fixedBindNumber=20+i,
+                              fixedBindSetOrSpace=2, variables=[], byteSize=16) for i in range(4)]
+    def get_block(stage, index, array_index):
+        reads.append((stage, index, array_index))
+        return SimpleNamespace(descriptor=SimpleNamespace(resource="ResourceId::cb", byteOffset=32, byteSize=16),
+                               access=SimpleNamespace(index=index, type=9))
+    def get_values(*args):
+        assert args[4:8] == (3, "ResourceId::cb", 32, 16)
+        return []
+    async def offload(fn, *args):
+        return fn(*args)
+    monkeypatch.setattr(runtime, "_offload", offload)
+    monkeypatch.setattr(runtime, "_rd_stage", lambda stage: stage)
+    monkeypatch.setattr(runtime, "_get_rd", lambda: SimpleNamespace(ResourceId=lambda: None))
+    monkeypatch.setattr(runtime, "_pipeline_object_for_cbuffer", lambda *_: "pipeline")
+    pipe = SimpleNamespace(GetConstantBlock=get_block)
+    reflection = SimpleNamespace(constantBlocks=blocks, entryPoint="main")
+    result = asyncio.run(runtime._collect_constant_buffers(
+        SimpleNamespace(GetCBufferVariableContents=get_values), pipe, reflection, "ps", "shader",
+        slot=3, array_index=1, include_contents=True))
+    assert reads == [("ps", 3, 1)]
+    assert len(result) == 1
+    assert result[0]["slot"] == result[0]["block_index"] == 3
+    assert result[0]["set_or_space"] == 2
+    assert result[0]["resource_id"] == "ResourceId::cb"
+    assert result[0]["offset"] == 32
+    assert result[0]["contents"] == []
+    assert asyncio.run(runtime._collect_constant_buffers(
+        SimpleNamespace(), pipe, reflection, "ps", "shader", slot=9)) == []
+
+
+@pytest.mark.parametrize("failure,restore", [("slot", "ok"), ("decode", "ok"),
+    ("slot", "raises"), ("slot", "mismatch"), ("slot", "unknown")])
+def test_constant_buffer_failure_restores_original_event_without_success(monkeypatch, failure, restore):
+    runtime = server.server_runtime
+    active = [0 if restore == "unknown" else 11]
+    events = []
+    async def ensure(session_id, event_id):
+        events.append(event_id)
+        if event_id == 11 and restore == "raises":
+            raise RuntimeError("restore failed")
+        active[0] = 99 if event_id == 11 and restore == "mismatch" else event_id
+        return active[0]
+    async def offload(fn, *args):
+        return fn(*args)
+    async def controller(_):
+        return _FakeShaderController()
+    async def buffers(*args, **kwargs):
+        return [] if failure == "slot" else [{"contents": [], "flattened_contents": {}}]
+    monkeypatch.setattr(runtime, "_active_event", lambda _: active[0])
+    monkeypatch.setattr(runtime, "_runtime_context_id", lambda: "owned-context")
+    monkeypatch.setattr(runtime, "_ensure_event", ensure)
+    monkeypatch.setattr(runtime, "_offload", offload)
+    monkeypatch.setattr(runtime, "_get_controller", controller)
+    monkeypatch.setattr(runtime, "_rd_stage", lambda stage: stage)
+    monkeypatch.setattr(runtime, "_collect_constant_buffers", buffers)
+    payload = json.loads(asyncio.run(server._dispatch_shader("get_constant_buffer_contents",
+        {"session_id": "sess_demo", "event_id": 314, "stage": "ps", "slot": 8})))
+    assert payload["success"] is False
+    if restore == "ok":
+        assert payload["code"] == "constant_buffer_data_unavailable"
+        assert payload["details"]["replay_state_restored"] is True
+        assert payload["details"]["restored_event_id"] == active[0] == 11
+        assert payload["details"]["context_id"] == "owned-context"
+        assert payload["details"]["session_id"] == "sess_demo"
+    elif restore == "unknown":
+        assert payload["code"] == "constant_buffer_data_unavailable"
+        assert "replay_state_restored" not in payload["details"]
+    else:
+        assert payload["code"] == "shader_inspection_recovery_failed"
+        assert payload["details"]["replay_state_restored"] is False
+        assert "restored_event_id" not in payload["details"]
+    assert events == ([314] if restore == "unknown" else [314, 11])
+
+
+@pytest.mark.parametrize("shape,stride,value_type", [
+    ((1, 8, 4), 1, "float"), ((8, 8, 4), 1, "float"),
+    ((1, 65, 4), 1, "float"), ((4, 4, 3), 2, "uint"),
+])
+def test_region_inline_view_matches_full_export_and_bound(monkeypatch, tmp_path, shape, stride, value_type) -> None:
+    source = np.arange(np.prod(shape), dtype=np.float32).reshape(shape)
+    captured = []
+    async def read(*args, **kwargs):
+        return source, {"source_format": "decoded fixture"}
+    async def store(data, **kwargs):
+        captured.append(data)
+        return SimpleNamespace(sha256="region")
+    async def ensure(session, event):
+        return event
+    async def resolve(session, texture, **kwargs):
+        return texture
+    async def truth(*args):
+        return {"binding_truth_level": "binding_verified", "evidence_truth_level": "structured_readback"}
+    monkeypatch.setattr(server.server_runtime, "_ensure_event", ensure)
+    monkeypatch.setattr(server.server_runtime, "_resolve_texture_id", resolve)
+    monkeypatch.setattr(server.server_runtime, "_event_truth_metadata", truth)
+    monkeypatch.setattr(server.server_runtime, "_render_service", SimpleNamespace(read_texture_array=read))
+    monkeypatch.setattr(server.server_runtime, "_artifact_store", SimpleNamespace(store=store, get_path=lambda _: tmp_path / "region.npz"))
+    result = json.loads(asyncio.run(server._dispatch_texture("get_region_values", {
+        "session_id": "session", "event_id": 9, "texture_id": "texture",
+        "rect": {"x": 3, "y": 5, "w": shape[1], "h": shape[0]}, "stride": stride, "as_type": value_type,
+    })))
+    expected = source[::stride, ::stride].astype(np.uint32 if value_type == "uint" else np.float64)
+    assert result["success"] is True
+    assert len(captured) == 1
+    with np.load(io.BytesIO(captured[0])) as data:
+        np.testing.assert_array_equal(data["pixels"], expected)
+    assert result["inline_value_limit"] == 256
+    if expected.size <= 256:
+        assert result["values_status"] == "complete"
+        assert result["values"] == expected.tolist()
+    else:
+        assert result["values_status"] == "omitted_limit"
+        assert result["values"] is None
+    assert result["stats"]["shape"] == list(expected.shape)
+    assert result["stats"]["stride"] == stride
+    assert result["stats"]["channels"]["r"]["min"] == float(expected[..., 0].min())
+    assert result["stats"]["channels"]["r"]["mean"] == float(expected[..., 0].mean())
+    assert result["target_metadata"]["region"] == {"x": 3, "y": 5, "width": shape[1], "height": shape[0]}
+
+
+def test_region_inline_nonfinite_values_remain_explicit_and_channel_stats_finite(monkeypatch, tmp_path) -> None:
+    source = np.array([[[np.nan, np.inf, -np.inf, 1.0], [np.nan, 2.0, 3.0, 1.0]]])
+    writes = []
+    async def read(*args, **kwargs):
+        return source, {}
+    async def store(*args, **kwargs):
+        writes.append(True)
+        return SimpleNamespace(sha256="region")
+    async def ensure(session, event):
+        return event
+    async def resolve(session, texture, **kwargs):
+        return texture
+    async def truth(*args):
+        return {}
+    monkeypatch.setattr(server.server_runtime, "_ensure_event", ensure)
+    monkeypatch.setattr(server.server_runtime, "_resolve_texture_id", resolve)
+    monkeypatch.setattr(server.server_runtime, "_event_truth_metadata", truth)
+    monkeypatch.setattr(server.server_runtime, "_render_service", SimpleNamespace(read_texture_array=read))
+    monkeypatch.setattr(server.server_runtime, "_artifact_store", SimpleNamespace(store=store, get_path=lambda _: tmp_path / "region.npz"))
+    args = {"session_id": "session", "event_id": 9, "texture_id": "texture", "rect": {"x": 0, "y": 0, "w": 2, "h": 1}}
+    result = json.loads(asyncio.run(server._dispatch_texture("get_region_values", args)))
+    assert result["values"] == [[["NaN", "Infinity", "-Infinity", 1.0], ["NaN", 2.0, 3.0, 1.0]]]
+    assert result["stats"]["channels"]["r"] == {"min": None, "max": None, "mean": None, "nan_count": 2, "inf_count": 0}
+    assert result["stats"]["channels"]["g"]["mean"] == 2.0
+    assert result["stats"]["channels"]["b"]["mean"] == 3.0
+    assert result["stats"]["channels"]["a"]["mean"] == 1.0
+    whole = json.loads(asyncio.run(server._dispatch_texture("compute_stats", {
+        "session_id": "session", "event_id": 9, "texture_id": "texture",
+    })))
+    assert whole["stats"]["channels"] == result["stats"]["channels"]
+    assert writes == [True]  # Statistics stay in memory; only explicit region readback exported.
+    integer_result = json.loads(asyncio.run(server._dispatch_texture("get_region_values", {**args, "as_type": "int"})))
+    assert integer_result["success"] is False
+    assert integer_result["code"] == "texture_nonfinite_data"
+    assert writes == [True]

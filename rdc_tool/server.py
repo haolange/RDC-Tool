@@ -9,6 +9,7 @@ from rdc_tool.core.contracts import canonical_error
 from rdc_tool.core.errors import map_exception
 from rdc_tool.core.engine import CoreEngine, ExecutionContext
 from rdc_tool.progress import ProgressReporter, ProgressSink
+from rdc_tool.runtime_process_identity import runtime_process_identity
  
 _core_engine: Optional[CoreEngine] = None
 _PREVIEW_SELF_SYNCED_OPERATIONS = {
@@ -131,6 +132,9 @@ async def dispatch_operation(
             payload=payload,
         )
         meta = payload.get("meta", {}) if isinstance(payload, dict) else {}
+        if isinstance(payload, dict):
+            meta["process_identity"] = runtime_process_identity()
+            payload["meta"] = meta
         server_runtime.logger.info(
             "op.done transport=%s op=%s trace_id=%s ok=%s duration_ms=%s",
             transport,

@@ -472,23 +472,23 @@ def _state_should_reap(state: Dict[str, Any], now_ms: Optional[int] = None) -> b
     last_activity_ms = _iso_to_ms(state.get("last_activity_at"))
     if last_activity_ms <= 0:
         last_activity_ms = _iso_to_ms(state.get("started_at"))
+    owner_pid = int(state.get("owner_pid") or 0)
+    if owner_lost_should_stop(
+        owner_pid=owner_pid,
+        owner_running=_is_process_running(owner_pid) if owner_pid > 0 else True,
+        has_live_clients=False,
+        last_activity_ms=last_activity_ms,
+        now_ms=current_ms,
+        lease_timeout_seconds=_normalize_timeout(state.get("lease_timeout_seconds"), default=DEFAULT_LEASE_TIMEOUT_S),
+    ):
+        return True
+    if int(state.get("active_request_count") or 0) > 0:
+        return False
     idle_timeout_ms = _normalize_timeout(
-        state.get("idle_timeout_seconds"),
-        default=DEFAULT_IDLE_TIMEOUT_S,
+        state.get("idle_timeout_seconds"), default=DEFAULT_IDLE_TIMEOUT_S,
     ) * 1000
     if last_activity_ms > 0 and (current_ms - last_activity_ms) >= idle_timeout_ms:
-        return True
-
-    owner_pid = int(state.get("owner_pid") or 0)
-    lease_timeout_ms = _normalize_timeout(
-        state.get("lease_timeout_seconds"),
-        default=DEFAULT_LEASE_TIMEOUT_S,
-    ) * 1000
-    if owner_pid > 0 and not _is_process_running(owner_pid):
-        if last_activity_ms <= 0:
-            return True
-        return (current_ms - last_activity_ms) >= lease_timeout_ms
-
+        return not _context_has_unreleased_resources(_normalize_context(state.get("context_id")))
     return False
 
 

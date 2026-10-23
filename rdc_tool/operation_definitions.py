@@ -284,13 +284,15 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'group': '3.1，核心与环境管理 (Core & Environment)',
    'description': '获取当前环境能力详情；除 replay/remote/debug 基础项外，还会暴露当前 context/session/backend 视角下的 remote '
                   'capability matrix。事件绑定检查只针对当前 active event；若当前是无 shader 的 Present，'
-                  'not_currently_probed 不表示目标 draw 不可取证，应在目标事件使用直接 shader 工具及 edit_plan 复验。',
+                  'not_currently_probed 不表示目标 draw 不可取证，应在目标事件使用直接 shader 工具及 edit_plan 复验。'
+                  'summary 不恢复或探测 controller；full 经既有恢复路径只核验当前选中 session，在 replay 线程读取能力。'
+                  'current_session_probe 区分 verified / unavailable / not_currently_probed；失败或延迟加载不等于 unsupported。',
   'parameter_raw': "detail_level (string, optional): detail_level (str, 可选, 默认 'summary'): "
                    "'summary' | 'full'",
   'returns_raw': 'ok (bool)<br>data (dict): {capabilities}; `capabilities` 至少包含 replay / remote / '
                  'shader_debug / shader_replace / shader_compile / counters / artifact_dir / '
                  'context_id / current_session_id / current_backend，并在 remote 相关场景下附带 '
-                 '`remote_capability_matrix`<br>artifacts (list)<br>error (dict|null)<br>meta '
+                 '`remote_capability_matrix`。current_session_probe 记录当前会话探测状态及失败原因；full 的 sessions / capture_files / remote_connections 是当前进程已加载数量，不是持久登记总数。<br>artifacts (list)<br>error (dict|null)<br>meta '
                  '(dict)<br>projections (dict, 可选)',
   'param_names': ['detail_level'],
   'prerequisites': [],
@@ -599,7 +601,7 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'group': '3.9，Shader Debugger 与像素/顶点级调试 (Shader Debugging)',
   'description': '清除所有断点。',
   'parameter_raw': 'session_id (string): session_id (str)<br>shader_debug_id (string): '
-                   'shader_debug_id (str)',
+                   'shader_debug_id (str), current owning replay only; stale/foreign handles fail before native effects',
   'returns_raw': 'ok (bool)<br>data (dict): tool-specific payload<br>artifacts (list)<br>error '
                  '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
   'param_names': ['session_id', 'shader_debug_id'],
@@ -610,7 +612,7 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'input_schema': {'type': 'object',
                    'properties': {'session_id': {'description': 'session_id (str)',
                                                  'type': 'string'},
-                                  'shader_debug_id': {'description': 'shader_debug_id (str)',
+                                  'shader_debug_id': {'description': 'shader_debug_id (str), current owning replay only; stale/foreign handles fail before native effects',
                                                       'type': 'string'}},
                    'required': ['session_id', 'shader_debug_id'],
                    'additionalProperties': False},
@@ -622,7 +624,7 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'group': '3.9，Shader Debugger 与像素/顶点级调试 (Shader Debugging)',
   'description': '继续执行 debugger（直到断点/结束/超时）。',
   'parameter_raw': 'session_id (string): session_id (str)<br>shader_debug_id (string): '
-                   'shader_debug_id (str)<br>timeout_ms (integer, optional): timeout_ms (int, 可选, '
+                   'shader_debug_id (str), current owning replay only; stale/foreign handles fail before native effects<br>timeout_ms (integer, optional): timeout_ms (int, 可选, '
                    '默认 10000)',
   'returns_raw': 'ok (bool)<br>data (dict): {state, stopped_reason}<br>artifacts (list)<br>error '
                  '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
@@ -634,7 +636,7 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'input_schema': {'type': 'object',
                    'properties': {'session_id': {'description': 'session_id (str)',
                                                  'type': 'string'},
-                                  'shader_debug_id': {'description': 'shader_debug_id (str)',
+                                  'shader_debug_id': {'description': 'shader_debug_id (str), current owning replay only; stale/foreign handles fail before native effects',
                                                       'type': 'string'},
                                   'timeout_ms': {'description': 'timeout_ms (int, 可选, 默认 10000)',
                                                  'type': 'integer'}},
@@ -646,7 +648,7 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'path_inputs': []},
  {'name': 'rd.debug.evaluate_expression',
   'group': '3.9，Shader Debugger 与像素/顶点级调试 (Shader Debugging)',
-  'description': "在 debugger 上下文中求值表达式（如 'cb0.myVar' 或寄存器表达式；实现可选）。",
+  'description': "读取精确变量名或JSON字面量；不支持算术、源码表达式或任意求值。",
   'parameter_raw': 'session_id (string): session_id (str)<br>shader_debug_id (string): '
                    'shader_debug_id (str)<br>expression (string): expression (str)',
   'returns_raw': 'ok (bool)<br>data (dict): {value}<br>artifacts (list)<br>error '
@@ -694,9 +696,9 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'path_inputs': []},
  {'name': 'rd.debug.get_callstack',
   'group': '3.9，Shader Debugger 与像素/顶点级调试 (Shader Debugging)',
-  'description': '获取 shader 调用栈（函数名/文件/行）。',
+  'description': '读取原生函数名调用栈；当前trace未提供的文件/行保持null，pc为trace stepIndex。',
   'parameter_raw': 'session_id (string): session_id (str)<br>shader_debug_id (string): '
-                   'shader_debug_id (str)',
+                   'shader_debug_id (str), current owning replay only; stale/foreign handles fail before native effects',
   'returns_raw': 'ok (bool)<br>data (dict): {callstack}<br>artifacts (list)<br>error '
                  '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
   'param_names': ['session_id', 'shader_debug_id'],
@@ -707,7 +709,7 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'input_schema': {'type': 'object',
                    'properties': {'session_id': {'description': 'session_id (str)',
                                                  'type': 'string'},
-                                  'shader_debug_id': {'description': 'shader_debug_id (str)',
+                                  'shader_debug_id': {'description': 'shader_debug_id (str), current owning replay only; stale/foreign handles fail before native effects',
                                                       'type': 'string'}},
                    'required': ['session_id', 'shader_debug_id'],
                    'additionalProperties': False},
@@ -717,10 +719,10 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'path_inputs': []},
  {'name': 'rd.debug.get_variables',
   'group': '3.9，Shader Debugger 与像素/顶点级调试 (Shader Debugging)',
-  'description': '获取当前 scope 的变量（支持按名称过滤/按路径展开结构体）。',
+  'description': '读取当前调试步的累积原生变量快照；按 before/after 更新，不只返回最后一条变化。值保留原生类型/数值视图，结构成员可限定展开深度。',
   'parameter_raw': 'session_id (string): session_id (str)<br>shader_debug_id (string): '
-                   'shader_debug_id (str)<br>name_filter (string, optional): name_filter (str, '
-                   '可选): regex/contains<br>expand_depth (integer, optional): expand_depth (int, '
+                   'shader_debug_id (str), current owning replay only; stale/foreign handles fail before native effects<br>name_filter (string, optional): name_filter (str, '
+                   '可选): literal name substring<br>expand_depth (integer, optional): expand_depth (int, '
                    '可选, 默认 2)<br>max_variables (integer, optional): max_variables (int, 可选, 默认 '
                    '2048)',
   'returns_raw': 'ok (bool)<br>data (dict): {variables}<br>artifacts (list)<br>error '
@@ -733,10 +735,10 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'input_schema': {'type': 'object',
                    'properties': {'session_id': {'description': 'session_id (str)',
                                                  'type': 'string'},
-                                  'shader_debug_id': {'description': 'shader_debug_id (str)',
+                                  'shader_debug_id': {'description': 'shader_debug_id (str), current owning replay only; stale/foreign handles fail before native effects',
                                                       'type': 'string'},
                                   'name_filter': {'description': 'name_filter (str, 可选): '
-                                                                 'regex/contains',
+                                                                 'literal name substring',
                                                   'type': 'string'},
                                   'expand_depth': {'description': 'expand_depth (int, 可选, 默认 2)',
                                                    'type': 'integer'},
@@ -751,7 +753,7 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'path_inputs': []},
  {'name': 'rd.debug.run_to',
   'group': '3.9，Shader Debugger 与像素/顶点级调试 (Shader Debugging)',
-  'description': '运行到指定位置（PC 或 source location）。',
+  'description': '逐项运行到指定trace stepIndex（target.pc），不支持后退或源码位置。',
   'parameter_raw': 'session_id (string): session_id (str)<br>shader_debug_id (string): '
                    'shader_debug_id (str)<br>target (object): See input_schema for '
                    'constraints.<br>timeout_ms (integer, optional): timeout_ms (int, 可选, 默认 10000)',
@@ -767,11 +769,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                                                  'type': 'string'},
                                   'shader_debug_id': {'description': 'shader_debug_id (str)',
                                                       'type': 'string'},
-                                  'target': {'type': 'object',
-                                             'properties': {'texture_id': {'type': 'string'},
-                                                            'rt_index': {'type': 'integer',
-                                                                         'minimum': 0}},
-                                             'additionalProperties': False},
+                                  'target': {'type': 'object', 'properties': {'pc': {'type': 'integer', 'minimum': 0}},
+                                             'required': ['pc'], 'additionalProperties': False},
                                   'timeout_ms': {'description': 'timeout_ms (int, 可选, 默认 10000)',
                                                  'type': 'integer'}},
                    'required': ['session_id', 'shader_debug_id', 'target'],
@@ -782,10 +781,9 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'path_inputs': []},
  {'name': 'rd.debug.set_breakpoints',
   'group': '3.9，Shader Debugger 与像素/顶点级调试 (Shader Debugging)',
-  'description': '设置断点列表（按 PC 或 source location）。',
+  'description': '设置trace stepIndex断点；只支持pc，不接受未实现的源码位置。',
   'parameter_raw': 'session_id (string): session_id (str)<br>shader_debug_id (string): '
-                   'shader_debug_id (str)<br>breakpoints (array): breakpoints (list[dict]): {pc?, '
-                   'file?, line?}',
+                   'shader_debug_id (str)<br>breakpoints (array): breakpoints (list[dict]): {pc}',
   'returns_raw': 'ok (bool)<br>data (dict): {active_breakpoints}<br>artifacts (list)<br>error '
                  '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
   'param_names': ['session_id', 'shader_debug_id', 'breakpoints'],
@@ -798,10 +796,9 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                                                  'type': 'string'},
                                   'shader_debug_id': {'description': 'shader_debug_id (str)',
                                                       'type': 'string'},
-                                  'breakpoints': {'description': 'breakpoints (list[dict]): {pc?, '
-                                                                 'file?, line?}',
+                                  'breakpoints': {'description': 'breakpoints (list[dict]): {pc}',
                                                   'type': 'array',
-                                                  'items': {}}},
+                                                  'items': {'type': 'object', 'properties': {'pc': {'type': 'integer', 'minimum': 0}}, 'required': ['pc'], 'additionalProperties': False}}},
                    'required': ['session_id', 'shader_debug_id', 'breakpoints'],
                    'additionalProperties': False},
   'scope': 'replay',
@@ -810,10 +807,10 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'path_inputs': []},
  {'name': 'rd.debug.step',
   'group': '3.9，Shader Debugger 与像素/顶点级调试 (Shader Debugging)',
-  'description': '单步执行 debugger（步进一条指令或源代码行）。',
+  'description': '消费一项原生ShaderDebugState；ContinueDebug批次逐项保留。pc为trace stepIndex，只支持instruction模式。',
   'parameter_raw': 'session_id (string): session_id (str)<br>shader_debug_id (string): '
-                   'shader_debug_id (str)<br>step_mode (string, optional): step_mode (str, 可选, 默认 '
-                   "'instruction'): 'instruction' | 'line' | 'over' | 'out'",
+                   'shader_debug_id (str), current owning replay only; stale/foreign handles fail before native effects<br>step_mode (string, optional): step_mode (str, 可选, 默认 '
+                   "'instruction'): 'instruction' only",
   'returns_raw': 'ok (bool)<br>data (dict): {state}<br>artifacts (list)<br>error '
                  '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
   'param_names': ['session_id', 'shader_debug_id', 'step_mode'],
@@ -824,12 +821,9 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'input_schema': {'type': 'object',
                    'properties': {'session_id': {'description': 'session_id (str)',
                                                  'type': 'string'},
-                                  'shader_debug_id': {'description': 'shader_debug_id (str)',
+                                  'shader_debug_id': {'description': 'shader_debug_id (str), current owning replay only; stale/foreign handles fail before native effects',
                                                       'type': 'string'},
-                                  'step_mode': {'description': 'step_mode (str, 可选, 默认 '
-                                                               "'instruction'): 'instruction' | "
-                                                               "'line' | 'over' | 'out'",
-                                                'type': 'string'}},
+                                  'step_mode': {'description': 'Only instruction stepping is supported.', 'type': 'string', 'enum': ['instruction']}},
                    'required': ['session_id', 'shader_debug_id'],
                    'additionalProperties': False},
   'scope': 'replay',
@@ -1116,7 +1110,7 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'parameter_raw': 'session_id (string): session_id (str)<br>query (object): query (dict): 查询条件，例如 '
                    '{name_regex?, name_contains?, flags_include?, flags_exclude?, event_id_min?, '
                    'event_id_max?}；flags_include/flags_exclude 为 RenderDoc ActionFlags 成员名数组，'
-                   '分别要求全部包含/全部排除，先筛选再应用 max_results；未知名称返回 validation_error<br>max_results (integer, optional): max_results (int, 可选, 默认 '
+                   '例如 Drawcall、Dispatch、Present，不是结果字段 is_draw；分别要求全部包含/全部排除，先筛选再应用 max_results；未知名称在获取回放controller前返回带无效果证明的 validation_error<br>max_results (integer, optional): max_results (int, 可选, 默认 '
                    '200)',
   'returns_raw': 'ok (bool)<br>data (dict): {matches}<br>artifacts (list)<br>error '
                  '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
@@ -1132,8 +1126,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                                                            'name_contains?, flags_include?, '
                                                            'flags_exclude?, event_id_min?, '
                                                            'event_id_max?}；flags_include/flags_exclude '
-                                                           '为 RenderDoc ActionFlags 成员名数组，分别要求全部包含/全部排除，'
-                                                           '先筛选再应用 max_results；未知名称返回 validation_error',
+                                                           '为 RenderDoc ActionFlags 成员名数组（如 Drawcall、Dispatch、Present，不是结果字段 is_draw），分别要求全部包含/全部排除，'
+                                                           '先筛选再应用 max_results；未知名称在获取回放controller前返回带无效果证明的 validation_error',
                                             'type': 'object'},
                                   'max_results': {'description': 'max_results (int, 可选, 默认 200)',
                                                   'type': 'integer'}},
@@ -1200,18 +1194,9 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'path_inputs': [{'name': 'output_path', 'access': 'write'}]},
  {'name': 'rd.export.cbuffer_dump',
   'group': '3.11，导出、报告与可复现打包 (Export & Reporting)',
-  'description': '导出当前 event 的常量缓冲数据（按 stage/slot 命名），支持结构化变量值。',
-  'parameter_raw': 'session_id (string): session_id (str)<br>output_dir (string): output_dir '
-                   '(str)<br>stages (array, optional): stages (list[str], 可选, 默认 '
-                   "['vs','ps','cs'])<br>slots (array, optional): slots (list[int], "
-                   '可选)<br>max_bytes (integer, optional): max_bytes (int, 可选, 默认 '
-                   '1048576)<br>include_raw (boolean, optional): include_raw (bool, 可选, 默认 '
-                   'false)<br>include_decoded (boolean, optional): include_decoded (bool, 可选, 默认 '
-                   'true)',
-  'returns_raw': 'ok (bool)<br>data (dict): {dumped_paths, saved_files, failures, partial, stages, '
-                 'slots}; each stage/slot is handled independently and partial failures are '
-                 'recorded instead of blocking the whole request.<br>artifacts (list)<br>error '
-                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
+  'description': '导出当前 event 的常量缓冲数据（按 stage/slot 命名），支持结构化变量值。 解码不可得或原始字节仅覆盖前缀时partial=true，导出文件保留范围和错误。',
+  'parameter_raw': "session_id (string): session_id (str)<br>output_dir (string): output_dir (str)<br>stages (array, optional): stages (list[str], 可选, 默认 ['vs','ps','cs'])<br>slots (array, optional): slots (list[int], 可选)<br>max_bytes (integer, optional): 每常量块输入字节上限，默认1048576；0表示该块不设上限，负数无效。预算或绑定范围不足完整反射块时不发布完整布局解码值。<br>include_raw (boolean, optional): include_raw (bool, 可选, 默认 false)<br>include_decoded (boolean, optional): include_decoded (bool, 可选, 默认 true)",
+  'returns_raw': 'ok (bool)<br>data (dict): {dumped_paths, saved_files, failures, partial, stages, slots}; each stage/slot is handled independently and partial failures are recorded instead of blocking the whole request.<br>artifacts (list)<br>error (dict|null)<br>meta (dict)<br>projections (dict, 可选) input_coverage说明required_bytes、binding_bytes、byte_budget、permitted_bytes及complete_range_permitted；这不是原始字节回执。decode_status明确decoded/unavailable/raw_fallback，decode_input_bytes是传给解码器的长度。raw_fallback.byte_size为实际返回字节；truncated表示块读取不全，preview_bytes/preview_truncated另外限定hex_preview交付范围。预算不足、未绑定输入或未知范围不能解释成已观测零。',
   'param_names': ['session_id',
                   'output_dir',
                   'stages',
@@ -1235,8 +1220,7 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                                   'slots': {'description': 'slots (list[int], 可选)',
                                             'type': 'array',
                                             'items': {}},
-                                  'max_bytes': {'description': 'max_bytes (int, 可选, 默认 1048576)',
-                                                'type': 'integer'},
+                                  'max_bytes': {'description': '每常量块输入字节上限，默认1048576；0表示该块不设上限，负数无效。预算或绑定范围不足完整反射块时不发布完整布局解码值。', 'type': 'integer', 'minimum': 0},
                                   'include_raw': {'description': 'include_raw (bool, 可选, 默认 false)',
                                                   'type': 'boolean'},
                                   'include_decoded': {'description': 'include_decoded (bool, 可选, '
@@ -1354,16 +1338,21 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                  '`rd.shader.edit_and_replace` 保持一致。',
   'parameter_raw': 'session_id (string): session_id (str)<br>event_id (integer, optional): '
                    'event_id (int, 可选)<br>output_dir (string): output_dir '
-                   '(str)<br>include_binaries (boolean, optional): include_binaries (bool, 可选, 默认 '
+                   '(str)<br>disassembly_target (string, optional): auto（默认）或当前支持的精确反汇编 target；'
+                   '可装配的 raw SPIR-V 工作文件使用 SPIR-V ASM，显式 target 失败不会改用展示视图。'
+                   '<br>include_binaries (boolean, optional): include_binaries (bool, 可选, 默认 '
                    'true)<br>include_reflection (boolean, optional): include_reflection (bool, 可选, '
                    '默认 true)<br>include_disassembly (boolean, optional): include_disassembly '
                    '(bool, 可选, 默认 true)',
   'returns_raw': 'ok (bool)<br>data (dict): {output_dir, bundle_path, '
-                 'resolved_event_id}<br>artifacts (list)<br>error (dict|null): 当请求 event 没有可绑定 '
+                 'resolved_event_id, disassembly_target, complete, failures}; bundle 的 disassembly export '
+                 '包含实际 target、source_encoding、is_raw_spirv_asm、source_hash、edit_plan 及精确 UTF-8 文件 hash/大小；'
+                 '显式 target 不匹配时标记 unavailable/complete=false，不保存替代展示文本。<br>artifacts (list)<br>error (dict|null): 当请求 event 没有可绑定 '
                  'shader 时，显式返回 `shader_bundle_empty`<br>meta (dict)<br>projections (dict, 可选)',
   'param_names': ['session_id',
                   'event_id',
                   'output_dir',
+                  'disassembly_target',
                   'include_binaries',
                   'include_reflection',
                   'include_disassembly'],
@@ -1379,6 +1368,7 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                                                'minimum': 0},
                                   'output_dir': {'description': 'output_dir (str)',
                                                  'type': 'string'},
+                                  'disassembly_target': {'description': 'auto（默认）或精确反汇编 target；raw 可装配文件用 SPIR-V ASM，不静默替换 target', 'type': 'string'},
                                   'include_binaries': {'description': 'include_binaries (bool, 可选, '
                                                                       '默认 true)',
                                                        'type': 'boolean'},
@@ -1504,45 +1494,48 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'evidence_kind': None,
   'path_inputs': []},
  {'name': 'rd.mesh.decode_index_data',
-  'group': '3.7，缓冲区与网格数据访问 (Buffer & Mesh Data Access)',
-  'description': '解码 Index Buffer（16/32-bit）为 index 列表。',
-  'parameter_raw': 'session_id (string): session_id (str)<br>index_buffer_id (string): '
-                   'index_buffer_id (str)<br>format (string): format (str): '
-                   "'R16_UINT'|'R32_UINT'<br>index_offset (integer, optional): index_offset (int, "
-                   '可选, 默认 0)<br>index_count (integer, optional): index_count (int, 可选, 默认 '
-                   '256)<br>base_vertex (integer, optional): base_vertex (int, 可选, 默认 0)',
-  'returns_raw': 'ok (bool)<br>data (dict): {indices}<br>artifacts (list)<br>error '
-                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
-  'param_names': ['session_id',
-                  'index_buffer_id',
-                  'format',
-                  'index_offset',
-                  'index_count',
-                  'base_vertex'],
-  'prerequisites': [{'requires': 'session_id',
-                     'via_tools': ['rd.capture.open_file', 'rd.capture.open_replay'],
-                     'reason': 'This tool operates on a live replay session.'}],
-  'namespace': 'mesh',
-  'input_schema': {'type': 'object',
-                   'properties': {'session_id': {'description': 'session_id (str)',
-                                                 'type': 'string'},
-                                  'index_buffer_id': {'description': 'index_buffer_id (str)',
-                                                      'type': 'string'},
-                                  'format': {'description': "format (str): 'R16_UINT'|'R32_UINT'",
-                                             'type': 'string',
-                                             'enum': ['u16', 'u32']},
-                                  'index_offset': {'description': 'index_offset (int, 可选, 默认 0)',
-                                                   'type': 'integer'},
-                                  'index_count': {'description': 'index_count (int, 可选, 默认 256)',
+ 'group': '3.7，缓冲区与网格数据访问 (Buffer & Mesh Data Access)',
+ 'description': '解码 Index Buffer（16/32-bit）为 index 列表。',
+ 'parameter_raw': 'session_id (string): session_id (str)<br>index_buffer_id (string): '
+                  'index_buffer_id (str)<br>format (string): format (str): '
+                  "'R16_UINT'|'R32_UINT'<br>index_offset (integer, optional): Byte offset into "
+                  'index buffer, not an index ordinal; default 0<br>index_count (integer, '
+                  'optional): index_count (int, 可选, 默认 256)<br>base_vertex (integer, optional): '
+                  'base_vertex (int, 可选, 默认 0)',
+ 'returns_raw': 'ok (bool)<br>data (dict): {indices}<br>artifacts (list)<br>error '
+                '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
+ 'param_names': ['session_id',
+                 'index_buffer_id',
+                 'format',
+                 'index_offset',
+                 'index_count',
+                 'base_vertex'],
+ 'prerequisites': [{'requires': 'session_id',
+                    'via_tools': ['rd.capture.open_file', 'rd.capture.open_replay'],
+                    'reason': 'This tool operates on a live replay session.'}],
+ 'namespace': 'mesh',
+ 'input_schema': {'type': 'object',
+                  'properties': {'session_id': {'description': 'session_id (str)',
+                                                'type': 'string'},
+                                 'index_buffer_id': {'description': 'index_buffer_id (str)',
+                                                     'type': 'string'},
+                                 'format': {'description': "format (str): 'R16_UINT'|'R32_UINT'",
+                                            'type': 'string',
+                                            'enum': ['u16', 'u32']},
+                                 'index_offset': {'description': 'Byte offset into the original '
+                                                                 'index buffer, not an index '
+                                                                 'ordinal; default 0.',
                                                   'type': 'integer'},
-                                  'base_vertex': {'description': 'base_vertex (int, 可选, 默认 0)',
-                                                  'type': 'integer'}},
-                   'required': ['session_id', 'index_buffer_id', 'format'],
-                   'additionalProperties': False},
-  'scope': 'replay',
-  'effects': ['replay_position'],
-  'evidence_kind': None,
-  'path_inputs': []},
+                                 'index_count': {'description': 'index_count (int, 可选, 默认 256)',
+                                                 'type': 'integer'},
+                                 'base_vertex': {'description': 'base_vertex (int, 可选, 默认 0)',
+                                                 'type': 'integer'}},
+                  'required': ['session_id', 'index_buffer_id', 'format'],
+                  'additionalProperties': False},
+ 'scope': 'replay',
+ 'effects': ['replay_position'],
+ 'evidence_kind': None,
+ 'path_inputs': []},
  {'name': 'rd.mesh.get_drawcall_mesh_config',
   'group': '3.7，缓冲区与网格数据访问 (Buffer & Mesh Data Access)',
   'description': '获取当前 drawcall 的 mesh 配置：使用哪些 VB/IB、topology、baseVertex、indexOffset、instanceCount '
@@ -1569,45 +1562,100 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'evidence_kind': None,
   'path_inputs': []},
  {'name': 'rd.mesh.get_post_transform_data',
-  'group': '3.7，缓冲区与网格数据访问 (Buffer & Mesh Data Access)',
-  'description': 'Read post-transform vertex data from VS or GS at a replay event. view_index '
-                 'selects an integer multiview/VR view; unbound GS is reported explicitly.',
-  'parameter_raw': 'session_id (string): session_id (str)<br>event_id (integer, optional): '
-                   'event_id (int, 可选): 缺省使用当前 active event<br>instance (integer, optional): '
-                   'instance (int, 可选, 默认 0)<br>view_index (integer, optional): Integer '
-                   'multiview/VR view index.<br>max_vertices (integer, optional): max_vertices '
-                   '(int, 可选): 限制导出顶点数<br>stage (string): See input_schema for constraints.',
-  'returns_raw': 'vertex_rows retain raw bytes and nullable typed position. attributes explicitly reports position/normal/uv present or unsupported; outputs separately exposes a verified D3D11/12 stream-zero float output signature layout and per-row outputs, without assigning TEXCOORD to normal. source=post_transform; no input values are substituted. No attribute layout is guessed. truncated is null when an unbounded native buffer view prevents proving total size.<br>ok (bool)<br>data (dict): {mesh_data}<br>artifacts (list)<br>error '
-                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
-  'param_names': ['session_id', 'event_id', 'instance', 'view_index', 'max_vertices', 'stage'],
-  'prerequisites': [{'requires': 'session_id',
-                     'via_tools': ['rd.capture.open_file', 'rd.capture.open_replay'],
-                     'reason': 'This tool operates on a live replay session.'}],
-  'namespace': 'mesh',
-  'input_schema': {'type': 'object',
-                   'properties': {'session_id': {'description': 'session_id (str)',
-                                                 'type': 'string'},
-                                  'event_id': {'description': 'event_id (int, 可选): 缺省使用当前 active '
-                                                              'event',
-                                               'type': 'integer',
-                                               'minimum': 0},
-                                  'instance': {'description': 'instance (int, 可选, 默认 0)',
-                                               'type': 'integer',
-                                               'minimum': 0},
-                                  'view_index': {'type': 'integer',
+ 'group': '3.7，缓冲区与网格数据访问 (Buffer & Mesh Data Access)',
+ 'description': 'Read post-transform vertex data from VS or GS at a replay event. view_index '
+                'selects an integer multiview/VR view; unbound GS is reported explicitly. Optional '
+                'VS index windows read native post-transform indices and only their referenced '
+                'output rows.',
+ 'parameter_raw': 'session_id (string): session_id (str)<br>event_id (integer, optional): event_id '
+                  '(int, 可选): 缺省使用当前 active event<br>instance (integer, optional): instance (int, '
+                  '可选, 默认 0)<br>view_index (integer, optional): Integer multiview/VR view '
+                  'index.<br>max_vertices (integer, optional): max_vertices (int, 可选): '
+                  '限制导出顶点数<br>stage (string): See input_schema for constraints.<br>first_index '
+                  '(integer, optional): Native index ordinal, in elements; default 0 with '
+                  'index_count.<br>index_count (integer, optional): 1..4096 indices; VS only; '
+                  'explicit max_vertices 1..256 is required.',
+ 'returns_raw': 'vertex_rows retain raw bytes and nullable typed position. attributes explicitly '
+                'reports position/normal/uv present or unsupported; outputs exposes verified '
+                'D3D11/12 stream-zero float signature packing and Vulkan VS per-vertex stream-zero '
+                'float32 std430 packing, checked against native stride. Vulkan layout reports '
+                'API/stage, explicit location, system_value, variable_name, native component_mask '
+                '(null if unavailable), scalar_type, byte_offset and components; a mask is not a '
+                'proved raster component/interpolation mapping; per-row keys are location:N or '
+                'builtin:Name. Ambiguous/missing locations, non-leading Position, unsupported '
+                'types/rates/streams/stages and stride mismatch remain unsupported. Incomplete '
+                'readback is an error; nonfinite values are null. These are vertex outputs, not '
+                'raster interpolation, primitive coverage or fragment operands; TEXCOORD is never '
+                'guessed to be normal. source=post_transform; no input values are substituted. No '
+                'attribute layout is guessed. truncated is null when an unbounded native buffer '
+                'view prevents proving total size.<br>ok (bool)<br>data (dict): '
+                '{mesh_data}<br>artifacts (list)<br>error (dict|null)<br>meta '
+                '(dict)<br>projections (dict, 可选) Index-window mode reads only native MeshFormat '
+                'resource objects, never arbitrary ID lookup or input substitution. index_window '
+                'includes original index bytes, native index byte offset/stride, element ordinals, '
+                'base_vertex, index-to-output-row mapping and nullable finite native view bounds. '
+                'vertex_rows retain absolute output vertex_index and source_byte_offset; raw bytes '
+                'and typed outputs refer to those rows. Unique referenced rows are bounded by '
+                'max_vertices (1..256), with combined index/vertex readback at most 1 MiB; short '
+                'reads fail without zero filling or prefix fallback. complete refers only to the '
+                'requested index window; truncated remains true for a partial draw or incomplete '
+                'vertex mapping. Primitive-restart matches are explicitly restart_candidate with '
+                'null vertex_index and vertex_mapping_complete=false; they do not establish raster '
+                'primitive association. Non-indexed windows use explicit implicit row ordinals and '
+                'no index bytes. Native topology_name/base_vertex/allow_restart/restart_index are '
+                'reported without inferring pixel coverage. Invalid window arguments are rejected '
+                'before replay access with effects_attempted=false/context_preserved=true; native '
+                'or post-effect read failures do not carry that proof.',
+ 'param_names': ['session_id',
+                 'event_id',
+                 'instance',
+                 'view_index',
+                 'max_vertices',
+                 'stage',
+                 'first_index',
+                 'index_count'],
+ 'prerequisites': [{'requires': 'session_id',
+                    'via_tools': ['rd.capture.open_file', 'rd.capture.open_replay'],
+                    'reason': 'This tool operates on a live replay session.'}],
+ 'namespace': 'mesh',
+ 'input_schema': {'type': 'object',
+                  'properties': {'session_id': {'description': 'session_id (str)',
+                                                'type': 'string'},
+                                 'event_id': {'description': 'event_id (int, 可选): 缺省使用当前 active '
+                                                             'event',
+                                              'type': 'integer',
+                                              'minimum': 0},
+                                 'instance': {'description': 'instance (int, 可选, 默认 0)',
+                                              'type': 'integer',
+                                              'minimum': 0},
+                                 'view_index': {'type': 'integer',
+                                                'minimum': 0,
+                                                'default': 0,
+                                                'description': 'Integer multiview/VR view index.'},
+                                 'max_vertices': {'description': 'max_vertices (int, 可选): 限制导出顶点数',
+                                                  'type': 'integer',
+                                                  'minimum': 0},
+                                 'stage': {'type': 'string', 'enum': ['vs', 'gs']},
+                                 'first_index': {'type': 'integer',
                                                  'minimum': 0,
-                                                 'default': 0,
-                                                 'description': 'Integer multiview/VR view index.'},
-                                  'max_vertices': {'description': 'max_vertices (int, 可选): 限制导出顶点数',
-                                                   'type': 'integer',
-                                                   'minimum': 0},
-                                  'stage': {'type': 'string', 'enum': ['vs', 'gs']}},
-                   'required': ['session_id', 'stage'],
-                   'additionalProperties': False},
-  'scope': 'replay',
-  'effects': ['replay_position'],
-  'evidence_kind': None,
-  'path_inputs': []},
+                                                 'maximum': 4294967295,
+                                                 'description': 'First native post-transform index '
+                                                                'ordinal (elements, not bytes); '
+                                                                'default 0 when index_count is '
+                                                                'supplied.'},
+                                 'index_count': {'type': 'integer',
+                                                 'minimum': 1,
+                                                 'maximum': 4096,
+                                                 'description': 'Explicit native index window '
+                                                                'length; requires stage=vs and '
+                                                                'explicit max_vertices between 1 '
+                                                                'and 256.'}},
+                  'required': ['session_id', 'stage'],
+                  'additionalProperties': False},
+ 'scope': 'replay',
+ 'effects': ['replay_position'],
+ 'evidence_kind': None,
+ 'path_inputs': []},
  {'name': 'rd.perf.describe_counter',
   'group': '3.10，性能与高级分析 (Performance & Advanced Analysis)',
   'description': '获取单个 counter 的详细描述。',
@@ -1720,17 +1768,9 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'path_inputs': []},
  {'name': 'rd.pipeline.get_constant_buffers',
   'group': '3.4，管线状态查询 (Pipeline State Inspection)',
-  'description': '获取指定 stage 的 Constant Buffer 绑定（slot/buffer/offset/size）。',
-  'parameter_raw': 'session_id (string): session_id (str)<br>stage (string): stage '
-                   '(str)<br>include_contents (boolean, optional): include_contents (bool, 可选, 默认 '
-                   'false): 若 true 则额外解码变量值（可能较慢）<br>max_bytes (integer, optional): max_bytes '
-                   '(int, 可选, 默认 1048576): 解码上限，避免超大 CB 导致内存压力<br>event_id (integer, optional): '
-                   'Replay event; omitted uses the owning session current event.<br>array_index '
-                   '(integer, optional): See input_schema for constraints.<br>flatten (boolean, '
-                   'optional): See input_schema for constraints.<br>slot (integer, optional): See '
-                   'input_schema for constraints.',
-  'returns_raw': 'ok (bool)<br>data (dict): {constant_buffers}<br>artifacts (list)<br>error '
-                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
+  'description': '获取指定 stage 的 Constant Buffer 绑定（slot/buffer/offset/size）。 输入范围不足时不调用完整布局解码器，不用未覆盖数据的零填充冒充值。',
+  'parameter_raw': 'session_id (string): session_id (str)<br>stage (string): stage (str)<br>include_contents (boolean, optional): include_contents (bool, 可选, 默认 false): 若 true 则额外解码变量值（可能较慢）<br>max_bytes (integer, optional): 每常量块输入字节上限，默认1048576；0表示该块不设上限，负数无效。预算或绑定范围不足完整反射块时不发布完整布局解码值。<br>event_id (integer, optional): Replay event; omitted uses the owning session current event.<br>array_index (integer, optional): See input_schema for constraints.<br>flatten (boolean, optional): See input_schema for constraints.<br>slot (integer, optional): See input_schema for constraints.',
+  'returns_raw': 'ok (bool)<br>data (dict): {constant_buffers}<br>artifacts (list)<br>error (dict|null)<br>meta (dict)<br>projections (dict, 可选) input_coverage说明required_bytes、binding_bytes、byte_budget、permitted_bytes及complete_range_permitted；这不是原始字节回执。decode_status明确decoded/unavailable/raw_fallback，decode_input_bytes是传给解码器的长度。raw_fallback.byte_size为实际返回字节；truncated表示块读取不全，preview_bytes/preview_truncated另外限定hex_preview交付范围。预算不足、未绑定输入或未知范围不能解释成已观测零。',
   'param_names': ['session_id',
                   'stage',
                   'include_contents',
@@ -1751,9 +1791,7 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                                                                       '默认 false): 若 true '
                                                                       '则额外解码变量值（可能较慢）',
                                                        'type': 'boolean'},
-                                  'max_bytes': {'description': 'max_bytes (int, 可选, 默认 1048576): '
-                                                               '解码上限，避免超大 CB 导致内存压力',
-                                                'type': 'integer'},
+                                  'max_bytes': {'description': '每常量块输入字节上限，默认1048576；0表示该块不设上限，负数无效。预算或绑定范围不足完整反射块时不发布完整布局解码值。', 'type': 'integer', 'minimum': 0},
                                   'event_id': {'type': 'integer',
                                                'minimum': 0,
                                                'description': 'Replay event; omitted uses the '
@@ -1967,7 +2005,7 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'path_inputs': []},
  {'name': 'rd.remote.connect',
   'group': '3.12，远程连接与自动化抓帧 (Remote Capture & Target Control)',
-  'description': '连接到远程 RenderDoc server；支持 direct RenderDoc endpoint 和 Android adb bootstrap。',
+  'description': '连接到远程 RenderDoc server；支持 direct RenderDoc endpoint 和 Android adb bootstrap。 已安装但未运行的helper仍复用其安装与配置；仅确认包缺失才非替换安装一次，错误或冲突不自动卸载重装。启动进程的所有权不扩展到现有安装或配置。',
   'parameter_raw': 'host (string, optional): host (str, renderdoc transport required; adb_android '
                    'optional)<br>port (integer, optional): port (int, optional, default '
                    '38920)<br>timeout_ms (integer, optional): timeout_ms (int, optional, default '
@@ -2402,12 +2440,12 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'path_inputs': []},
  {'name': 'rd.resource.get_details',
   'group': '3.5，资源探查 (Resource Inspection & History)',
-  'description': '获取资源详细信息，兼容 V3；根据资源类型返回不同字段。',
+  'description': '获取资源详细信息；按原生资源身份精确匹配数字或 ResourceId:: 形式，根据资源类型返回字段。',
   'parameter_raw': 'session_id (string): session_id (str)<br>resource_id (string): resource_id '
                    '(str)<br>include_initialization (boolean): Recorded initialization chunks and '
                    'parent/derived resources; not a creation call-stack claim.',
   'returns_raw': 'ok (bool)<br>data (dict): {details}<br>artifacts (list)<br>error '
-                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
+                 '(dict|null): Completed inventory miss is validation/resource_not_found with effects_attempted=false and context_preserved=true; native inventory failures carry no such proof.<br>meta (dict)<br>projections (dict, 可选)',
   'param_names': ['session_id', 'resource_id', 'include_initialization'],
   'prerequisites': [{'requires': 'session_id',
                      'via_tools': ['rd.capture.open_file', 'rd.capture.open_replay'],
@@ -2416,7 +2454,7 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'input_schema': {'type': 'object',
                    'properties': {'session_id': {'description': 'session_id (str)',
                                                  'type': 'string'},
-                                  'resource_id': {'description': 'resource_id (str)',
+                                  'resource_id': {'description': 'Exact resource ID: decimal or ResourceId::<decimal>; integer precision is preserved.',
                                                   'type': 'string'},
                                   'include_initialization': {'type': 'boolean',
                                                              'default': False,
@@ -2459,11 +2497,11 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'path_inputs': []},
  {'name': 'rd.resource.list_all',
   'group': '3.5，资源探查 (Resource Inspection & History)',
-  'description': '列出捕获中所有资源（Textures/Buffers/Shaders/Pipelines 等），兼容 V3。',
+  'description': '列出 texture/buffer/descriptor-store 资源行；kind=all 另返回与 get_details 同四种原生库存的完整身份清单 identity_inventory（含仅 GetResources 可见的 shader/pipeline 等身份）。类型行或过滤视图不能单独证明全局身份缺失。',
   'parameter_raw': 'session_id (string): session_id (str)<br>types (array): types (list[str], 可选): '
                    "过滤类型，如 ['Texture','Buffer','Shader']；缺省为全部<br>include_unused (boolean): "
                    'include_unused (bool, 可选, 默认 true)<br>kind (string): kind',
-  'returns_raw': 'ok (bool)<br>data (dict): {resources}<br>artifacts (list)<br>error '
+  'returns_raw': 'ok (bool)<br>data (dict): {resources, identity_inventory (kind=all: scope, complete, resource_ids, count, source_counts)}<br>artifacts (list)<br>error '
                  '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
   'param_names': ['session_id', 'types', 'include_unused', 'kind'],
   'prerequisites': [{'requires': 'session_id',
@@ -2595,12 +2633,14 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'returns_raw': 'ok (bool)<br>data (dict): {context_id, backend, session_locator, runtime, '
                  'remote, focus, notes, last_artifacts, '
                  'preview{enabled,state,view_mode,bound_session_id,bound_capture_file_id,bound_event_id,backend,recovered_from_session_id,rebind_count,last_error,display{output_slot,texture_id,texture_format,framebuffer_extent,viewport_rect,scissor_rect,effective_region_rect,region_marker_mode,window_rect,fit_mode,screen_cap_ratio},updated_at_ms}, '
-                 'current_session_id, sessions, recovery, limits, active_operation, '
+                 'current_session_id, sessions, recovery, limits, active_operation, process_identity, '
                  'recent_operations, updated_at_ms, remote_capability_matrix, '
                  'remote_context_locality, remote_handle_origin_context, '
                  'remote_handle_reuse_policy}; remote_capability_matrix is state-first for '
                  'get_context and may report not_currently_probed for live shader/debug/replace '
-                 'capability probes<br>artifacts (list)<br>error (dict|null)<br>meta '
+                 'capability probes; process_identity reports actual daemon/worker pid and OS '
+                 'start_generation when available, otherwise an explicit unavailable reason. '
+                 'Equal logical IDs do not establish process continuity.<br>artifacts (list)<br>error (dict|null)<br>meta '
                  '(dict)<br>projections (dict, optional)',
   'param_names': ['context_id'],
   'prerequisites': [],
@@ -2838,9 +2878,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'path_inputs': []},
  {'name': 'rd.shader.compile',
   'group': '3.8，Shader 探查、反射与替换 (Shader Inspection & Replacement)',
-  'description': '（可选扩展）在 server 侧调用外部编译器（dxc/glslangValidator/metal）编译 shader，返回 binary '
-                 '路径；用于构建替换输入。',
-  'parameter_raw': 'source_text (string, optional): source_text (str, 可选): inline HLSL/GLSL/MSL '
+  'description': '通过当前 replay controller 的 BuildTargetShader 独立构建 shader，不替换资源；raw SPIR-V ASM 在二进制后端复用 spirv-as 装配。返回原生构建 ID 与明确区分的构建输入/读回制品。',
+  'parameter_raw': 'source_text (string, optional): source_text (str, 可选): inline HLSL/GLSL/SPIR-V ASM '
                    'source text<br>source_path (string, optional): source_path (str, 可选): shader '
                    'source file path; file directory is added to include_dirs<br>stage (string): '
                    'stage (str)<br>entry (string): entry (str)<br>target (string): target (str): '
@@ -2853,13 +2892,13 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                    'constraints.<br>event_id (integer, optional): Replay event; omitted uses the '
                    'owning session current event.',
   'returns_raw': 'ok (bool)<br>data (dict): {session_id, shader_id, entry, target, stage, '
-                 'source_kind, resolved_source_path, include_dirs, source_encoding, '
+                 'source_kind, resolved_source_path, include_dirs, source_encoding, build_encoding, build_input, '
                  'supported_source_encodings, runtime_replacement_supported, '
                  'runtime_replacement_reason, messages, compiler_messages, edit_plan, saved_path?, '
-                 'artifact_path?, byte_size?}<br>artifacts (list)<br>error (dict|null): compile '
+                 'artifact_path?, byte_size?, artifact_kind?}<br>artifacts (list)<br>error (dict|null): compile '
                  'validation/build failures include source_kind, resolved_source_path, '
                  'include_dirs, entry, target, and failure_stage. Unsupported source encoding '
-                 'returns shader_compile_encoding_unsupported. DXIL/DXBC captured disassembly text '
+                 'returns shader_compile_encoding_unsupported. Prebuild rejection/assembly failure returns effects_attempted=false, context_preserved=true; native build failures do not. Assembled SPIR-V artifact_kind is assembled-spirv-build-input, not device code. DXIL/DXBC captured disassembly text '
                  'is not accepted as editable source.<br>meta (dict)<br>projections (dict, 可选)',
   'param_names': ['source_text',
                   'source_path',
@@ -2877,7 +2916,7 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'namespace': 'shader',
   'input_schema': {'type': 'object',
                    'properties': {'source_text': {'description': 'source_text (str, 可选): inline '
-                                                                 'HLSL/GLSL/MSL source text',
+                                                                 'HLSL/GLSL/SPIR-V ASM source text',
                                                   'type': 'string'},
                                   'source_path': {'description': 'source_path (str, 可选): shader '
                                                                  'source file path; file directory '
@@ -2999,9 +3038,17 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                    'constraints.',
   'returns_raw': "ok (bool)<br>data (dict): {replacement_id, status='applied'|'noop', "
                  'resolved_event_id, messages, edit_plan, replacement{edit_plan, compile{encoding, '
-                 'disassembly_target, entry_point, compile_flags}, artifacts{source_before, '
-                 'source_after, patch_diff}}}<br>artifacts (list): when emit_patch_artifacts=true '
-                 'or output_dir is provided, includes before/after/diff text artifacts<br>error '
+                 'disassembly_target, entry_point, compile_flags, build_input}, artifacts{source_before, '
+                 'source_after, patch_diff, build_input}}}<br>build_input (dict): exact bytes passed '
+                 'to BuildTargetShader, linked to original_shader_id and returned target_shader_id; '
+                 'status=available includes sha256, byte_size, encoding, byte_kind, and spirv_header. '
+                 'A binary SPIR-V input exposes the observed header id_bound when valid; source text '
+                 'does not imply compiled output or a bound. device_binary_observed=false: this is '
+                 'submitted build input, not device ISA or native shader readback. No-op has unavailable '
+                 'build input; failed builds do not report an applied target.<br>artifacts (list): when '
+                 'emit_patch_artifacts=true or output_dir is provided, includes before/after/diff text '
+                 'and exact build-input bytes when a build occurred (.spv for SPIR-V modules, .txt '
+                 'for source text); no artifact request causes no extra persistence<br>error '
                  '(dict|null): DXIL/DXBC disassembly remains read-only '
                  '(captured_source_editable=false), but user-provided HLSL/GLSL full replacement '
                  'can compile then ReplaceResource when runtime_full_replace_supported=true. Build '
@@ -3196,16 +3243,9 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'path_inputs': []},
  {'name': 'rd.shader.get_constant_buffer_contents',
   'group': '3.8，Shader 探查、反射与替换 (Shader Inspection & Replacement)',
-  'description': '读取指定 stage/slot 的 Constant Buffer 并按反射结构解码变量值（推荐用于专家级核对）。',
-  'parameter_raw': 'session_id (string): session_id (str)<br>stage (string): stage (str)<br>slot '
-                   '(integer): slot (int)<br>array_index (integer, optional): array_index (int, '
-                   '可选, 默认 0): CB array/space 情况<br>max_bytes (integer, optional): max_bytes (int, '
-                   '可选, 默认 1048576)<br>flatten (boolean, optional): flatten (bool, 可选, 默认 true): '
-                   '是否将嵌套结构摊平成 path->value<br>event_id (integer, optional): Replay event; omitted '
-                   'uses the owning session current event.<br>shader_id (string, optional): See '
-                   'input_schema for constraints.',
-  'returns_raw': 'ok (bool)<br>data (dict): {cbuffer}<br>artifacts (list)<br>error '
-                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
+  'description': '读取指定 stage 的反射常量块索引 slot 并解码变量；slot 不是 API 固定绑定号。无数据仍报错；已知读取失败仅在原事件实际恢复并核验后附恢复证明，恢复失败保持不确定。 输入范围不足时不调用完整布局解码器，不用未覆盖数据的零填充冒充值。',
+  'parameter_raw': 'session_id (string): session_id (str)<br>stage (string): stage (str)<br>slot (integer): reflection constantBlocks index, not fixed binding number<br>array_index (integer, optional): array_index (int, 可选, 默认 0): CB array/space 情况<br>max_bytes (integer, optional): 每常量块输入字节上限，默认1048576；0表示该块不设上限，负数无效。预算或绑定范围不足完整反射块时不发布完整布局解码值。<br>flatten (boolean, optional): flatten (bool, 可选, 默认 true): 是否将嵌套结构摊平成 path->value<br>event_id (integer, optional): Replay event; omitted uses the owning session current event.<br>shader_id (string, optional): See input_schema for constraints.',
+  'returns_raw': 'ok (bool)<br>data (dict): {cbuffer}<br>artifacts (list)<br>error (dict|null)<br>meta (dict)<br>projections (dict, 可选) input_coverage说明required_bytes、binding_bytes、byte_budget、permitted_bytes及complete_range_permitted；这不是原始字节回执。decode_status明确decoded/unavailable/raw_fallback，decode_input_bytes是传给解码器的长度。raw_fallback.byte_size为实际返回字节；truncated表示块读取不全，preview_bytes/preview_truncated另外限定hex_preview交付范围。预算不足、未绑定输入或未知范围不能解释成已观测零。',
   'param_names': ['session_id',
                   'stage',
                   'slot',
@@ -3224,15 +3264,14 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                                   'stage': {'description': 'Use canonical shader stage: vs, hs, ds, gs, ps, cs, ms, or as. Pixel shader is ps.',
                                             'type': 'string',
                                             'enum': ['vs', 'hs', 'ds', 'gs', 'ps', 'cs', 'ms', 'as']},
-                                  'slot': {'description': 'slot (int)',
+                                  'slot': {'description': 'Index in shader reflection constantBlocks, not API fixed binding number.',
                                            'type': 'integer',
                                            'minimum': 0},
                                   'array_index': {'description': 'array_index (int, 可选, 默认 0): CB '
                                                                  'array/space 情况',
                                                   'type': 'integer',
                                                   'minimum': 0},
-                                  'max_bytes': {'description': 'max_bytes (int, 可选, 默认 1048576)',
-                                                'type': 'integer'},
+                                  'max_bytes': {'description': '每常量块输入字节上限，默认1048576；0表示该块不设上限，负数无效。预算或绑定范围不足完整反射块时不发布完整布局解码值。', 'type': 'integer', 'minimum': 0},
                                   'flatten': {'description': 'flatten (bool, 可选, 默认 true): '
                                                              '是否将嵌套结构摊平成 path->value',
                                               'type': 'boolean'},
@@ -3249,9 +3288,9 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'path_inputs': []},
  {'name': 'rd.shader.get_debug_state',
   'group': '3.9，Shader Debugger 与像素/顶点级调试 (Shader Debugging)',
-  'description': '获取当前 debugger 状态（当前 PC、活跃函数、变量、寄存器等）。',
+  'description': '获取原生 debugger 状态。PC 为动态 trace stepIndex；next_instruction 为原生下一指令，非 SPIR-V ID。summary 返回原生稀疏位置映射（未知为 null），其 1-based disassembly_line 仅属于 RenderDoc debug disassembly，不等于 raw SPIR-V ASM 行号。full 另含最多64项当前 mutable 变量（成员深度2）和64层原生调用栈及截断计数；不伪造寄存器、SSA 或未暴露变量。',
   'parameter_raw': 'session_id (string): session_id (str)<br>shader_debug_id (string): '
-                   'shader_debug_id (str)<br>detail_level (string, optional): detail_level (str, '
+                   'shader_debug_id (str), current owning replay only; stale/foreign handles fail before native effects<br>detail_level (string, optional): detail_level (str, '
                    "可选, 默认 'full'): 'summary' | 'full'<br>event_id (integer, optional): Replay "
                    'event; omitted uses the owning session current event.',
   'returns_raw': 'ok (bool)<br>data (dict): {state}<br>artifacts (list)<br>error '
@@ -3264,11 +3303,11 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'input_schema': {'type': 'object',
                    'properties': {'session_id': {'description': 'session_id (str)',
                                                  'type': 'string'},
-                                  'shader_debug_id': {'description': 'shader_debug_id (str)',
+                                  'shader_debug_id': {'description': 'shader_debug_id (str), current owning replay only; stale/foreign handles fail before native effects',
                                                       'type': 'string'},
                                   'detail_level': {'description': 'detail_level (str, 可选, 默认 '
                                                                   "'full'): 'summary' | 'full'",
-                                                   'type': 'string'},
+                                                   'type': 'string', 'enum': ['summary', 'full']},
                                   'event_id': {'type': 'integer',
                                                'minimum': 0,
                                                'description': 'Replay event; omitted uses the '
@@ -3292,7 +3331,9 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                    'constraints.',
   'returns_raw': 'ok (bool)<br>data (dict): {disassembly, target, source_encoding, '
                  'is_raw_spirv_asm, source_hash, shader_id, resolved_event_id, '
-                 'edit_plan}<br>`edit_plan` describes shader_format, input_kind, can_edit_text, '
+                 'edit_plan, available_targets, available_targets_status, available_targets_error}<br>'
+                 'available_targets 是原生 GetDisassemblyTargets(true) 的结果；status=complete（包括合法空列表）、unavailable（查询失败，error 保留原因）或 unsupported（原生接口缺失）。'
+                 '该列表不隐含 GPU ISA 支持，也不包含 Tool 独立提供的 raw ASM fallback；实际返回 target/is_raw_spirv_asm/edit_plan 分别说明当前视图及可编辑性。<br>`edit_plan` describes shader_format, input_kind, can_edit_text, '
                  'can_build, can_replace, requires_toolchain, build_input_kind, '
                  'allowed_edit_inputs, allowed_ops, recommended_next_tool, and blocked_reason. allowed_edit_inputs lists independent input forms (full source_text, diff_text, or structured ops); allowed_ops only names supported structured ops and does not restrict source_text or diff_text edits. '
                  "The default RenderDoc SPIR-V view is read-only; request target='SPIR-V ASM' "
@@ -3426,15 +3467,21 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                    '可选, 默认 true): 优先返回原始源码（若可得）<br>event_id (integer, optional): Replay event; '
                    'omitted uses the owning session current event.<br>stage (string, optional): '
                    'See input_schema for constraints.',
-  'returns_raw': 'ok (bool)<br>data (dict): {source, files, source_available, fallback_tool?, '
+  'returns_raw': 'ok (bool)<br>data (dict): {source, files[{filename, contents}], source_available, '
+                 'source_encoding, entry_point, compile_flags, source_debug_information, fallback_tool?, '
                  'fallback_args?, edit_plan, failure_stage?, failure_reason?, shader_id, stage, '
-                 'resolved_event_id}; when original debug source is unavailable, returns ok=true '
+                 'resolved_event_id}; files preserve native order and captured text without reading host paths. '
+                 'source is the first (entry) file contents; source-level debugging availability is independent. '
+                 'Unknown source encoding, source entry and compile flags remain null. '
+                 'When entry source contents are unavailable, returns ok=true '
                  'with source_available=false and a format-aware fallback. SPIR-V may recommend '
                  "`rd.shader.get_disassembly` with target='SPIR-V ASM' and "
                  "source_encoding='spirvasm'; the current edit_plan describes absent source, "
                  "so inspect the fallback result before editing. DXIL/DXBC recommends read-only disassembly and/or "
                  '`rd.shader.extract_binary` instead of treating disassembly text as replacement '
-                 'source.<br>artifacts (list)<br>error (dict|null): invalid_shader_stage is rejected before any replay effect, with effects_attempted=false and context_preserved=true. An unbound shader at the requested event returns shader_binding_lookup_failed; the original replay event is restored and reported as replay_state_restored/restored_event_id only after native restoration succeeds. A failed restoration reports shader_inspection_recovery_failed and requires controlled recovery.<br>meta (dict)<br>projections '
+                 'source. Missing native metadata reports shader_source_metadata_unavailable; native read failure '
+                 'reports shader_source_lookup_failed instead of successful source absence. Neither path reads '
+                 'files from the host filesystem.<br>artifacts (list)<br>error (dict|null): invalid_shader_stage is rejected before any replay effect, with effects_attempted=false and context_preserved=true. An unbound shader at the requested event returns shader_binding_lookup_failed; the original replay event is restored and reported as replay_state_restored/restored_event_id only after native restoration succeeds. A failed restoration reports shader_inspection_recovery_failed and requires controlled recovery.<br>meta (dict)<br>projections '
                  '(dict, 可选)',
   'param_names': ['session_id', 'shader_id', 'prefer_original', 'event_id', 'stage'],
   'prerequisites': [{'requires': 'session_id',
@@ -3800,7 +3847,14 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                  'item includes pre_mod, shader_out and post_mod with native validity, '
                  'format-aware color_rgba, depth and stencil. Non-finite color channels '
                  'are null and listed in non_finite_channels; missing or invalid values '
-                 'are explicit. pre_mod is unavailable for non-first fragments.<br>'
+                 'are explicit. pre_mod is unavailable for non-first fragments. '
+                 'shader_out maps RenderDoc PixelModification.shaderOut: native fragment '
+                 'shader output, not a shader-input trace. Its depth is copied from '
+                 'ModificationValue.depth. Native validity does not establish bit-exact '
+                 'equality to input FragCoord.z, original invocation correspondence, or '
+                 'a numerical error bound; these require separate backend-specific '
+                 'qualification. Depth-test flag reconstruction or quantization must not '
+                 'be treated as an error bound on shader_out.depth.<br>'
                  'artifacts (list)<br>error (dict|null)<br>meta (dict)<br>projections (dict, 可选)',
   'param_names': ['session_id',
                   'texture_id',
@@ -3914,7 +3968,10 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                    '(integer, optional): stride (int, 可选, 默认 1): 采样步长，大于 1 可降低处理成本<br>as_type '
                    "(string, optional): as_type (str, 可选, 默认 'float')<br>event_id (integer, "
                    'optional): Replay event; omitted uses the owning session current event.',
-  'returns_raw': 'ok (bool)<br>data (dict): {values}<br>artifacts (list)<br>error '
+  'returns_raw': 'ok (bool)<br>data (dict): {values, values_status, inline_value_limit, values_path, stats, resolved_event_id, texture_id, target_metadata}<br>'
+                 'values 为 stride/as_type 后完整嵌套数值数组，最多256标量；values_status=complete；超限为values=null/omitted_limit，不截断或伪造空列表。'
+                 '完整同数组仍导出NPZ到values_path。stats反映同一采样数组，含shape/dtype/stride、总体与逐rgba通道有限值min/max/mean和nan/inf_count；'
+                 '通道指解码数组分量，不证明纹理存在物理alpha。非有限值使用NaN/Infinity/-Infinity字符串，不转成0。<br>artifacts (list)<br>error '
                  '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
   'param_names': ['session_id',
                   'texture_id',
@@ -4051,14 +4108,14 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'path_inputs': []},
  {'name': 'rd.util.diff_images',
   'group': '3.16，通用辅助工具 (Utilities, Optional)',
-  'description': '对比两张图片（支持 PNG、JPEG、EXR 格式），输出差异图及相关指标，如 PSNR、SSIM 和最大绝对误差。',
+  'description': 'Compare Pillow-decodable images (including PNG/JPEG) as normalized RGBA. Honor requested metrics; defaults are mse/max_abs/psnr. Optional SSIM averages valid 11x11 Gaussian windows (sigma 1.5, population covariance) over RGBA, requiring both dimensions >=11. Identical PSNR is null with infinite status. Diff images are opaque RGB; alpha differences are shown as gray. Optional region {x,y,width,height} compares the same in-bounds pixel rectangle in both images and exports that rectangle; no clamping, alignment or resize. Results report source_size and effective region. Metrics do not establish repair acceptance.',
   'parameter_raw': 'image_a_path (string): image_a_path (str): 第一张图片的文件路径<br>image_b_path '
                    '(string): image_b_path (str): 第二张图片的文件路径<br>metrics (array, optional): metrics '
                    "(list[str], 可选): 需要计算的指标列表，例如 ['psnr', 'ssim', 'max_abs', "
-                   "'mse']<br>output_path (string, optional): output_path (str, 可选): 差异图的输出路径",
+                   "'mse']; unsupported metrics fail before file reads<br>output_path (string, optional): output_path (str, 可选): 差异图的输出路径",
   'returns_raw': 'ok (bool)<br>data (dict): {metrics, diff_image_path}<br>artifacts '
                  '(list)<br>error (dict|null)<br>meta (dict)<br>projections (dict, 可选)',
-  'param_names': ['image_a_path', 'image_b_path', 'metrics', 'output_path'],
+  'param_names': ['image_a_path', 'image_b_path', 'metrics', 'output_path', 'region'],
   'prerequisites': [],
   'namespace': 'util',
   'input_schema': {'type': 'object',
@@ -4070,7 +4127,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                                                              "需要计算的指标列表，例如 ['psnr', 'ssim', "
                                                              "'max_abs', 'mse']",
                                               'type': 'array',
-                                              'items': {'type': 'string'}},
+                                              'items': {'type': 'string', 'enum': ['mse', 'max_abs', 'psnr', 'ssim']}, 'minItems': 1},
+                                  'region': {'type': 'object', 'properties': {'x': {'type': 'integer', 'minimum': 0}, 'y': {'type': 'integer', 'minimum': 0}, 'width': {'type': 'integer', 'minimum': 1}, 'height': {'type': 'integer', 'minimum': 1}}, 'required': ['x', 'y', 'width', 'height'], 'additionalProperties': False, 'description': 'Same pixel rectangle in both images; out-of-bounds is an error. Output diff has this region size.'},
                                   'output_path': {'description': 'output_path (str, 可选): 差异图的输出路径',
                                                   'type': 'string'}},
                    'required': ['image_a_path', 'image_b_path'],

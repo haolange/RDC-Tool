@@ -624,7 +624,8 @@ class PipelineService:
         if selected - {"shaders", "output_targets", "bindings", "vertex_input"}:
             api_state = await asyncio.to_thread(_get_api_specific_state, controller, api_props.pipelineType)
 
-        shader_resources = {str(r.resourceId): r for r in controller.GetResources()} if "shaders" in selected else {}
+        resources = await asyncio.to_thread(controller.GetResources) if "shaders" in selected else []
+        shader_resources = {str(r.resourceId): r for r in resources}
         shaders: List[ShaderInfo] = []
         for rd_stage in (_rd_shader_stages() if "shaders" in selected else []):
             try:

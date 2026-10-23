@@ -342,6 +342,54 @@ def test_search_actions_filters_flags_before_result_limit(monkeypatch: pytest.Mo
     assert invalid["code"] == "validation_error"
 
 
+@pytest.mark.parametrize("query", [
+    {"flags_include": ["is_draw"]}, {"flags_exclude": ["NotAFlag"]},
+    {"flags_include": "Drawcall"}, {"flags_exclude": [None]},
+    {"flags_include": [""]},
+])
+def test_search_actions_rejects_invalid_flags_before_controller(monkeypatch: pytest.MonkeyPatch, query: dict) -> None:
+    controller = _FakeController(roots=[])
+    _install_common_env(monkeypatch, controller)
+    _seed_capture()
+    _seed_session(202)
+
+    async def unexpected_controller(session_id: str) -> None:
+        raise AssertionError("validation must precede controller acquisition")
+
+    monkeypatch.setattr(server.server_runtime, "_get_controller", unexpected_controller)
+    rejected = asyncio.run(server.dispatch_operation("rd.event.search_actions", {
+        "session_id": "sess_demo", "query": query,
+    }, transport="test"))
+    assert rejected["ok"] is False
+    assert rejected["error"]["code"] == "validation_error"
+    assert rejected["error"]["category"] == "validation"
+    assert rejected["error"]["details"] == {
+        "session_id": "sess_demo", "failure_stage": "validate_query",
+        "effects_attempted": False, "context_preserved": True,
+    }
+    assert controller.set_frame_calls == []
+    assert server._runtime.replays["sess_demo"].active_event_id == 202
+    assert server._context_snapshot()["runtime"]["active_event_id"] == 202
+
+
+def test_search_actions_native_failure_does_not_claim_pre_effect_validation(monkeypatch: pytest.MonkeyPatch) -> None:
+    controller = _FakeController(roots=[])
+    _install_common_env(monkeypatch, controller)
+    _seed_capture()
+    _seed_session(202)
+
+    def failed_roots() -> list:
+        raise RuntimeError("native action read failed")
+
+    monkeypatch.setattr(controller, "GetRootActions", failed_roots)
+    rejected = asyncio.run(server.dispatch_operation("rd.event.search_actions", {
+        "session_id": "sess_demo", "query": {"flags_include": ["Drawcall"]},
+    }, transport="test"))
+    assert rejected["ok"] is False
+    assert not rejected["error"].get("details", {}).get("context_preserved")
+    assert "native action read failed" in rejected["error"]["message"]
+
+
 def test_get_action_tree_paginates_and_bounds_nodes(monkeypatch: pytest.MonkeyPatch) -> None:
     controller = _FakeController(
         roots=[
@@ -570,6 +618,44 @@ def test_find_state_change_point_reports_match_and_budget_or_range_exhaustion(mo
     assert all(sections == ("shaders",) for _, sections in pipeline_service.snapshot_calls)
     assert server._runtime.replays["sess_demo"].active_event_id == 303
 
+
+@pytest.mark.parametrize(
+    ("sections", "expected_status"),
+    [(["bindings"], "verified"), (["shaders"], "degraded"), (["bindings", "shaders"], "degraded")],
+)
+def test_pipeline_truth_only_qualifies_requested_sections(
+    monkeypatch: pytest.MonkeyPatch, sections: list[str], expected_status: str,
+) -> None:
+    controller = _FakeController(roots=[_FakeAction(101, flags=_FakeActionFlags.Drawcall)])
+    pipeline_service = _FakePipelineService()
+    _install_common_env(monkeypatch, controller)
+    monkeypatch.setattr(server.server_runtime, "_pipeline_service", pipeline_service)
+    monkeypatch.setattr(server.server_runtime, "_session_manager", SimpleNamespace())
+    _seed_capture()
+    _seed_session(101)
+    monkeypatch.setattr(server.server_runtime, "_session_backend_record", lambda *args, **kwargs: ("remote", {}))
+    original_dump = _FakeSnapshot.model_dump
+
+    def section_snapshot(self, mode="json"):  # type: ignore[no-untyped-def]
+        snapshot = original_dump(self, mode)
+        # Uncollected fields still have model defaults; a requested shader read
+        # that actually returned empty must retain its degraded qualification.
+        snapshot.update(shaders=[], render_targets=[])
+        return snapshot
+
+    monkeypatch.setattr(_FakeSnapshot, "model_dump", section_snapshot)
+    result = json.loads(asyncio.run(server._dispatch_pipeline("get_state", {
+        "session_id": "sess_demo", "event_id": 101, "sections": sections,
+    })))
+    state = result["pipeline_state"]
+    assert result["success"] is True
+    assert state["summary_status"] == expected_status
+    assert state["binding_truth_level"] == f"binding_{expected_status}"
+    assert ("binding_unavailable" in state["summary_degraded_reasons"]) == ("shaders" in sections)
+    assert "event_bound_pipeline_state_partial" not in state["summary_degraded_reasons"]
+    assert "render_targets" not in state
+    assert ("shaders" in state) == ("shaders" in sections)
+    assert pipeline_service.snapshot_calls == [(101, tuple(sections))]
 
 def test_pipeline_summary_and_outputs_include_selected_visual_target(monkeypatch: pytest.MonkeyPatch) -> None:
     controller = _FakeController(
@@ -908,7 +994,9 @@ def test_capture_close_file_succeeds_after_close_replay() -> None:
     assert context["runtime"]["capture_file_id"] == ""
 
 
-def test_export_shader_bundle_forwards_requested_event(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+@pytest.mark.parametrize("disassembly_target", [None, "SPIR-V ASM"])
+def test_export_shader_bundle_forwards_requested_event(monkeypatch: pytest.MonkeyPatch, tmp_path, disassembly_target) -> None:
+    disassembly_text = "; UTF-8 café 𝄞\nOpEntryPoint main_202\n"
     seen_calls: list[dict[str, Any]] = []
     shader_calls: list[dict[str, Any]] = []
 
@@ -942,7 +1030,8 @@ def test_export_shader_bundle_forwards_requested_event(monkeypatch: pytest.Monke
         if action == "get_reflection":
             return json.dumps({"success": True, "reflection": {"entry_points": ["main_202"]}})
         if action == "get_disassembly":
-            return json.dumps({"success": True, "disassembly": "OpEntryPoint main_202", "target": "SPIR-V ASM", "source_encoding": "spirvasm"})
+            assert args["target"] == (disassembly_target or "auto")
+            return json.dumps({"success": True, "disassembly": disassembly_text, "target": "SPIR-V ASM", "source_encoding": "spirvasm", "is_raw_spirv_asm": True, "source_hash": hashlib.sha256(disassembly_text.encode("utf-8")).hexdigest(), "edit_plan": {"can_build": True, "can_edit_text": True}})
         raise AssertionError(action)
 
     monkeypatch.setattr(server.server_runtime, "_ensure_event", _fake_ensure_event)
@@ -954,7 +1043,8 @@ def test_export_shader_bundle_forwards_requested_event(monkeypatch: pytest.Monke
         asyncio.run(
             server._dispatch_export(
                 "shader_bundle",
-                {"session_id": "sess_demo", "event_id": 202, "output_dir": str(output_dir)},
+                {"session_id": "sess_demo", "event_id": 202, "output_dir": str(output_dir),
+                 **({"disassembly_target": disassembly_target} if disassembly_target else {})},
             )
         )
     )
@@ -975,11 +1065,21 @@ def test_export_shader_bundle_forwards_requested_event(monkeypatch: pytest.Monke
     assert set(first_exports) == {"binary", "reflection", "disassembly"}
     assert all(value["available"] for value in first_exports.values())
     assert Path(first_exports["binary"]["path"]).read_bytes() == b"shader-binary"
-    assert Path(first_exports["disassembly"]["path"]).read_text(encoding="utf-8") == "OpEntryPoint main_202"
-    assert first_exports["disassembly"]["sha256"] == hashlib.sha256(b"OpEntryPoint main_202").hexdigest()
+    assert Path(first_exports["disassembly"]["path"]).read_text(encoding="utf-8") == disassembly_text
+    assert first_exports["disassembly"]["sha256"] == hashlib.sha256(disassembly_text.encode("utf-8")).hexdigest()
 
 
-def test_shader_bundle_reports_unavailable_requested_exports(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    assert first_exports["disassembly"]["target"] == "SPIR-V ASM"
+    assert first_exports["disassembly"]["is_raw_spirv_asm"] is True
+    assert first_exports["disassembly"]["source_hash"] == first_exports["disassembly"]["sha256"]
+    assert first_exports["disassembly"]["edit_plan"]["can_build"] is True
+
+
+    assert Path(first_exports["disassembly"]["path"]).read_bytes() == disassembly_text.encode("utf-8")
+
+
+@pytest.mark.parametrize("disassembly_target", [None, "SPIR-V ASM"])
+def test_shader_bundle_reports_unavailable_requested_exports(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, disassembly_target) -> None:
     async def _fake_ensure_event(session_id: str, event_id: int | None) -> int:
         return int(event_id or 0)
 
@@ -990,6 +1090,7 @@ def test_shader_bundle_reports_unavailable_requested_exports(monkeypatch: pytest
 
     async def _fake_dispatch_shader(action: str, args: dict[str, object]) -> str:
         assert action == "get_disassembly"
+        assert args["target"] == (disassembly_target or "auto")
         return json.dumps({"success": False, "code": "shader_disassembly_unavailable", "error_message": "No supported target"})
 
     monkeypatch.setattr(server.server_runtime, "_ensure_event", _fake_ensure_event)
@@ -1000,6 +1101,7 @@ def test_shader_bundle_reports_unavailable_requested_exports(monkeypatch: pytest
     payload = json.loads(asyncio.run(server._dispatch_export("shader_bundle", {
         "session_id": "sess_demo", "event_id": 202, "output_dir": str(output_dir),
         "include_binaries": False, "include_reflection": False, "include_disassembly": True,
+        **({"disassembly_target": disassembly_target} if disassembly_target else {}),
     })))
 
     assert payload["success"] is True
@@ -1008,6 +1110,36 @@ def test_shader_bundle_reports_unavailable_requested_exports(monkeypatch: pytest
     bundle = json.loads((output_dir / "shader_bundle.json").read_text(encoding="utf-8"))
     assert bundle["shaders"][0]["exports"]["disassembly"]["available"] is False
     assert list(output_dir.iterdir()) == [output_dir / "shader_bundle.json"]
+
+
+def test_shader_bundle_does_not_substitute_a_different_explicit_target(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    async def ensure(session_id, event_id):
+        return event_id
+
+    async def pipeline(action, args):
+        return json.dumps({"success": True, "shader": {"stage": "PS", "shader_id": "shader"} if args["stage"] == "ps" else {}, "resolved_event_id": 202})
+
+    async def shader(action, args):
+        assert action == "get_disassembly"
+        assert args["target"] == "SPIR-V ASM"
+        return json.dumps({"success": True, "target": "SPIR-V (RenderDoc)", "disassembly": "presentation only"})
+
+    monkeypatch.setattr(server.server_runtime, "_ensure_event", ensure)
+    monkeypatch.setattr(server.server_runtime, "_dispatch_pipeline", pipeline)
+    monkeypatch.setattr(server.server_runtime, "_dispatch_shader", shader)
+    output = tmp_path / "explicit"
+    result = json.loads(asyncio.run(server._dispatch_export("shader_bundle", {
+        "session_id": "sess", "event_id": 202, "output_dir": str(output),
+        "include_binaries": False, "include_reflection": False, "disassembly_target": "SPIR-V ASM",
+    })))
+    assert result["success"] is True
+    assert result["complete"] is False
+    assert result["failures"][0]["code"] == "shader_disassembly_target_mismatch"
+    assert result["failures"][0]["requested_target"] == "SPIR-V ASM"
+    assert result["failures"][0]["actual_target"] == "SPIR-V (RenderDoc)"
+    bundle = json.loads((output / "shader_bundle.json").read_text(encoding="utf-8"))
+    assert bundle["shaders"][0]["exports"]["disassembly"]["available"] is False
+    assert not (output / "ps-disassembly.txt").exists()
 
 
 def test_export_screenshot_forwards_requested_event(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:

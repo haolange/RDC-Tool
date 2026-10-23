@@ -140,7 +140,7 @@ def build_operation_registry() -> OperationRegistry:
         if domain_handler is None:
             continue
 
-        async def _handler(args: Dict[str, Any], env: Dict[str, Any], *, _tool_name: str = tool_name, _action: str = action, _domain_handler=domain_handler) -> Any:
+        async def _handler(args: Dict[str, Any], env: Dict[str, Any], *, _tool_name: str = tool_name, _action: str = action, _effects: tuple = tuple(tool.get("effects") or ()), _domain_handler=domain_handler) -> Any:
             try:
                 validate_operation_arguments(_tool_name, args)
             except ValueError as exc:
@@ -148,6 +148,9 @@ def build_operation_registry() -> OperationRegistry:
             preflight = _enforce_prerequisites(_tool_name, args)
             if preflight is not None:
                 return preflight
+            if "lifecycle" not in _effects:
+                async with server_runtime._replay_operation_health(_tool_name):
+                    return await _domain_handler(_action, dict(args or {}), env)
             return await _domain_handler(_action, dict(args or {}), env)
 
         registry.register(tool_name, _handler)

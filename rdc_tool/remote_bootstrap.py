@@ -121,14 +121,6 @@ class AndroidBootstrapOptions:
     push_config: bool = True
 
 
-_INSTALL_OVERRIDE_HINTS = {
-    "INSTALL_FAILED_VERSION_DOWNGRADE": "version_downgrade",
-    "INSTALL_FAILED_UPDATE_INCOMPATIBLE": "signature_mismatch",
-    "INSTALL_FAILED_SHARED_USER_INCOMPATIBLE": "signature_mismatch",
-    "INSTALL_PARSE_FAILED_INCONSISTENT_CERTIFICATES": "signature_mismatch",
-    "INSTALL_FAILED_CONFLICTING_PROVIDER": "mismatched_existing_apk",
-    "INSTALL_FAILED_UID_CHANGED": "mismatched_existing_apk",
-}
 
 
 def _candidate_adb_paths() -> list[str]:
@@ -203,86 +195,42 @@ def _run_subprocess(
     return proc
 
 
-def _extract_install_reason(stderr: str) -> str:
-    text = str(stderr or "").strip()
-    for marker, reason in _INSTALL_OVERRIDE_HINTS.items():
-        if marker in text:
-            return reason
-    return ""
-
-
-def _should_force_replace_install(stderr: str) -> bool:
-    return bool(_extract_install_reason(stderr))
-
-
-def _run_install_command(adb_path: str, device_serial: str, apk_path: str, *, replace_existing: bool) -> subprocess.CompletedProcess[str]:
-    install_args = ["install"]
-    if replace_existing:
-        install_args.append("-r")
-    install_args.extend(["-g", "--force-queryable", str(apk_path)])
-    return _run_process(
-        _adb_base_cmd(adb_path, device_serial) + install_args,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=180.0,
-        check=False,
-    )
-
-
 def _ensure_android_helper_installed(adb_path: str, device_serial: str, package_name: str, apk_path: str, result: AndroidBootstrapResult) -> None:
-    proc = _run_install_command(adb_path, device_serial, apk_path, replace_existing=True)
-    if proc.returncode == 0:
-        result.installed_apk = True
-        result.install_mode = "upgrade"
-        result.install_reason = "fresh_install" if "Success" in str(proc.stdout or "") else "mismatched_existing_apk"
-        result.cleanup_actions.append("apk-installed")
+    probe = _adb_shell(
+        adb_path, device_serial, "pm", "list", "packages", package_name,
+        timeout_s=15.0, error_code="android_package_probe_failed",
+        error_message="Failed to determine whether the Android helper is installed",
+    )
+    packages = [line.strip() for line in probe.stdout.splitlines() if line.strip()]
+    if getattr(probe, "stderr", "").strip() or any(re.fullmatch(r"package:[A-Za-z0-9_.]+", line) is None for line in packages):
+        raise AndroidRemoteBootstrapError(
+            "android_package_probe_failed", "Android package query returned an unknown state",
+            details={"package_name": package_name},
+        )
+    if f"package:{package_name}" in packages:
+        result.install_mode = "existing"
+        result.install_reason = "installed_helper_preserved"
         return
 
-    stderr = (proc.stderr or proc.stdout or "").strip()
-    install_reason = _extract_install_reason(stderr)
-    if not _should_force_replace_install(stderr):
+    if not Path(apk_path).is_file():
+        raise AndroidRemoteBootstrapError(
+            "android_apk_missing", f"Missing Android RenderDocCmd APK: {apk_path}",
+            details={"apk_path": str(apk_path)},
+        )
+    command = _adb_base_cmd(adb_path, device_serial) + ["install", "-g", "--force-queryable", str(apk_path)]
+    proc = _run_process(command, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                        timeout=180.0, check=False)
+    if proc.returncode != 0:
+        stderr = (proc.stderr or proc.stdout or "").strip()
         raise AndroidRemoteBootstrapError(
             "android_apk_install_failed",
             f"Failed to install RenderDocCmd APK {Path(apk_path).name}: {stderr or 'command failed'}",
-            details={
-                "command": _adb_base_cmd(adb_path, device_serial) + ["install", "-r", "-g", "--force-queryable", str(apk_path)],
-                "returncode": proc.returncode,
-            },
+            details={"command": command, "returncode": proc.returncode},
         )
-
-    uninstall_proc = _run_process(
-        _adb_base_cmd(adb_path, device_serial) + ["uninstall", package_name],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=60.0,
-        check=False,
-    )
-    if uninstall_proc.returncode != 0:
-        uninstall_stderr = (uninstall_proc.stderr or uninstall_proc.stdout or "").strip()
-        raise AndroidRemoteBootstrapError(
-            "android_apk_force_replace_uninstall_failed",
-            f"Failed to uninstall mismatched RenderDocCmd package {package_name}: {uninstall_stderr or 'command failed'}",
-            details={"package_name": package_name, "reason": install_reason or "mismatched_existing_apk"},
-        )
-
-    result.uninstalled_existing = True
-    reinstall_proc = _run_install_command(adb_path, device_serial, apk_path, replace_existing=False)
-    if reinstall_proc.returncode != 0:
-        reinstall_stderr = (reinstall_proc.stderr or reinstall_proc.stdout or "").strip()
-        raise AndroidRemoteBootstrapError(
-            "android_apk_force_replace_reinstall_failed",
-            f"Failed to reinstall RenderDocCmd APK {Path(apk_path).name}: {reinstall_stderr or 'command failed'}",
-            details={"package_name": package_name, "reason": install_reason or "mismatched_existing_apk"},
-        )
-
     result.installed_apk = True
-    result.install_mode = "force_replace"
-    result.install_reason = install_reason or "mismatched_existing_apk"
-    result.cleanup_actions.append("apk-force-replaced")
+    result.install_mode = "install"
+    result.install_reason = "missing_helper"
+    result.cleanup_actions.append("apk-installed")
 
 
 def _adb_base_cmd(adb_path: str, device_serial: str = "") -> list[str]:
@@ -363,12 +311,6 @@ def select_android_package(arch: str) -> tuple[str, Path]:
             details={"arch": arch},
         )
     apk_path = android_binaries_root() / key / f"{package}.apk"
-    if not apk_path.is_file():
-        raise AndroidRemoteBootstrapError(
-            "android_apk_missing",
-            f"Missing Android RenderDocCmd APK: {apk_path}",
-            details={"apk_path": str(apk_path)},
-        )
     return package, apk_path
 
 
@@ -636,7 +578,7 @@ def _prepare_android_service_steps(result: AndroidBootstrapResult, opts: Android
         if opts.install_apk:
             _ensure_android_helper_installed(adb_path, device.serial, package_name, str(apk_path), result)
 
-        if opts.push_config:
+        if opts.push_config and result.installed_apk:
             _ensure_renderdoc_conf(result)
 
 

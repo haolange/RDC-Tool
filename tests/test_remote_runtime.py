@@ -285,38 +285,49 @@ def test_recovery_ownership_check_failure_releases_new_connection(monkeypatch) -
     assert cleaned == ['tcp:62000']
 
 
-def test_revert_refresh_does_not_reconnect_after_failed_owned_cleanup(monkeypatch) -> None:
+def test_revert_keeps_remote_and_never_runs_owned_cleanup(monkeypatch) -> None:
     runtime = server.server_runtime
     session_id = 'sess_recovery'
     handle = SimpleNamespace(remote_id='remote_original', host='127.0.0.1', port=58884)
-    state = {'sessions': {session_id: {
-        'backend_type': 'remote',
-        'remote': {'origin_remote_id': 'remote_original'},
-    }}}
+    live_replay = object()
+    state = {'sessions': {session_id: {'backend_type': 'remote',
+        'remote': {'origin_remote_id': 'remote_original'}}}}
     monkeypatch.setattr(runtime, '_runtime_context_id', lambda: 'test-context')
     monkeypatch.setattr(runtime, '_context_state', lambda context_id: state)
     monkeypatch.setattr(runtime._runtime, 'remotes', {'remote_original': handle})
-    monkeypatch.setattr(runtime._runtime, 'replays', {session_id: object()})
-    monkeypatch.setattr(runtime, '_release_remote_session_lease', lambda *args, **kwargs: handle)
-    monkeypatch.setattr(runtime, '_clear_context_remote_live', lambda *args, **kwargs: None)
-    monkeypatch.setattr(runtime, '_disconnect_remote_handle_sync', lambda owned: ['forward ownership changed'])
+    monkeypatch.setattr(runtime._runtime, 'replays', {session_id: live_replay})
+    monkeypatch.setattr(runtime._runtime, 'shader_replacements', {session_id: [{'replacement_id': 'patch-a'}]})
+    lifecycle = []
+    monkeypatch.setattr(runtime, '_release_remote_session_lease', lambda *args, **kwargs: lifecycle.append('release') or handle)
+    monkeypatch.setattr(runtime, '_clear_context_remote_live', lambda *args, **kwargs: lifecycle.append('clear'))
+    monkeypatch.setattr(runtime, '_disconnect_remote_handle_sync', lambda owned: lifecycle.append('disconnect') or ['forward ownership changed'])
     async def offload(fn, *args):
         return fn(*args)
     async def close_session(sid):
-        assert sid == session_id
-    monkeypatch.setattr(runtime, '_session_manager', SimpleNamespace(close_session=close_session))
-    monkeypatch.setattr(runtime, '_offload', offload)
-    recovered = []
+        lifecycle.append('close')
     async def recover(*args):
-        recovered.append(args)
+        lifecycle.append('recover')
+    async def controller(sid):
+        return SimpleNamespace(GetPipelineState=lambda: object())
+    async def event(sid, eid):
+        return int(eid or 314)
+    class Engine:
+        async def revert_patch(self, *args):
+            return True
+    monkeypatch.setattr(runtime, '_session_manager', SimpleNamespace(close_session=close_session))
+    monkeypatch.setattr(runtime, '_patch_engine', Engine())
+    monkeypatch.setattr(runtime, '_offload', offload)
+    monkeypatch.setattr(runtime, '_get_controller', controller)
+    monkeypatch.setattr(runtime, '_ensure_event', event)
     monkeypatch.setattr(runtime, '_recover_single_session_from_state', recover)
-
-    with pytest.raises(runtime.RuntimeToolError, match='Remote cleanup failed'):
-        asyncio.run(runtime._maybe_refresh_remote_session_after_revert(
-            session_id, remaining_replacements=[],
-        ))
-    assert recovered == []
+    monkeypatch.setattr(runtime, '_sync_context_session_replacements', lambda *args: None)
+    payload = json.loads(asyncio.run(runtime._dispatch_shader('revert_replacement', {
+        'session_id': session_id, 'replacement_id': 'patch-a'})))
+    assert payload['success'] is True
+    assert payload['reverted'] is True
+    assert lifecycle == []
     assert runtime._runtime.remotes['remote_original'] is handle
+    assert runtime._runtime.replays[session_id] is live_replay
 
 
 class _OkStatus:
@@ -1255,3 +1266,96 @@ def test_android_failed_transfer_preserves_cleanup_failure(monkeypatch, tmp_path
         remote_device_serial="device", remote_bootstrap={"adb_path": "adb", "package_name": "org.renderdoc.renderdoccmd.arm64"})
     with pytest.raises(RuntimeError, match="transfer disconnected; owned capture cleanup failed: cleanup denied"):
         SessionManager()._copy_android_capture_with_adb(state, str(capture))
+
+
+@pytest.mark.parametrize("detail", ["summary", "full"])
+def test_capability_discovery_resumes_only_full_selected_session(monkeypatch, detail) -> None:
+    runtime = server.server_runtime
+    state = {"backend": "remote", "current_session_id": "sess_deferred", "sessions": {
+        "sess_deferred": {"backend_type": "remote", "active_event_id": 7},
+        "sess_other": {"backend_type": "remote", "active_event_id": 9},
+    }}
+    monkeypatch.setattr(runtime, "_context_state", lambda _ctx: state)
+    monkeypatch.setattr(runtime, "_runtime_context_id", lambda: "discovery")
+    monkeypatch.setattr(runtime._runtime, "replays", {})
+    monkeypatch.setattr(runtime._runtime, "remotes", {})
+    monkeypatch.setattr(runtime._runtime, "enable_remote", True)
+    controller = object()
+    calls = []
+
+    async def get_controller(session_id):
+        calls.append(("resume", session_id))
+        runtime._runtime.replays[session_id] = object()
+        runtime._runtime.remotes["remote_live"] = SimpleNamespace(connected=True)
+        return controller
+
+    def matrix(session_id, **kwargs):
+        calls.append(("matrix", session_id, kwargs["controller"], kwargs.get("probe_live", True)))
+        return {"replay": {"status": "verified" if kwargs.get("probe_live", True) else "not_currently_probed"}}
+
+    async def offload(fn, *args, **kwargs):
+        calls.append(("offload",))
+        return fn(*args, **kwargs)
+
+    monkeypatch.setattr(runtime, "_get_controller", get_controller)
+    monkeypatch.setattr(runtime, "_session_remote_capability_matrix", matrix)
+    monkeypatch.setattr(runtime, "_offload", offload)
+    caps = asyncio.run(runtime._core_capabilities(detail=detail))
+    if detail == "full":
+        assert calls == [("resume", "sess_deferred"), ("offload",), ("matrix", "sess_deferred", controller, True)]
+        assert caps["sessions"] == 1
+        assert caps["remote"]["available"] is True
+        assert caps["current_session_probe"]["status"] == "verified"
+    else:
+        assert calls == [("matrix", "sess_deferred", None, False)]
+        assert caps["current_session_probe"]["status"] == "not_currently_probed"
+
+
+def test_failed_live_capability_probe_preserves_unknown_not_unsupported(monkeypatch) -> None:
+    runtime = server.server_runtime
+    state = {"backend": "remote", "current_session_id": "sess_deferred", "sessions": {
+        "sess_deferred": {"backend_type": "remote", "active_event_id": 7},
+    }}
+    monkeypatch.setattr(runtime, "_context_state", lambda _ctx: state)
+    monkeypatch.setattr(runtime, "_runtime_context_id", lambda: "discovery")
+    monkeypatch.setattr(runtime._runtime, "replays", {})
+    monkeypatch.setattr(runtime._runtime, "remotes", {})
+
+    async def fail(session_id):
+        raise RuntimeError("probe transport failed")
+
+    async def offload(fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    monkeypatch.setattr(runtime, "_get_controller", fail)
+    monkeypatch.setattr(runtime, "_offload", offload)
+    caps = asyncio.run(runtime._core_capabilities(detail="full"))
+    assert caps["current_session_probe"]["status"] == "unavailable"
+    assert "probe transport failed" in caps["current_session_probe"]["reason"]
+    matrix = caps["remote_capability_matrix"]
+    for name in ("shader_debug", "shader_replace", "shader_compile", "fix_verification"):
+        assert matrix[name]["status"] == "not_currently_probed"
+    assert matrix["endpoint"]["status"] != "verified"
+
+
+def test_capability_encoding_probe_error_is_not_empty_unsupported(monkeypatch) -> None:
+    runtime = server.server_runtime
+    state = {"backend": "remote", "sessions": {"sess_live": {"backend_type": "remote", "active_event_id": 7}}}
+    monkeypatch.setattr(runtime, "_context_state", lambda _ctx: state)
+    monkeypatch.setattr(runtime._runtime, "replays", {"sess_live": object()})
+    monkeypatch.setattr(runtime, "_stage_candidates", lambda: ["ps"])
+    monkeypatch.setattr(runtime, "_rd_stage", lambda stage: stage)
+    monkeypatch.setattr(runtime, "_is_null_resource_id", lambda shader: shader is None)
+    monkeypatch.setattr(runtime, "_session_replace_capability", lambda *_: (True, "Available."))
+
+    class Controller:
+        def GetPipelineState(self):
+            return SimpleNamespace(GetShader=lambda _: object())
+        def GetTargetShaderEncodings(self):
+            raise RuntimeError("encoding query failed")
+        def DebugPixel(self):
+            pass
+
+    matrix = runtime._session_remote_capability_matrix("sess_live", controller=Controller())
+    assert matrix["shader_compile"]["status"] == "unstable"
+    assert "encoding query failed" in matrix["shader_compile"]["reason"]

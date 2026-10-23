@@ -316,25 +316,6 @@ class ShaderExportBundle(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Shader debug trace（Shader 调试轨迹）
-# ---------------------------------------------------------------------------
-
-class DebugStep(BaseModel):
-    step_index: int
-    instruction: str = ""
-    registers: Dict[str, Any] = Field(default_factory=dict)
-    is_naninf: bool = False
-
-
-class PixelDebugResult(BaseModel):
-    ok: bool = True
-    trace_artifact: Optional[ArtifactRef] = None
-    total_steps: int = 0
-    naninf_step: Optional[DebugStep] = None
-    notes: str = ""
-
-
-# ---------------------------------------------------------------------------
 # Patch（补丁）
 # ---------------------------------------------------------------------------
 
@@ -371,6 +352,10 @@ class PatchSpec(BaseModel):
 
 class PatchResult(BaseModel):
     patch_id: str
+    build_input: Dict[str, Any] = Field(default_factory=lambda: {
+        "status": "unavailable", "reason": "No successful shader build and replacement observed."
+    })
+    build_input_bytes: bytes = Field(default=b"", exclude=True)
     applied_to_shader_hash: str = ""
     original_shader_hash: str = ""
     success: bool = True

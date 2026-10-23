@@ -61,7 +61,7 @@ class _FakeController:
         return None
 
     def ContinueDebug(self, debugger: object) -> list[object]:
-        raise AssertionError("synthetic fallback should not call ContinueDebug")
+        raise AssertionError("debug-start tests must not advance the native debugger")
 
 
 class _FakeOutput:
@@ -518,3 +518,48 @@ def test_shader_compile_rejects_removed_ambiguous_source_parameter() -> None:
         server.server_runtime._normalize_shader_source_input(
             {"source": "float4 main() : SV_Target { return 0; }"}
         )
+
+
+@pytest.mark.parametrize("dispatch,action", [("shader", "get_debug_state"), ("debug", "step")])
+@pytest.mark.parametrize("owner", [None, "another-replay"])
+def test_invalid_debug_handle_rejected_before_any_native_effect(monkeypatch, dispatch, action, owner):
+    runtime = server.server_runtime
+    handles = {} if owner is None else {"trace-old": SimpleNamespace(session_id=owner)}
+    monkeypatch.setattr(runtime._runtime, "shader_debugs", handles)
+    async def forbidden(*args, **kwargs):
+        raise AssertionError("Invalid handle must not access controller or change event")
+    monkeypatch.setattr(runtime, "_get_controller", forbidden)
+    monkeypatch.setattr(runtime, "_ensure_event", forbidden)
+    handler = server._dispatch_shader if dispatch == "shader" else server._dispatch_debug
+    payload = json.loads(asyncio.run(handler(action,
+        {"session_id": "current-replay", "shader_debug_id": "trace-old", "event_id": 42})))
+    assert payload["success"] is False
+    assert payload["code"] == "shader_debug_handle_invalid"
+    assert payload["category"] == "validation"
+    assert payload["details"]["effects_attempted"] is False
+    assert payload["details"]["context_preserved"] is True
+    assert payload["details"]["failure_reason"] == ("unknown_handle" if owner is None else "session_mismatch")
+
+
+def test_current_debug_handle_retains_state_and_event_contract(monkeypatch):
+    runtime = server.server_runtime
+    handle = runtime.ShaderDebugHandle("trace-current", "current-replay", "pixel", 42, None, object(),
+                                     current_state=SimpleNamespace(stepIndex=29))
+    monkeypatch.setattr(runtime._runtime, "shader_debugs", {"trace-current": handle})
+    events = []
+    async def ensure(session_id, event_id):
+        events.append((session_id, event_id))
+        return event_id
+    async def controller(_):
+        return SimpleNamespace(GetPipelineState=lambda: None)
+    async def offload(fn, *args):
+        return fn(*args)
+    monkeypatch.setattr(runtime, "_ensure_event", ensure)
+    monkeypatch.setattr(runtime, "_get_controller", controller)
+    monkeypatch.setattr(runtime, "_offload", offload)
+    payload = json.loads(asyncio.run(server._dispatch_shader("get_debug_state",
+        {"session_id": "current-replay", "shader_debug_id": "trace-current", "event_id": 42})))
+    assert payload["success"] is True
+    assert payload["state"]["pc"] == 29
+    assert payload["resolved_event_id"] == 42
+    assert events == [("current-replay", 42)]

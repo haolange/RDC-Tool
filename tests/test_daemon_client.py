@@ -12,22 +12,22 @@ from rdc_tool.daemon import client as daemon_client
 
 def test_idle_daemon_retains_context_with_owned_replay_or_remote(monkeypatch, tmp_path: Path) -> None:
     from rdc_tool.context_snapshot import save_context_snapshot
-    from rdc_tool.daemon.server import _context_has_owned_resources
+    from rdc_tool.daemon.client import _context_has_unreleased_resources
     from rdc_tool.runtime_state import save_context_state
 
     monkeypatch.setenv("RDC_TOOL_INTERMEDIATE_ROOT", str(tmp_path / "intermediate"))
     context = "ctx-idle-owner"
-    assert _context_has_owned_resources(context) is False
+    assert _context_has_unreleased_resources(context) is False
 
     save_context_state({"sessions": {"sess-owned": {"session_id": "sess-owned", "backend_type": "remote"}}}, context)
-    assert _context_has_owned_resources(context) is True
+    assert _context_has_unreleased_resources(context) is True
 
     save_context_state({}, context)
     save_context_snapshot({"remote": {"state": "live_handle", "remote_id": "remote-owned"}}, context)
-    assert _context_has_owned_resources(context) is True
+    assert _context_has_unreleased_resources(context) is True
 
     save_context_snapshot({}, context)
-    assert _context_has_owned_resources(context) is False
+    assert _context_has_unreleased_resources(context) is False
 
 
 def _configure_runtime_dir(monkeypatch, tmp_path: Path) -> None:
@@ -521,3 +521,44 @@ def test_daemon_request_timeout_returns_structured_details(monkeypatch, tmp_path
         assert exc.details["daemon_state_excerpt"]["recovery_status"] == "ready"
     else:  # pragma: no cover
         raise AssertionError("expected DaemonRequestTimeout")
+
+
+@pytest.mark.parametrize("resource", ["session", "capture", "remote", "unreadable", "active_request"])
+def test_idle_client_cleanup_preserves_owned_daemon(monkeypatch, tmp_path: Path, resource: str) -> None:
+    _configure_runtime_dir(monkeypatch, tmp_path)
+    _configure_context_artifact_paths(monkeypatch, tmp_path)
+    context = "idle-owned"
+    if resource in {"session", "capture"}:
+        key = "sessions" if resource == "session" else "captures"
+        daemon_client.context_state_path(context).write_text(json.dumps({key: {"owned": {}}}), encoding="utf-8")
+    elif resource == "remote":
+        daemon_client.context_snapshot_path(context).write_text(json.dumps({"remote": {"state": "live_handle", "remote_id": "owned"}}), encoding="utf-8")
+    elif resource == "unreadable":
+        daemon_client.context_state_path(context).write_text("{invalid", encoding="utf-8")
+    state = {"context_id": context, "pid": 321, "owner_pid": 654, "pipe_name": "owned-pipe", "token": "test-only",
+        "last_activity_at": "2026-03-06T00:00:00+00:00", "idle_timeout_seconds": 900,
+        "active_request_count": int(resource == "active_request")}
+    daemon_client.save_daemon_state(state, context)
+    monkeypatch.setattr(daemon_client, "_is_process_running", lambda pid: pid in {321, 654})
+    monkeypatch.setattr(daemon_client, "_wait_for_pid_exit", lambda *args: True)
+    requests = []
+    def request(method, **kwargs):
+        requests.append(method)
+        return {"ok": True, "result": {"running": True, "state": state}}
+    monkeypatch.setattr(daemon_client, "daemon_request", request)
+    monkeypatch.setattr(daemon_client.subprocess, "Popen", lambda *args, **kwargs: pytest.fail("must preserve original daemon"))
+    assert not daemon_client._state_should_reap(daemon_client.load_daemon_state(context))
+    cleaned = daemon_client.cleanup_stale_daemon_states(context)
+    assert cleaned["state_files"] == cleaned["killed_pids"] == []
+    ok, _, current = daemon_client.ensure_daemon(context=context, owner_pid=654)
+    assert ok and current["pid"] == 321
+    assert requests == ["status"]
+
+
+@pytest.mark.parametrize("owner_alive,has_resources,expected", [(True, False, True), (False, True, True)])
+def test_idle_cleanup_still_reaps_empty_or_orphaned_daemon(monkeypatch, owner_alive, has_resources, expected):
+    monkeypatch.setattr(daemon_client, "_is_process_running", lambda pid: pid == 321 or owner_alive)
+    monkeypatch.setattr(daemon_client, "_context_has_unreleased_resources", lambda context: has_resources)
+    state = {"context_id": "test-only", "pid": 321, "owner_pid": 654,
+        "last_activity_at": "2026-03-06T00:00:00+00:00", "idle_timeout_seconds": 900, "lease_timeout_seconds": 120}
+    assert daemon_client._state_should_reap(state) is expected

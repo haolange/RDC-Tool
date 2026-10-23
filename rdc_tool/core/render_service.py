@@ -722,7 +722,17 @@ class RenderService:
         # Decode declared regular components; byte count alone cannot identify a format.
         import re
         format_name = str(tex_desc.format.Name()).upper()
-        if format_name == "R11G11B10_FLOAT":
+        if format_name in {"R10G10B10A2_UNORM", "B10G10R10A2_UNORM"}:
+            expected_bytes = tex_width * tex_height * 4
+            if len(raw_data) != expected_bytes:
+                raise ValueError(f"Texture readback size mismatch: expected {expected_bytes}, received {len(raw_data)}")
+            packed = np.frombuffer(raw_data, dtype="<u4").reshape(tex_height, tex_width)
+            arr = np.stack((packed & 0x3FF, (packed >> 10) & 0x3FF,
+                            (packed >> 20) & 0x3FF, (packed >> 30) & 0x3), axis=-1)
+            arr = arr.astype(np.float64) / np.array([1023.0, 1023.0, 1023.0, 3.0])
+            if format_name.startswith("B"):
+                arr = arr[..., [2, 1, 0, 3]]
+        elif format_name == "R11G11B10_FLOAT":
             expected_bytes = tex_width * tex_height * 4
             if len(raw_data) != expected_bytes:
                 raise ValueError(f"Texture readback size mismatch: expected {expected_bytes}, received {len(raw_data)}")
