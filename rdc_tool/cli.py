@@ -1639,7 +1639,6 @@ async def _main_async(args: argparse.Namespace) -> int:
 
     if args.command == "daemon":
         if args.daemon_cmd == "start":
-            cleanup_stale_daemon_states(context=ctx)
             ok, message, state = ensure_daemon(
                 pipe_name=args.pipe_name,
                 context=ctx,

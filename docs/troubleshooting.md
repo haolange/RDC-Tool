@@ -70,3 +70,8 @@ A real remote busy status during open_replay can also result from attempting a s
 Missing embedded thumbnail, missing initialization provenance, unsupported GPU timestamp coverage and readback failure are different outcomes. Never substitute a replay image for a thumbnail, current bytes for initial bytes, or event-duration sums for full replay time. A failed replay restoration requires closing and reopening the isolated session. Native client/server handshake incompatibility requires matching runtime components; helper process presence alone does not prove occupation.
 
 If SaveTexture reports DataNotAvailable after an idle period, inspect the first native transport failure. A server-side five-second idle receive timeout can close the connection before readback; the later empty-data error is secondary. Use the matching rebuilt helper with idle packet polling. Do not mask this with stale images, forced user-service restarts, or unlimited retries. Native SaveTexture diagnostics retain Message() details including the failed mip/slice/sample.
+
+
+## Concurrent daemon startup
+
+`daemon_start_lock_timeout` means this caller could not acquire the context startup lock within 30 seconds. Another caller may still be checking or starting that daemon. Inspect the reported context and waiting stage, let the existing startup finish, then retry the same context. Do not delete `.start.lock`, clear context state or stop a live owner to bypass this wait. The timeout is distinct from daemon readiness and operation-response timeouts; it does not prove the existing owner failed.

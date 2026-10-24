@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import secrets
@@ -33,22 +34,67 @@ _START_MUTEXES: dict[str, threading.Lock] = {}
 _START_MUTEXES_LOCK = threading.Lock()
 
 
+DAEMON_START_LOCK_TIMEOUT_S = 30.0
+DAEMON_START_LOCK_POLL_S = 0.05
+
+
+class DaemonStartLockTimeout(TimeoutError):
+    def __init__(self, context: str, stage: str, started: float, timeout: float) -> None:
+        super().__init__(f"Timed out acquiring daemon startup lock for context {context!r}")
+        self.code = "daemon_start_lock_timeout"
+        self.category = "runtime"
+        self.details = {
+            "context_id": context,
+            "failed_step": "daemon_start_lock",
+            "waiting_for": stage,
+            "elapsed_seconds": max(0.0, time.monotonic() - started),
+            "timeout_seconds": timeout,
+            "recovery_hint": "Wait and retry the same context; do not stop the active owner or remove its state/lock.",
+        }
+
+
 @contextmanager
 def _locked_daemon_start(context: str):
-    # Serialize check/create/readiness across CLI processes, not runtime requests.
+    # One acquisition deadline covers both thread and process contention.
+    started = time.monotonic()
+    timeout = DAEMON_START_LOCK_TIMEOUT_S
+    deadline = started + timeout
     lock_path = _daemon_state_path(context).with_suffix(".start.lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     key = os.path.normcase(str(lock_path.resolve()))
-    with _START_MUTEXES_LOCK:
+    if not _START_MUTEXES_LOCK.acquire(timeout=max(0.0, deadline - time.monotonic())):
+        raise DaemonStartLockTimeout(context, "thread_mutex", started, timeout)
+    try:
         mutex = _START_MUTEXES.setdefault(key, threading.Lock())
-    with mutex, lock_path.open("a+b") as handle:
-        handle.seek(0)
-        msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
-        try:
-            yield
-        finally:
-            handle.seek(0)
-            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+    finally:
+        _START_MUTEXES_LOCK.release()
+    if not mutex.acquire(timeout=max(0.0, deadline - time.monotonic())):
+        raise DaemonStartLockTimeout(context, "thread_mutex", started, timeout)
+    try:
+        with lock_path.open("a+b") as handle:
+            while True:
+                if time.monotonic() >= deadline:
+                    raise DaemonStartLockTimeout(context, "file_lock", started, timeout)
+                handle.seek(0)
+                try:
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError as exc:
+                    # CRT documents EACCES as byte-lock contention. File-open
+                    # permissions and non-contention failures must not be retried.
+                    if exc.errno != errno.EACCES or getattr(exc, "winerror", None) not in (None, 33):
+                        raise
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise DaemonStartLockTimeout(context, "file_lock", started, timeout)
+                time.sleep(min(DAEMON_START_LOCK_POLL_S, remaining))
+            try:
+                yield
+            finally:
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+    finally:
+        mutex.release()
 
 
 class DaemonRequestTimeout(TimeoutError):
