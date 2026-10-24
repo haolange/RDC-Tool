@@ -434,11 +434,11 @@ def test_catalog_explains_targeted_spirv_precision_patch() -> None:
 
     tool = describe_operation("rd.shader.edit_and_replace")
     description = tool["input_schema"]["properties"]["ops"]["description"]
-    assert '"variables":["493"]' in description
-    assert "only OpDecorate %493 RelaxedPrecision" in description
+    assert "only for the IDs listed in variables" in description
+    assert "an empty variables list applies to all RelaxedPrecision decorations" in description
     validate_operation_arguments("rd.shader.edit_and_replace", {
         "session_id": "sess_example", "stage": "ps", "event_id": 1,
-        "ops": [{"op": "force_full_precision", "variables": ["493"]}],
+        "ops": [{"op": "force_full_precision", "variables": ["7"]}],
     })
 
 
@@ -1255,6 +1255,16 @@ def test_patch_engine_reports_source_hash_mismatch(monkeypatch: pytest.MonkeyPat
     assert result.error_code == "shader_source_mismatch"
     assert result.error_category == "validation"
     assert controller.build_calls == []
+
+
+@pytest.mark.parametrize("variables, expected", [
+    (["7"], "\nOpDecorate %8 RelaxedPrecision\nOpDecorate %7 Location 0\n%7 = OpLoad %2 %3\n"),
+    ([], "\n\nOpDecorate %7 Location 0\n%7 = OpLoad %2 %3\n"),
+    (["9"], "OpDecorate %7 RelaxedPrecision\nOpDecorate %8 RelaxedPrecision\nOpDecorate %7 Location 0\n%7 = OpLoad %2 %3\n"),
+])
+def test_precision_patch_selection_preserves_other_instructions(variables, expected) -> None:
+    source = "OpDecorate %7 RelaxedPrecision\nOpDecorate %8 RelaxedPrecision\nOpDecorate %7 Location 0\n%7 = OpLoad %2 %3\n"
+    assert patch_engine_mod.PatchEngine._apply_precision_patch(source, "spirvasm", variables) == expected
 
 
 def test_apply_precision_patch_supports_renderdoc_spirv_relaxedprecision_annotations() -> None:

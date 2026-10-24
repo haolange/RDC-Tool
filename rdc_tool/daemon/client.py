@@ -8,6 +8,9 @@ import secrets
 import subprocess
 import sys
 import time
+import threading
+import msvcrt
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from multiprocessing.connection import Client
 from pathlib import Path
@@ -26,6 +29,26 @@ POLL_DELAYS = (0.1, 0.2, 0.3, 0.5, 0.8, 1.2, 1.6, 2.0)
 MAX_STOP_TIMEOUT_S = 8.0
 DEFAULT_LEASE_TIMEOUT_S = 120
 DEFAULT_IDLE_TIMEOUT_S = 15 * 60
+_START_MUTEXES: dict[str, threading.Lock] = {}
+_START_MUTEXES_LOCK = threading.Lock()
+
+
+@contextmanager
+def _locked_daemon_start(context: str):
+    # Serialize check/create/readiness across CLI processes, not runtime requests.
+    lock_path = _daemon_state_path(context).with_suffix(".start.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    key = os.path.normcase(str(lock_path.resolve()))
+    with _START_MUTEXES_LOCK:
+        mutex = _START_MUTEXES.setdefault(key, threading.Lock())
+    with mutex, lock_path.open("a+b") as handle:
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+        try:
+            yield
+        finally:
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
 
 
 class DaemonRequestTimeout(TimeoutError):
@@ -657,6 +680,17 @@ def ensure_daemon(
     owner_pid: Optional[int] = None,
     lease_timeout_seconds: int = DEFAULT_LEASE_TIMEOUT_S,
     idle_timeout_seconds: int = DEFAULT_IDLE_TIMEOUT_S,
+) -> Tuple[bool, str, Dict[str, Any]]:
+    with _locked_daemon_start(_normalize_context(context)):
+        return _ensure_daemon_locked(
+            pipe_name=pipe_name, token=token, context=context, owner_pid=owner_pid,
+            lease_timeout_seconds=lease_timeout_seconds, idle_timeout_seconds=idle_timeout_seconds,
+        )
+
+
+def _ensure_daemon_locked(
+    *, pipe_name: Optional[str], token: Optional[str], context: Optional[str],
+    owner_pid: Optional[int], lease_timeout_seconds: int, idle_timeout_seconds: int,
 ) -> Tuple[bool, str, Dict[str, Any]]:
     chosen_ctx = _normalize_context(context)
     cleanup_stale_daemon_states(context=chosen_ctx)

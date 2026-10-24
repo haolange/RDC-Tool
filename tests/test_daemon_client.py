@@ -562,3 +562,94 @@ def test_idle_cleanup_still_reaps_empty_or_orphaned_daemon(monkeypatch, owner_al
     state = {"context_id": "test-only", "pid": 321, "owner_pid": 654,
         "last_activity_at": "2026-03-06T00:00:00+00:00", "idle_timeout_seconds": 900, "lease_timeout_seconds": 120}
     assert daemon_client._state_should_reap(state) is expected
+
+def test_concurrent_ensure_daemon_publishes_one_owner(monkeypatch, tmp_path: Path) -> None:
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    _configure_runtime_dir(monkeypatch, tmp_path)
+    first_spawned = threading.Event()
+    release_start = threading.Event()
+    spawned = []
+
+    def spawn(*args, **kwargs):
+        proc = type('Process', (), {'pid': 7100 + len(spawned)})()
+        spawned.append(proc.pid)
+        first_spawned.set()
+        return proc
+
+    def ready(state):
+        assert release_start.wait(3)
+        return True
+
+    monkeypatch.setattr(daemon_client.subprocess, 'Popen', spawn)
+    monkeypatch.setattr(daemon_client, '_wait_for_daemon_ready', ready)
+    monkeypatch.setattr(daemon_client, '_is_process_running', lambda pid: pid > 0)
+    monkeypatch.setattr(daemon_client, 'daemon_request', lambda method, **kw: {'ok': True, 'result': {'state': kw['state']}})
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        one = executor.submit(daemon_client.ensure_daemon, context='same-context', owner_pid=9000)
+        assert first_spawned.wait(3)
+        two_entered = threading.Event()
+        def second():
+            two_entered.set()
+            return daemon_client.ensure_daemon(context='same-context', owner_pid=9000)
+        two = executor.submit(second)
+        assert two_entered.wait(3)
+        # First startup has not published readiness; a second caller must wait.
+        import time
+        time.sleep(.05)
+        release_start.set()
+        results = [one.result(timeout=5), two.result(timeout=5)]
+    assert len(spawned) == 1
+    assert all(result[0] for result in results)
+    assert results[0][2]['pid'] == results[1][2]['pid'] == spawned[0]
+
+def test_daemon_start_lock_is_process_scoped_and_released(monkeypatch, tmp_path: Path) -> None:
+    import subprocess
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    _configure_runtime_dir(monkeypatch, tmp_path)
+    code = """
+import sys
+from pathlib import Path
+from rdc_tool.daemon import client
+client.STATE_DIR = Path(sys.argv[1])
+with client._locked_daemon_start('shared'):
+    print('locked', flush=True)
+    sys.stdin.readline()
+"""
+    child = subprocess.Popen([sys.executable, '-c', code, str(daemon_client.STATE_DIR)],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    acquired = threading.Event()
+    def acquire():
+        with daemon_client._locked_daemon_start('shared'):
+            acquired.set()
+    try:
+        assert child.stdout.readline().strip() == 'locked'
+        # Different context does not wait behind this startup.
+        with daemon_client._locked_daemon_start('other'):
+            pass
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            pending = executor.submit(acquire)
+            assert not acquired.wait(.1)
+            child.stdin.write('release\n')
+            child.stdin.flush()
+            child.wait(timeout=5)
+            pending.result(timeout=5)
+        assert acquired.is_set()
+    finally:
+        if child.poll() is None:
+            child.kill()
+            child.wait(timeout=5)
+        child.stdin.close()
+        child.stdout.close()
+
+
+def test_daemon_start_lock_releases_on_failure(monkeypatch, tmp_path: Path) -> None:
+    _configure_runtime_dir(monkeypatch, tmp_path)
+    with pytest.raises(RuntimeError, match='startup failed'):
+        with daemon_client._locked_daemon_start('failure'):
+            raise RuntimeError('startup failed')
+    with daemon_client._locked_daemon_start('failure'):
+        pass

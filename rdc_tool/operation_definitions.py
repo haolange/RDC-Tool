@@ -3016,8 +3016,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                    '(str)<br>event_id (integer, optional): event_id (int, 可选)<br>shader_id '
                    '(string, optional): shader_id (str, 可选): expected bound shader identity<br>ops '
                    '(array, optional): ops (list, 可选): structured patch ops; for SPIR-V ASM, '
-                   '{"op":"force_full_precision","variables":["493"]} removes only '
-                   'OpDecorate %493 RelaxedPrecision; an empty variables list applies to all '
+                   'force_full_precision removes RelaxedPrecision decorations only for '
+                   'the IDs listed in variables; an empty variables list applies to all '
                    'RelaxedPrecision decorations<br>source_text '
                    '(string, optional): source_text (str, 可选): full replacement source '
                    'text<br>source_path (string, optional): source_path (str, 可选): full '
@@ -3092,9 +3092,9 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                                                                'bound shader identity',
                                                 'type': 'string'},
                                   'ops': {'description': 'Structured patch ops. For SPIR-V ASM, '
-                                                         '{"op":"force_full_precision","variables":["493"]} '
-                                                         'targets only OpDecorate %493 RelaxedPrecision; '
-                                                         'an empty variables list removes all RelaxedPrecision decorations.',
+                                                         'force_full_precision removes RelaxedPrecision decorations '
+                                                         'only for the IDs listed in variables; '
+                                                         'an empty variables list applies to all RelaxedPrecision decorations.',
                                           'type': 'array',
                                           'items': {'type': 'object'}},
                                   'source_text': {'description': 'source_text (str, 可选): full '
