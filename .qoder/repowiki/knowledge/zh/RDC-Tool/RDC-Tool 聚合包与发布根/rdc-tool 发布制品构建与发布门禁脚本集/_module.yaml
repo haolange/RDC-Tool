@@ -1,0 +1,26 @@
+schema_version: 1
+module_path: rdc-tool-聚合包与发布根/rdc-tool-发布制品构建与发布门禁脚本集
+title: rdc-tool 发布制品构建与发布门禁脚本集
+scope: []
+source_files: []
+depends_on: []
+related_to:
+    - path: rdc-tool-聚合包与发布根/rdx-tools-文档集用户与开发者指南
+kk_module_id: a6cca16472acc7bafe20d9baa9ea11af
+kk_ordinal: 3
+kk_cards:
+    architecture_design:
+        id: 0a803a2d2fa9e159e6d77ccb0b1d9a6b
+        title: rdc-tool 发布制品构建与发布门禁脚本集
+    coding_conventions:
+        id: 0abfc00d6cb215b9b3367ecf993df8bd
+        title: rdc-tool 发布制品构建与发布门禁脚本集
+    overview:
+        id: a6cca16472acc7bafe20d9baa9ea11af
+        title: rdc-tool 发布制品构建与发布门禁脚本集
+    tech_stack:
+        id: 8f48bd2150093519ac0935ac716cef4a
+        title: rdc-tool 发布制品构建与发布门禁脚本集
+    unique_setup_and_commands:
+        id: 5e05824470ff1dcf3eb4498977427cd9
+        title: rdc-tool 发布制品构建与发布门禁脚本集

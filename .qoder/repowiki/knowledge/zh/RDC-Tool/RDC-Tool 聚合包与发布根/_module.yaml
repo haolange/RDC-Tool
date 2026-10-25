@@ -1,0 +1,24 @@
+schema_version: 1
+module_path: rdc-tool-聚合包与发布根
+title: RDC-Tool 聚合包与发布根
+scope: []
+source_files: []
+depends_on: []
+related_to: []
+kk_module_id: ee9c71c99a3c3f754d41e6ed4aac2de4
+kk_cards:
+    architecture_design:
+        id: 2f2fae197dbfdca2730b73331b343e68
+        title: RDC-Tool 聚合包与发布根
+    coding_conventions:
+        id: 0f46082dddc18adef19bcafa28c8754b
+        title: RDC-Tool 聚合包与发布根
+    overview:
+        id: ee9c71c99a3c3f754d41e6ed4aac2de4
+        title: RDC-Tool 聚合包与发布根
+    tech_stack:
+        id: 62854def5a7ce935b4b01fbe739c7cad
+        title: RDC-Tool 聚合包与发布根
+    unique_setup_and_commands:
+        id: 06efc6ead3455ceff8f698010f458355
+        title: RDC-Tool 聚合包与发布根

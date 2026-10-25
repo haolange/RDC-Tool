@@ -1,0 +1,25 @@
+schema_version: 1
+module_path: rdc-tool-聚合包与发布根/rdx-python-运行时与守护进程调度层
+title: RDX Python 运行时与守护进程调度层
+scope: []
+source_files: []
+depends_on: []
+related_to: []
+kk_module_id: e013aa3112d811477018ddc24ecd6c48
+kk_ordinal: 5
+kk_cards:
+    architecture_design:
+        id: 1af8b8592263d6b55e0ef1e5f8c6789b
+        title: RDX Python 运行时与守护进程调度层
+    coding_conventions:
+        id: 626d8989db00cdf2eb96b6d13bd8a76e
+        title: RDX Python 运行时与守护进程调度层
+    overview:
+        id: e013aa3112d811477018ddc24ecd6c48
+        title: RDX Python 运行时与守护进程调度层
+    tech_stack:
+        id: cbdb302e44c68021721aca7a14468c7c
+        title: RDX Python 运行时与守护进程调度层
+    unique_setup_and_commands:
+        id: de4d31b188386053b2890933bf952aae
+        title: RDX Python 运行时与守护进程调度层

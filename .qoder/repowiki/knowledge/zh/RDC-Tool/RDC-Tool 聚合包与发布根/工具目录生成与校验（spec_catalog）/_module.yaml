@@ -1,0 +1,27 @@
+schema_version: 1
+module_path: rdc-tool-聚合包与发布根/工具目录生成与校验speccatalog
+title: 工具目录生成与校验（spec_catalog）
+scope: []
+source_files: []
+depends_on: []
+related_to:
+    - path: rdc-tool-聚合包与发布根/rdx-tools-文档集用户与开发者指南
+    - path: rdc-tool-聚合包与发布根/rdx-python-运行时与守护进程调度层
+kk_module_id: 88403f2952b25b05bc969cef783c19d3
+kk_ordinal: 2
+kk_cards:
+    architecture_design:
+        id: 068d8038b233ad4c550ba718e3a03a3f
+        title: 工具目录生成与校验（spec_catalog）
+    coding_conventions:
+        id: c8d3addb0de65ec0f97d98cf79131096
+        title: 工具目录生成与校验（spec_catalog）
+    overview:
+        id: 88403f2952b25b05bc969cef783c19d3
+        title: 工具目录生成与校验（spec_catalog）
+    tech_stack:
+        id: d9f4c870d54115483096eca63f067cd4
+        title: 工具目录生成与校验（spec_catalog）
+    unique_setup_and_commands:
+        id: d8dd6cae85cec349e4008868f1dac30b
+        title: 工具目录生成与校验（spec_catalog）

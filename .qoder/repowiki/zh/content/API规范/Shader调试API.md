@@ -5,8 +5,14 @@
 - [rdc_tool/handlers/debug.py](file://rdc_tool/handlers/debug.py)
 - [rdc_tool/server_runtime.py](file://rdc_tool/server_runtime.py)
 - [rdc_tool/operation_definitions.py](file://rdc_tool/operation_definitions.py)
-- [rdc_tool/core/debug_service.py](file://rdc_tool/core/debug_service.py)
 </cite>
+
+## 更新摘要
+**变更内容**
+- 删除了已废弃的 `rdc_tool/core/debug_service.py` 引用
+- 更新了架构图和依赖关系，反映底层调试服务已整合到 `server_runtime.py` 中
+- 修正了所有指向已删除文件的引用链接
+- 更新了组件分析章节，说明调试功能的实际实现位置
 
 ## 目录
 1. [简介](#简介)
@@ -28,19 +34,21 @@
 - 调用栈分析：获取当前 shader 调用栈帧信息。
 - 最佳实践：断点策略、性能影响评估、调试会话管理。
 
+**更新说明**：底层调试服务实现已从独立的 `debug_service.py` 模块整合到 `server_runtime.py` 中，通过 `ShaderDebugHandle` 数据类和 `_dispatch_debug` 函数统一管理调试会话状态和执行逻辑。
+
 ## 项目结构
-Shader 调试能力由“操作定义 + 运行时分发 + 处理器 + 底层服务”四层构成：
+Shader 调试能力由"操作定义 + 运行时分发 + 处理器 + 内联调试逻辑"三层构成：
 - 操作定义层：在工具目录中声明 rd.debug.* 的公开接口、参数与约束。
-- 运行时分发层：将 action 路由到具体实现，并维护调试会话状态。
+- 运行时分发层：将 action 路由到具体实现，并维护调试会话状态（通过 `ShaderDebugHandle`）。
 - 处理器层：统一入口，转发到运行时调度。
-- 底层服务层：封装 RenderDoc 的像素/顶点级调试原语，提供逐步执行、变量提取、NaN/Inf 检测等。
+- 内联调试逻辑：调试功能直接实现在 `server_runtime.py` 中，包括逐步执行、变量提取、NaN/Inf 检测等。
 
 ```mermaid
 graph TB
 A["客户端/CLI"] --> B["操作定义<br/>rdc_tool/operation_definitions.py"]
 B --> C["运行时分发<br/>rdc_tool/server_runtime.py"]
 C --> D["调试处理器<br/>rdc_tool/handlers/debug.py"]
-D --> E["底层调试服务<br/>rdc_tool/core/debug_service.py"]
+D --> E["运行时调度<br/>_dispatch_debug in server_runtime.py"]
 E --> F["RenderDoc 控制器"]
 ```
 
@@ -48,28 +56,30 @@ E --> F["RenderDoc 控制器"]
 - [rdc_tool/operation_definitions.py:597-799](file://rdc_tool/operation_definitions.py#L597-L799)
 - [rdc_tool/server_runtime.py:10900-10920](file://rdc_tool/server_runtime.py#L10900-L10920)
 - [rdc_tool/handlers/debug.py:8-9](file://rdc_tool/handlers/debug.py#L8-L9)
-- [rdc_tool/core/debug_service.py:43-120](file://rdc_tool/core/debug_service.py#L43-L120)
+- [rdc_tool/server_runtime.py:11603-11750](file://rdc_tool/server_runtime.py#L11603-L11750)
 
 **章节来源**
 - [rdc_tool/operation_definitions.py:597-799](file://rdc_tool/operation_definitions.py#L597-L799)
 - [rdc_tool/server_runtime.py:178-214](file://rdc_tool/server_runtime.py#L178-L214)
 - [rdc_tool/handlers/debug.py:8-9](file://rdc_tool/handlers/debug.py#L8-L9)
-- [rdc_tool/core/debug_service.py:43-120](file://rdc_tool/core/debug_service.py#L43-L120)
+- [rdc_tool/server_runtime.py:11603-11750](file://rdc_tool/server_runtime.py#L11603-L11750)
 
 ## 核心组件
 - 操作定义（rd.debug.*）：集中声明断点、继续、运行到、变量、表达式、调用栈、结束等操作的输入输出与前置条件。
-- 运行时状态（ShaderDebugHandle）：维护每个调试会话的 trace、debugger、当前状态、断点列表、停止原因等。
+- 运行时状态（ShaderDebugHandle）：维护每个调试会话的 trace、debugger、当前状态、断点列表、停止原因等。该数据类定义在 `server_runtime.py` 中。
 - 处理器（debug handler）：统一入口，将 action 转交给运行时调度。
-- 底层服务（DebugService）：基于 RenderDoc 的 DebugPixel/DebugVertex/ContinueDebug 等 API，完成逐步执行、变量提取、NaN/Inf 检测与 artifact 持久化。
+- 运行时调度（_dispatch_debug）：直接在 `server_runtime.py` 中实现调试逻辑，包括逐步执行、变量提取、断点管理等功能。
+
+**更新说明**：原有的 `DebugService` 类已被移除，其功能已整合到 `server_runtime.py` 的 `_dispatch_debug` 函数和 `ShaderDebugHandle` 数据类中。
 
 **章节来源**
 - [rdc_tool/operation_definitions.py:597-799](file://rdc_tool/operation_definitions.py#L597-L799)
-- [rdc_tool/server_runtime.py:178-214](file://rdc_tool/server_runtime.py#L178-L214)
+- [rdc_tool/server_runtime.py:184-197](file://rdc_tool/server_runtime.py#L184-L197)
 - [rdc_tool/handlers/debug.py:8-9](file://rdc_tool/handlers/debug.py#L8-L9)
-- [rdc_tool/core/debug_service.py:43-120](file://rdc_tool/core/debug_service.py#L43-L120)
+- [rdc_tool/server_runtime.py:11603-11750](file://rdc_tool/server_runtime.py#L11603-L11750)
 
 ## 架构总览
-下图展示一次典型的 rd.debug.continue 调用链：从 CLI/客户端进入操作定义，经运行时分发到处理器，再调用底层服务逐步执行，最终返回状态与停止原因。
+下图展示一次典型的 rd.debug.continue 调用链：从 CLI/客户端进入操作定义，经运行时分发到处理器，再调用运行时调度中的调试逻辑逐步执行，最终返回状态与停止原因。
 
 ```mermaid
 sequenceDiagram
@@ -77,7 +87,7 @@ participant Client as "客户端"
 participant Ops as "操作定义"
 participant RT as "运行时分发"
 participant H as "调试处理器"
-participant DS as "底层调试服务"
+participant DS as "运行时调度"
 participant RD as "RenderDoc 控制器"
 Client->>Ops : 调用 rd.debug.continue
 Ops-->>RT : 解析参数/校验
@@ -93,9 +103,9 @@ RT-->>Client : {state, stopped_reason}
 
 **图示来源**
 - [rdc_tool/operation_definitions.py:620-645](file://rdc_tool/operation_definitions.py#L620-L645)
-- [rdc_tool/server_runtime.py:10900-10920](file://rdc_tool/server_runtime.py#L10900-L10920)
+- [rdc_tool/server_runtime.py:11650-11680](file://rdc_tool/server_runtime.py#L11650-L11680)
 - [rdc_tool/handlers/debug.py:8-9](file://rdc_tool/handlers/debug.py#L8-L9)
-- [rdc_tool/core/debug_service.py:143-191](file://rdc_tool/core/debug_service.py#L143-L191)
+- [rdc_tool/server_runtime.py:11655-11675](file://rdc_tool/server_runtime.py#L11655-L11675)
 
 ## 详细组件分析
 
@@ -129,6 +139,7 @@ Done --> End
 **章节来源**
 - [rdc_tool/operation_definitions.py:597-619](file://rdc_tool/operation_definitions.py#L597-L619)
 - [rdc_tool/operation_definitions.py:782-799](file://rdc_tool/operation_definitions.py#L782-L799)
+- [rdc_tool/server_runtime.py:11710-11715](file://rdc_tool/server_runtime.py#L11710-L11715)
 
 ### 调试控制流程：continue、run_to、finish
 - continue（继续执行）
@@ -145,7 +156,7 @@ sequenceDiagram
 participant C as "客户端"
 participant O as "操作定义"
 participant R as "运行时"
-participant S as "调试服务"
+participant S as "运行时调度"
 participant D as "RenderDoc"
 C->>O : rd.debug.continue
 O->>R : 分发 continue
@@ -165,12 +176,12 @@ end
 **图示来源**
 - [rdc_tool/operation_definitions.py:620-645](file://rdc_tool/operation_definitions.py#L620-L645)
 - [rdc_tool/operation_definitions.py:751-781](file://rdc_tool/operation_definitions.py#L751-L781)
-- [rdc_tool/core/debug_service.py:143-191](file://rdc_tool/core/debug_service.py#L143-L191)
+- [rdc_tool/server_runtime.py:11655-11675](file://rdc_tool/server_runtime.py#L11655-L11675)
 
 **章节来源**
 - [rdc_tool/operation_definitions.py:620-645](file://rdc_tool/operation_definitions.py#L620-L645)
 - [rdc_tool/operation_definitions.py:751-781](file://rdc_tool/operation_definitions.py#L751-L781)
-- [rdc_tool/core/debug_service.py:143-191](file://rdc_tool/core/debug_service.py#L143-L191)
+- [rdc_tool/server_runtime.py:11655-11710](file://rdc_tool/server_runtime.py#L11655-L11710)
 
 ### 变量检查与表达式求值：get_variables、evaluate_expression
 - get_variables（获取变量）
@@ -201,6 +212,7 @@ Trunc --> Return
 **章节来源**
 - [rdc_tool/operation_definitions.py:717-750](file://rdc_tool/operation_definitions.py#L717-L750)
 - [rdc_tool/operation_definitions.py:646-670](file://rdc_tool/operation_definitions.py#L646-L670)
+- [rdc_tool/server_runtime.py:11716-11735](file://rdc_tool/server_runtime.py#L11716-L11735)
 
 ### 调用栈分析：get_callstack
 - 获取当前 shader 调用栈，包括函数名、源文件与行号等信息。
@@ -211,7 +223,7 @@ sequenceDiagram
 participant U as "用户"
 participant O as "操作定义"
 participant R as "运行时"
-participant S as "调试服务"
+participant S as "运行时调度"
 U->>O : rd.debug.get_callstack
 O->>R : 分发 get_callstack
 R->>S : 读取当前 debugger 状态
@@ -224,46 +236,58 @@ R-->>U : {callstack}
 
 **章节来源**
 - [rdc_tool/operation_definitions.py:694-716](file://rdc_tool/operation_definitions.py#L694-L716)
+- [rdc_tool/server_runtime.py:11736-11742](file://rdc_tool/server_runtime.py#L11736-L11742)
 
-### 底层调试服务：DebugService
-- 能力检测：根据 session 能力或 GraphicsAPI 判断是否支持 shader debugging（D3D11/D3D12/Vulkan）。
-- 逐步执行：通过 ContinueDebug 循环采集状态，提取变量，检测 NaN/Inf。
+### 运行时调度：_dispatch_debug 与 ShaderDebugHandle
+- 会话管理：`ShaderDebugHandle` 数据类维护每个调试会话的关键状态，包括 trace、debugger、当前状态、断点列表、变量缓存等。
+- 逐步执行：通过 `ContinueDebug` 循环采集状态，提取变量，检测 NaN/Inf。
 - 资源管理：确保 FreeTrace 被调用，避免驱动资源泄漏。
-- 持久化：将 trace 保存为 JSON artifact，便于离线分析。
+- 断点管理：在 `handle.breakpoints` 列表中维护断点，在 continue 执行时检查是否命中。
 
 ```mermaid
 classDiagram
-class DebugService {
-+debug_pixel(session_id, event_id, x, y, ...)
-+debug_vertex(session_id, event_id, vertex_id, instance_id, ...)
--_check_debug_support(session_id, session_manager)
--_get_controller(session_id, session_manager)
--_extract_variables(state)
--_has_naninf(value)
+class ShaderDebugHandle {
++shader_debug_id: str
++session_id: str
++mode: str
++event_id: int
++trace: Any
++debugger: Any
++current_state: Any
++resolved_context: Dict
++variables: Dict
++breakpoints: List[Dict]
++stopped_reason: str
 }
+class RuntimeDispatch {
++_dispatch_debug(action, args)
++_require_shader_debug_handle(session_id, debug_id)
++continue_once()
+}
+RuntimeDispatch --> ShaderDebugHandle : 管理
 ```
 
 **图示来源**
-- [rdc_tool/core/debug_service.py:43-120](file://rdc_tool/core/debug_service.py#L43-L120)
-- [rdc_tool/core/debug_service.py:427-466](file://rdc_tool/core/debug_service.py#L427-L466)
-- [rdc_tool/core/debug_service.py:492-562](file://rdc_tool/core/debug_service.py#L492-L562)
+- [rdc_tool/server_runtime.py:184-197](file://rdc_tool/server_runtime.py#L184-L197)
+- [rdc_tool/server_runtime.py:11603-11750](file://rdc_tool/server_runtime.py#L11603-L11750)
+- [rdc_tool/server_runtime.py:9975-9985](file://rdc_tool/server_runtime.py#L9975-L9985)
 
 **章节来源**
-- [rdc_tool/core/debug_service.py:43-120](file://rdc_tool/core/debug_service.py#L43-L120)
-- [rdc_tool/core/debug_service.py:427-466](file://rdc_tool/core/debug_service.py#L427-L466)
-- [rdc_tool/core/debug_service.py:492-562](file://rdc_tool/core/debug_service.py#L492-L562)
+- [rdc_tool/server_runtime.py:184-197](file://rdc_tool/server_runtime.py#L184-L197)
+- [rdc_tool/server_runtime.py:11603-11750](file://rdc_tool/server_runtime.py#L11603-L11750)
+- [rdc_tool/server_runtime.py:9975-9985](file://rdc_tool/server_runtime.py#L9975-L9985)
 
 ## 依赖关系分析
 - 操作定义依赖运行时分发：所有 rd.debug.* 操作均通过运行时进行参数校验与会话管理。
 - 运行时依赖处理器：debug 处理器统一转发 action 给运行时调度。
-- 运行时依赖底层服务：实际调试逻辑由 DebugService 完成，依赖 RenderDoc 控制器。
+- 运行时调度直接实现调试逻辑：调试功能不再依赖独立的 DebugService，而是直接在 `server_runtime.py` 中实现。
 - 状态管理：ShaderDebugHandle 维护每个调试会话的关键状态，包括断点、当前状态、停止原因等。
 
 ```mermaid
 graph LR
 Ops["操作定义"] --> RT["运行时分发"]
 RT --> H["调试处理器"]
-H --> DS["底层调试服务"]
+H --> DS["运行时调度<br/>_dispatch_debug"]
 DS --> RD["RenderDoc 控制器"]
 RT --> State["ShaderDebugHandle 状态"]
 ```
@@ -272,13 +296,13 @@ RT --> State["ShaderDebugHandle 状态"]
 - [rdc_tool/operation_definitions.py:597-799](file://rdc_tool/operation_definitions.py#L597-L799)
 - [rdc_tool/server_runtime.py:178-214](file://rdc_tool/server_runtime.py#L178-L214)
 - [rdc_tool/handlers/debug.py:8-9](file://rdc_tool/handlers/debug.py#L8-L9)
-- [rdc_tool/core/debug_service.py:43-120](file://rdc_tool/core/debug_service.py#L43-L120)
+- [rdc_tool/server_runtime.py:11603-11750](file://rdc_tool/server_runtime.py#L11603-L11750)
 
 **章节来源**
 - [rdc_tool/operation_definitions.py:597-799](file://rdc_tool/operation_definitions.py#L597-L799)
 - [rdc_tool/server_runtime.py:178-214](file://rdc_tool/server_runtime.py#L178-L214)
 - [rdc_tool/handlers/debug.py:8-9](file://rdc_tool/handlers/debug.py#L8-L9)
-- [rdc_tool/core/debug_service.py:43-120](file://rdc_tool/core/debug_service.py#L43-L120)
+- [rdc_tool/server_runtime.py:11603-11750](file://rdc_tool/server_runtime.py#L11603-L11750)
 
 ## 性能考量
 - 逐步执行开销：ContinueDebug 每步都会产生状态采集与变量提取，建议合理设置 max_steps 与 timeout_ms，避免长时间阻塞。
@@ -296,14 +320,15 @@ RT --> State["ShaderDebugHandle 状态"]
 - 断点无效：确认断点目标（pc/file+line）是否正确映射到当前 shader；必要时先获取调用栈与变量缩小范围。
 - 超时与步数限制：continue/run_to 可能因超时或步数限制提前结束；调整 timeout_ms 与 max_steps。
 - 变量为空：若变量提取结果为空，检查当前 step 是否有 changes；必要时单步执行观察变化。
+- 调试句柄失效：历史调试句柄在回放恢复后无法重用，需要重新创建调试会话。
 
 **章节来源**
-- [rdc_tool/core/debug_service.py:94-120](file://rdc_tool/core/debug_service.py#L94-L120)
-- [rdc_tool/core/debug_service.py:427-466](file://rdc_tool/core/debug_service.py#L427-L466)
-- [rdc_tool/core/debug_service.py:492-562](file://rdc_tool/core/debug_service.py#L492-L562)
+- [rdc_tool/server_runtime.py:9975-9985](file://rdc_tool/server_runtime.py#L9975-L9985)
+- [rdc_tool/server_runtime.py:10650-10750](file://rdc_tool/server_runtime.py#L10650-L10750)
+- [rdc_tool/server_runtime.py:11603-11750](file://rdc_tool/server_runtime.py#L11603-L11750)
 
 ## 结论
-rd.debug.* 提供了一套完整的 Shader 调试能力，涵盖断点管理、调试控制、变量检查、表达式求值与调用栈分析。通过操作定义、运行时分发、处理器与底层服务的分层设计，既保证了易用性，又具备良好的扩展性与可维护性。在实际使用中，应结合断点策略、性能预算与资源管理，获得高效稳定的调试体验。
+rd.debug.* 提供了一套完整的 Shader 调试能力，涵盖断点管理、调试控制、变量检查、表达式求值与调用栈分析。通过操作定义、运行时分发、处理器与运行时调度的分层设计，既保证了易用性，又具备良好的扩展性与可维护性。底层调试逻辑已从独立的 DebugService 整合到 server_runtime.py 中，简化了架构并提高了代码内聚性。在实际使用中，应结合断点策略、性能预算与资源管理，获得高效稳定的调试体验。
 
 [本节为总结，不直接分析具体文件]
 

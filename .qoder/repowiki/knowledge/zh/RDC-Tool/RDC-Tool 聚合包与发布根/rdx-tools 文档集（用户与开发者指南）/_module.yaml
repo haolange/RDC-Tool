@@ -1,0 +1,25 @@
+schema_version: 1
+module_path: rdc-tool-聚合包与发布根/rdx-tools-文档集用户与开发者指南
+title: rdx-tools 文档集（用户与开发者指南）
+scope: []
+source_files: []
+depends_on: []
+related_to: []
+kk_module_id: df15bda249218f260e950d8527a4f9e9
+kk_ordinal: 4
+kk_cards:
+    architecture_design:
+        id: f85dec1b412f07101de5c7ecb6de0a20
+        title: rdx-tools 文档集（用户与开发者指南）
+    coding_conventions:
+        id: a9bf4ee653da8ebf02afd8f0af0c7259
+        title: rdx-tools 文档集（用户与开发者指南）
+    overview:
+        id: df15bda249218f260e950d8527a4f9e9
+        title: rdx-tools 文档集（用户与开发者指南）
+    tech_stack:
+        id: b461ac03438a830fa641511c2c3b0f2b
+        title: rdx-tools 文档集（用户与开发者指南）
+    unique_setup_and_commands:
+        id: efce691cbf0acedb5a2fe206aee73301
+        title: rdx-tools 文档集（用户与开发者指南）

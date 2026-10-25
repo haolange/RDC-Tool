@@ -1,0 +1,25 @@
+schema_version: 1
+module_path: rdc-tool-聚合包与发布根/rdc-tool-集成与契约测试套件
+title: RDC-Tool 集成与契约测试套件
+scope: []
+source_files: []
+depends_on: []
+related_to:
+    - path: rdc-tool-聚合包与发布根/rdx-python-运行时与守护进程调度层
+kk_module_id: 216607d9cd1ec13145ed90acad74ecce
+kk_cards:
+    architecture_design:
+        id: c089b37e06478937ebb4d8cfe469fe99
+        title: RDC-Tool 集成与契约测试套件
+    coding_conventions:
+        id: 1177366f661a311fdaefb7b9152b79e3
+        title: RDC-Tool 集成与契约测试套件
+    overview:
+        id: 216607d9cd1ec13145ed90acad74ecce
+        title: RDC-Tool 集成与契约测试套件
+    tech_stack:
+        id: 00bf9b882d2d43008d01ad0a2afcccf2
+        title: RDC-Tool 集成与契约测试套件
+    unique_setup_and_commands:
+        id: 88bea93ff5bbb2d3f1c312afc0e7c967
+        title: RDC-Tool 集成与契约测试套件

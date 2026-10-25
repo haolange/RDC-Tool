@@ -1,0 +1,26 @@
+schema_version: 1
+module_path: rdc-tool-聚合包与发布根/renderdoc-平台二进制分发产物
+title: RenderDoc 平台二进制分发产物
+scope: []
+source_files: []
+depends_on: []
+related_to:
+    - path: rdc-tool-聚合包与发布根/rdc-tool-发布制品构建与发布门禁脚本集
+kk_module_id: 6cd514f19f7d88f9dccb8c899523ff3c
+kk_ordinal: 1
+kk_cards:
+    architecture_design:
+        id: 96c98aa2c04f1377964e7ace758bc52a
+        title: RenderDoc 平台二进制分发产物
+    coding_conventions:
+        id: 1dbdec3816358c30b999a6df9bf6a232
+        title: RenderDoc 平台二进制分发产物
+    overview:
+        id: 6cd514f19f7d88f9dccb8c899523ff3c
+        title: RenderDoc 平台二进制分发产物
+    tech_stack:
+        id: 72495a33d17af74af963337ff3d4fd36
+        title: RenderDoc 平台二进制分发产物
+    unique_setup_and_commands:
+        id: 591af2098c117eabd1635baea576e06d
+        title: RenderDoc 平台二进制分发产物
