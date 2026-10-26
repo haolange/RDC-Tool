@@ -1,9 +1,9 @@
 # 知识卡导出索引文件
 schema_version: 1
 locale: zh-CN
-commit: 4486844c0b48b26d134ea23f420e39b5cea4b576
+commit: 9441c8b430802ba96814f985a1dc881d1b02aca5
 branch: main
-exported_at: "2026-10-25T19:12:53Z"
+exported_at: "2026-10-25T20:17:50Z"
 modules:
     rdc-tool-聚合包与发布根:
         dir_name: RDC-Tool 聚合包与发布根
