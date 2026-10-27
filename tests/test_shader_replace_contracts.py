@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import difflib
+import hashlib
 import json
 from types import SimpleNamespace
 
@@ -1216,7 +1217,8 @@ def test_patch_engine_diff_rejection_proves_no_replacement_and_can_retry(
     assert len(controller.replace_calls) == 1
 
 
-def test_patch_engine_reports_source_hash_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("hash_kind", ["original", "replacement", "mismatch"])
+def test_patch_engine_source_hash_binds_original(monkeypatch: pytest.MonkeyPatch, hash_kind: str) -> None:
     fake_rd = SimpleNamespace(
         ResourceId=lambda: "ResourceId::0",
         ShaderCompileFlags=_FakeShaderCompileFlags,
@@ -1246,15 +1248,25 @@ def test_patch_engine_reports_source_hash_mismatch(monkeypatch: pytest.MonkeyPat
                 target_stage=ShaderStage.PS,
                 target_shader_id="ResourceId::77",
                 source_text="OpCapability Shader\n",
-                expected_source_hash="mismatch",
+                expected_source_hash=(hashlib.sha256(b'OpEntryPoint Fragment %main "main"').hexdigest()
+                                      if hash_kind == "original" else hashlib.sha256(b"OpCapability Shader\n").hexdigest()
+                                      if hash_kind == "replacement" else "mismatch"),
             ),
         )
     )
 
+    if hash_kind == "original":
+        assert result.success is True
+        assert len(controller.build_calls) == 1
+        assert controller.replace_calls == [("ResourceId::77", "ResourceId::99")]
+        return
     assert result.success is False
     assert result.error_code == "shader_source_mismatch"
     assert result.error_category == "validation"
+    assert result.error_details["replacement_attempted"] is False
+    assert result.error_details["context_preserved"] is True
     assert controller.build_calls == []
+    assert controller.replace_calls == []
 
 
 @pytest.mark.parametrize("variables, expected", [
@@ -2326,3 +2338,23 @@ def test_get_source_does_not_invent_missing_source_metadata(monkeypatch: pytest.
     assert payload["compile_flags"] is None
     assert payload["source_debug_information"] is None
     assert payload["edit_plan"]["can_replace"] is False
+
+
+@pytest.mark.parametrize("target", ["7", "%7", " %7 "])
+def test_spirv_precision_id_operand_matches_and_edits_same_exact_target(target: str) -> None:
+    source = "OpDecorate %7 RelaxedPrecision\nOpDecorate %70 RelaxedPrecision\nOpDecorate %17 RelaxedPrecision\n"
+    matches = patch_engine_mod.PatchEngine._collect_spirv_precision_targets(source, [target])
+    assert matches == [(1, "OpDecorate %7 RelaxedPrecision")]
+    edited = patch_engine_mod.PatchEngine._apply_precision_patch(source, "spirvasm", [target])
+    assert "OpDecorate %7 RelaxedPrecision" not in edited
+    assert "OpDecorate %70 RelaxedPrecision" in edited
+    assert "OpDecorate %17 RelaxedPrecision" in edited
+
+
+@pytest.mark.parametrize("target", ["%", "", "7 8", "%%7"])
+def test_invalid_spirv_precision_id_never_becomes_a_global_edit(target: str) -> None:
+    source = "OpDecorate %7 RelaxedPrecision\n"
+    with pytest.raises(ValueError, match="SPIR-V precision target"):
+        patch_engine_mod.PatchEngine._collect_spirv_precision_targets(source, [target])
+    with pytest.raises(ValueError, match="SPIR-V precision target"):
+        patch_engine_mod.PatchEngine._apply_precision_patch(source, "spirvasm", [target])

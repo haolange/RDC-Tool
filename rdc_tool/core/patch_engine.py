@@ -475,6 +475,8 @@ class PatchEngine:
                         "disassembly_target": str(disasm_target),
                         "failure_stage": "validate_source",
                         "failure_reason": "source_hash_mismatch",
+                        "replacement_attempted": False,
+                        "context_preserved": True,
                     },
                     source_before_text=source,
                     source_after_text=source,
@@ -1479,7 +1481,7 @@ class PatchEngine:
         # ---- SPIR-V assembly ----------------------------------------------
         elif "spirv" in enc or "spv" in enc:
             if variables:
-                for var in variables:
+                for var in PatchEngine._spirv_precision_ids(variables):
                     pattern = re.compile(
                         rf"^\s*OpDecorate\s+%{re.escape(var)}"
                         r"\s+RelaxedPrecision\s*$",
@@ -1515,6 +1517,21 @@ class PatchEngine:
         return modified
 
     @staticmethod
+    def _spirv_precision_ids(variables: List[str]) -> List[str]:
+        """Parse SPIR-V ID operands once for matching and applying precision edits."""
+        result: List[str] = []
+        for value in variables:
+            if not isinstance(value, str):
+                raise ValueError("SPIR-V precision target must be an ID")
+            token = value.strip()
+            if token.startswith("%"):
+                token = token[1:]
+            if not re.fullmatch(r"[A-Za-z0-9_]+", token):
+                raise ValueError("SPIR-V precision target must be a non-empty ID")
+            result.append(token)
+        return result
+
+    @staticmethod
     def _collect_spirv_precision_targets(
         source: str,
         variables: List[str],
@@ -1522,8 +1539,7 @@ class PatchEngine:
         matches: List[Tuple[int, str]] = []
         exact_token_patterns = [
             re.compile(rf"(?:%{re.escape(var)}\b|_{re.escape(var)}\b)")
-            for var in variables
-            if str(var or "").strip()
+            for var in PatchEngine._spirv_precision_ids(variables)
         ]
         for line_no, line in enumerate(source.splitlines(), start=1):
             stripped = line.strip()

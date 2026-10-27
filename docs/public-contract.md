@@ -114,3 +114,7 @@ Input/encoding rejection and local assembly failure occur before native construc
 ### Daemon startup contention
 
 A startup lock acquisition timeout returns the existing canonical JSON error envelope with `error.code=daemon_start_lock_timeout`, category `runtime`, and details `context_id`, `failed_step=daemon_start_lock`, `waiting_for` (`thread_mutex` or `file_lock`), `elapsed_seconds` and `timeout_seconds`. The default acquisition limit is 30 seconds; no new CLI option is introduced. This error does not stop the current owner, clear context state, create a replacement daemon, or imply that a replay needs recovery. Non-contention errors retain their own error path.
+
+SPIR-V precision patch targets are ID operands: `variables` accepts `%7` or the ID token `7`, parsed to the same exact operand for both match reporting and edit application. Whitespace around the operand is ignored; malformed or empty operands are rejected and never become a global edit. An explicitly empty variables array retains the documented all-decorations scope. The operation does not infer a target from a case, shader stage or variable-number prefix.
+
+`rd.shader.edit_and_replace.expected_source_hash` binds the currently bound **original** source before patching. It is distinct from the full replacement file/text hash. A mismatch is a validation rejection before compilation or replacement and carries `replacement_attempted=false` plus `context_preserved=true`; consumers retain their existing identity and no-mutation proof checks.
