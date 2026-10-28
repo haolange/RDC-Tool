@@ -74,6 +74,39 @@ function Get-RdcFileSha256 {
     finally { $stream.Dispose() }
 }
 
+function Remove-ObsoleteReleaseFiles {
+    param([string]$SourceRoot, [string]$TargetRoot)
+    $incomingPath = Join-Path $SourceRoot 'RELEASE_MANIFEST.json'
+    $previousPath = Join-Path $TargetRoot 'RELEASE_MANIFEST.json'
+    if (-not (Test-Path -LiteralPath $incomingPath) -or -not (Test-Path -LiteralPath $previousPath)) { return }
+    $incoming = Get-Content -LiteralPath $incomingPath -Raw | ConvertFrom-Json
+    $previous = Get-Content -LiteralPath $previousPath -Raw | ConvertFrom-Json
+    $current = @{}
+    foreach ($file in $incoming.files) { $current[$file.path] = $true }
+    $obsolete = @()
+    foreach ($file in $previous.files) {
+        if ($current.ContainsKey($file.path)) { continue }
+        $relative = [string]$file.path
+        if ($relative -match '(^|[\/])\.\.([\/]|$)' -or [IO.Path]::IsPathRooted($relative) -or
+            $relative -notmatch '^(bin|binaries|cli|docs|policy|rdc_tool|scripts|spec)/') {
+            throw "refusing obsolete release path: $relative"
+        }
+        $path = [IO.Path]::GetFullPath((Join-Path $TargetRoot $relative))
+        if (-not $path.StartsWith($TargetRoot.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'obsolete path escapes installation' }
+        Assert-LinkFreePath -Path $path
+        if (Test-Path -LiteralPath $path -PathType Leaf) { $obsolete += $path }
+    }
+    foreach ($path in $obsolete) {
+        Remove-Item -LiteralPath $path -Force
+        $parent = Split-Path -Parent $path
+        while ($parent -ne $TargetRoot -and @(Get-ChildItem -LiteralPath $parent -Force).Count -eq 0) {
+            Remove-Item -LiteralPath $parent -Force
+            $parent = Split-Path -Parent $parent
+        }
+        Write-Step "removed obsolete release file $path"
+    }
+}
+
 function Copy-RdcToolTools {
     param(
         [string]$SourceRoot,
@@ -93,6 +126,7 @@ function Copy-RdcToolTools {
         if ((Get-Item -LiteralPath $TargetRoot).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'installation target must not be a link' }
         if (-not (Test-Path -LiteralPath (Join-Path $TargetRoot 'cli\run_cli.py'))) { throw 'target is not an RDC-Tool installation' }
     }
+    Remove-ObsoleteReleaseFiles -SourceRoot $SourceRoot -TargetRoot $TargetRoot
     New-Item -ItemType Directory -Path $TargetRoot -Force | Out-Null
     Get-ChildItem -LiteralPath $SourceRoot -Recurse -Force | ForEach-Object {
         if ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "refusing source link: $($_.FullName)" }

@@ -1,5 +1,7 @@
 ﻿from __future__ import annotations
 
+from unittest.mock import patch
+
 import json
 import zipfile
 from pathlib import Path
@@ -333,6 +335,7 @@ def test_release_gate_rejects_stale_release_package_manifest(tmp_path: Path) -> 
         "public_commands": ["rdc-tool"],
         "entrypoints": ["bin/rdc-tool.cmd"],
         "file_count": 1,
+        "source_revision": "a" * 40,
         "files": [
             {
                 "path": "bin/rdc-tool.cmd",
@@ -344,7 +347,8 @@ def test_release_gate_rejects_stale_release_package_manifest(tmp_path: Path) -> 
     with zipfile.ZipFile(package, "w") as archive:
         archive.writestr("rdc-tool/RELEASE_MANIFEST.json", json.dumps(stale_manifest))
 
-    ok, detail = release_gate._check_package_matches_source(tmp_path, package)
+    with patch.object(release_gate.release_packager, '_source_revision', return_value='a' * 40):
+        ok, detail = release_gate._check_package_matches_source(tmp_path, package)
 
     assert not ok
     assert "stale relative to source tree" in detail
@@ -364,12 +368,36 @@ def test_release_gate_accepts_zero_byte_files_in_release_manifest(tmp_path: Path
         "public_commands": ["rdc-tool"],
         "entrypoints": ["bin/rdc-tool.cmd"],
         "file_count": 1,
+        "source_revision": "a" * 40,
         "files": [{"path": "bin/rdc-tool.cmd", "size": 0, "sha256": source_sha}],
     }
     with zipfile.ZipFile(package, "w") as archive:
         archive.writestr("rdc-tool/RELEASE_MANIFEST.json", json.dumps(manifest))
 
-    ok, detail = release_gate._check_package_matches_source(tmp_path, package)
+    with patch.object(release_gate.release_packager, '_source_revision', return_value='a' * 40):
+        ok, detail = release_gate._check_package_matches_source(tmp_path, package)
 
     assert ok
     assert "source manifest matched 1 files" in detail
+
+
+def test_release_gate_rejects_different_source_commit(tmp_path):
+    archive_path = tmp_path / 'candidate.zip'
+    with zipfile.ZipFile(archive_path, 'w') as archive:
+        archive.writestr('rdc-tool/RELEASE_MANIFEST.json', json.dumps({'source_revision': 'a' * 40, 'files': []}))
+    with patch.object(release_gate.release_packager, '_source_revision', return_value='b' * 40):
+        ok, detail = release_gate._check_package_matches_source(tmp_path, archive_path)
+    assert not ok and 'source_revision' in detail
+
+
+def test_native_runtime_manifest_uses_file_integrity_without_release_revision(tmp_path):
+    runtime = tmp_path / 'binaries/windows/x64'
+    runtime.mkdir(parents=True)
+    file = runtime / 'renderdoc.dll'
+    file.write_bytes(b'fixture runtime')
+    (runtime / 'manifest.runtime.json').write_text(json.dumps({'files': [{'path': file.name, 'size': file.stat().st_size, 'sha256': release_gate._sha256(file)}]}))
+    ok, detail = release_gate._check_manifest(tmp_path)
+    assert ok and 'validated 1 runtime files' in detail
+    file.write_bytes(b'changed')
+    ok, detail = release_gate._check_manifest(tmp_path)
+    assert not ok and 'mismatch' in detail

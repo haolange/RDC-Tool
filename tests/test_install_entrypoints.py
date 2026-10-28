@@ -92,3 +92,35 @@ def test_thin_launcher_forwards_unicode_json_cwd_and_exit(tmp_path):
         os.rmdir(junction)
     result = subprocess.run('cmd.exe /d /s /c "' + subprocess.list2cmdline([str(root/'bin/rdc-tool.cmd'), 'version']) + '"',capture_output=True,text=True,timeout=20)
     assert result.returncode == 2 and 'Python' in result.stderr
+
+
+def test_upgrade_removes_only_obsolete_manifest_files(tmp_path):
+    source, target = tmp_path / 'source', tmp_path / 'target'
+    for root in (source, target):
+        (root / 'cli').mkdir(parents=True)
+        (root / 'cli/run_cli.py').write_text('entry', encoding='utf-8')
+    old = target / 'binaries/python/rdc_tool-1.0.2.dist-info/METADATA'
+    old.parent.mkdir(parents=True)
+    old.write_text('old metadata')
+    (target / 'notes.txt').write_text('user notes')
+    (target / 'RELEASE_MANIFEST.json').write_text(json.dumps({'files': [{'path': old.relative_to(target).as_posix()}]}))
+    (source / 'RELEASE_MANIFEST.json').write_text(json.dumps({'files': [{'path': 'cli/run_cli.py'}]}))
+    result = powershell(installer_functions() + f"Copy-RdcToolTools -SourceRoot '{source}' -TargetRoot '{target}'")
+    assert result.returncode == 0, result.stderr
+    assert not old.parent.exists()
+    assert (target / 'notes.txt').read_text() == 'user notes'
+
+
+@pytest.mark.parametrize('relative', ['../keep.txt', 'rdc_tool/../keep.txt'])
+def test_upgrade_rejects_escaping_manifest_before_removal(tmp_path, relative):
+    source, target = tmp_path / 'source', tmp_path / 'target'
+    for root in (source, target):
+        (root / 'cli').mkdir(parents=True)
+        (root / 'cli/run_cli.py').write_text('entry', encoding='utf-8')
+    outside = target / 'keep.txt'
+    outside.write_text('keep')
+    (target / 'RELEASE_MANIFEST.json').write_text(json.dumps({'files': [{'path': relative}]}))
+    (source / 'RELEASE_MANIFEST.json').write_text(json.dumps({'files': []}))
+    result = powershell(installer_functions() + f"Copy-RdcToolTools -SourceRoot '{source}' -TargetRoot '{target}'")
+    assert result.returncode != 0
+    assert outside.read_text() == 'keep'

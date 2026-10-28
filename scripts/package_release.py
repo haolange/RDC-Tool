@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import zipfile
@@ -136,11 +137,20 @@ def _license_inventory(staging_root: Path) -> list[dict[str, str]]:
     return rows
 
 
-def _write_release_metadata(staging_root: Path, files: list[dict[str, object]]) -> None:
+def _source_revision(root: Path) -> str:
+    def git(*args: str) -> str:
+        return subprocess.check_output(['git', '-C', str(root), *args], text=True).strip()
+    if git('status', '--porcelain', '--untracked-files=normal'):
+        raise RuntimeError('Release packaging requires a clean source checkout')
+    return git('rev-parse', 'HEAD')
+
+
+def _write_release_metadata(staging_root: Path, files: list[dict[str, object]], revision: str) -> None:
     manifest = {
         "name": PACKAGE_PREFIX,
         "version": TOOL_VERSION,
         "platform": PACKAGE_PLATFORM,
+        "source_revision": revision,
         "public_commands": ["rdc-tool"],
         "entrypoints": ["bin/rdc-tool.cmd", "bin/rdc-tool", "cli/run_cli.py", "install.cmd"],
         "file_count": len(files),
@@ -152,6 +162,7 @@ def _write_release_metadata(staging_root: Path, files: list[dict[str, object]]) 
         "name": PACKAGE_PREFIX,
         "version": TOOL_VERSION,
         "platform": PACKAGE_PLATFORM,
+        "source_revision": revision,
         "components": licenses,
     }
     write_text(staging_root / "RELEASE_MANIFEST.json", json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
@@ -177,6 +188,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     root = _tools_root().resolve()
+    revision = _source_revision(root)
     out_dir = (root / str(args.out_dir)).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     package_name = f"{PACKAGE_PREFIX}-{TOOL_VERSION}-{PACKAGE_PLATFORM}.zip"
@@ -187,7 +199,7 @@ def main(argv: list[str] | None = None) -> int:
         staging_root = Path(staging) / PACKAGE_PREFIX
         staging_root.mkdir()
         files = _copy_release_tree(root, staging_root)
-        _write_release_metadata(staging_root, files)
+        _write_release_metadata(staging_root, files, revision)
         try:
             _zip_dir(staging_root, package_path)
         except BaseException:

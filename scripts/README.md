@@ -1,6 +1,6 @@
 ﻿# scripts
 
-`resources/tools/scripts` contains reusable smoke and release checks for the CLI-only package.
+`scripts/` contains reusable smoke and release checks for the CLI-only package.
 
 Common checks:
 
@@ -8,7 +8,8 @@ Common checks:
 python -B spec/build_catalog.py --check
 python -B scripts/check_markdown_health.py
 python -B scripts/generate_tool_reference.py --check
-python scripts/package_release.py
+python -B scripts/package_runtime.py
+python -B scripts/package_release.py
 python scripts/release_gate.py --require-smoke-reports --require-release-package
 ```
 
@@ -26,3 +27,5 @@ bash scripts/smoke_cli.sh --rdc "C:/path/sample.rdc" --context cli-smoke
 `preview_geometry_smoke.py` validates preview window geometry and should stay aligned with CLI preview behavior.
 
 `rdc_tool_install.ps1` handles install, upgrade, uninstall, and doctor for self-contained Windows x64 release packages. Upgrade compares existing files by size and SHA-256 and leaves byte-identical files untouched, including an in-use bundled Python executable. A changed file that is locked still fails the upgrade; verify the installed catalog and code after retrying. Use `-DryRun` before mutating a real machine PATH.
+
+Release packaging requires a clean committed source checkout. The release manifest and SBOM record the full `source_revision`; the gate checks this revision and every shipped source file against HEAD. Upgrade removes only files owned by the prior release manifest that no longer appear in the new manifest.

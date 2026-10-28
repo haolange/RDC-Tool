@@ -8,6 +8,7 @@ import hashlib
 import tomllib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -179,6 +180,11 @@ def _verify_release_identity(root: Path, source: Path = SCRIPT_ROOT) -> None:
     if f"## {TOOL_VERSION}" not in (root / "CHANGELOG.md").read_text(encoding="utf-8-sig"):
         raise RuntimeError("CHANGELOG missing release version")
     manifest = json.loads((root / "RELEASE_MANIFEST.json").read_text(encoding="utf-8"))
+    revision = manifest.get('source_revision', '')
+    if not isinstance(revision, str) or not re.fullmatch(r'[0-9a-f]{40}', revision):
+        raise RuntimeError('release source_revision must be a complete Git commit')
+    if sbom.get('source_revision') != revision:
+        raise RuntimeError('SBOM source_revision does not match release manifest')
     for item in manifest["files"]:
         file = (root / item["path"]).resolve()
         if not file.is_relative_to(root.resolve()) or not file.is_file():

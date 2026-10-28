@@ -39,6 +39,12 @@ Upgrade removes only this installation's former root PATH entry and two replaced
 
 RDC-Agent command must be the absolute `<installation>/binaries/windows/x64/python/python.exe`, paired with that installation's `cli/run_cli.py` as its sole argument prefix. Shell wrappers and cross-installation pairs are rejected. Saved invalid settings remain visible for manual correction; they do not silently migrate.
 
+## Release identity and upgrades
+
+正式包的 `RELEASE_MANIFEST.json` 与 `SBOM.json` 共同记录 `source_revision`；版本号、源码提交、文件哈希必须一致。打包只接受 clean Git checkout，发行门禁再次核对当前 HEAD 和完整源文件清单。安装必须从已验证的正式 ZIP 升级，不向安装目录混拷开发源码或重写发行清单。
+
+升级只移除上一份发行清单拥有、且新清单已不存在的文件；运行数据、用户配置和未声明文件保留。RDC-Agent 继续通过同安装 Python 与 CLI 获取真实版本及 catalog，不能用包版本代替能力检查。
+
 ## Source and runtime integrity
 
 Run `git lfs pull` after cloning. Both Windows and Android files under `binaries/` are replay runtime and must remain available. The self-contained release zip includes them; pip-installed RenderDoc is not a replacement. The default installation is `%LOCALAPPDATA%\Programs\rdc-tool`.

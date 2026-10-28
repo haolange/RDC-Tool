@@ -19,7 +19,7 @@ def identity_fixture(root: Path) -> Path:
         (directory / 'LICENSE').write_bytes(b'complete license fixture\n')
     (package / 'CHANGELOG.md').write_text(f'## {verify.TOOL_VERSION}\n', encoding='utf-8')
     for name in ('RELEASE_MANIFEST.json', 'SBOM.json'):
-        (package / name).write_text(json.dumps({'version': verify.TOOL_VERSION, 'files': [], 'components': [{'name': 'rdc-tool', 'version': verify.TOOL_VERSION}]}), encoding='utf-8')
+        (package / name).write_text(json.dumps({'version': verify.TOOL_VERSION, 'source_revision': 'a' * 40, 'files': [], 'components': [{'name': 'rdc-tool', 'version': verify.TOOL_VERSION}]}), encoding='utf-8')
     (package / 'pyproject.toml').write_text(f'[project]\nversion = "{verify.TOOL_VERSION}"\n', encoding='utf-8')
     metadata = package / f'binaries/windows/x64/python/Lib/site-packages/rdc_tool-{verify.TOOL_VERSION}.dist-info/METADATA'
     metadata.parent.mkdir(parents=True)
@@ -86,6 +86,7 @@ def test_metadata_version_mismatch_fails(tmp_path, filename):
 def test_staging_is_removed_on_success_and_archive_failure(tmp_path, monkeypatch):
     staging = []
     monkeypatch.setattr(package_release, '_tools_root', lambda: tmp_path)
+    monkeypatch.setattr(package_release, '_source_revision', lambda root: 'a' * 40)
     def copy(root, destination):
         staging.append(destination.parent)
         (destination / 'LICENSE').write_bytes(b'fixture')
@@ -106,6 +107,7 @@ def test_staging_is_removed_on_success_and_archive_failure(tmp_path, monkeypatch
 def test_staging_is_removed_on_copy_failure(tmp_path, monkeypatch):
     staging = []
     monkeypatch.setattr(package_release, '_tools_root', lambda: tmp_path)
+    monkeypatch.setattr(package_release, '_source_revision', lambda root: 'a' * 40)
     def fail_copy(root, destination):
         staging.append(destination.parent)
         raise RuntimeError('copy failed')
@@ -114,3 +116,40 @@ def test_staging_is_removed_on_copy_failure(tmp_path, monkeypatch):
         package_release.main([])
     assert staging and not staging[0].exists()
     assert not list((tmp_path / 'dist').glob('*.zip'))
+
+
+def test_packaging_requires_clean_commit(tmp_path):
+    import subprocess
+    subprocess.run(['git', 'init', str(tmp_path)], check=True, capture_output=True)
+    for key, value in [('user.name', 'Release test'), ('user.email', 'release@example.invalid')]:
+        subprocess.run(['git', '-C', str(tmp_path), 'config', key, value], check=True)
+    file = tmp_path / 'source.txt'
+    file.write_text('committed', encoding='utf-8')
+    subprocess.run(['git', '-C', str(tmp_path), 'add', '.'], check=True)
+    subprocess.run(['git', '-C', str(tmp_path), 'commit', '-m', 'fixture'], check=True, capture_output=True)
+    revision = package_release._source_revision(tmp_path)
+    assert len(revision) == 40
+    file.write_text('uncommitted', encoding='utf-8')
+    with pytest.raises(RuntimeError, match='clean source checkout'):
+        package_release._source_revision(tmp_path)
+
+
+@pytest.mark.parametrize('revision', ['', '1.1.0', 'a' * 39])
+def test_invalid_source_revision_is_rejected(tmp_path, revision):
+    package = identity_fixture(tmp_path)
+    path = package / 'RELEASE_MANIFEST.json'
+    manifest = json.loads(path.read_text(encoding='utf-8'))
+    manifest['source_revision'] = revision
+    path.write_text(json.dumps(manifest), encoding='utf-8')
+    with pytest.raises(RuntimeError, match='source_revision'):
+        verify._verify_release_identity(package, tmp_path / 'source')
+
+
+def test_sbom_revision_must_match_manifest(tmp_path):
+    package = identity_fixture(tmp_path)
+    path = package / 'SBOM.json'
+    payload = json.loads(path.read_text(encoding='utf-8'))
+    payload['source_revision'] = 'b' * 40
+    path.write_text(json.dumps(payload), encoding='utf-8')
+    with pytest.raises(RuntimeError, match='source_revision'):
+        verify._verify_release_identity(package, tmp_path / 'source')

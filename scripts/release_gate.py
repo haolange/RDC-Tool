@@ -487,6 +487,8 @@ def _check_package_matches_source(root: Path, package_path: Path) -> tuple[bool,
     except Exception as exc:
         return False, f"release package manifest unreadable: {exc}"
 
+    if payload.get('source_revision') != release_packager._source_revision(root):
+        return False, 'release package source_revision does not match clean source HEAD'
     files = payload.get("files")
     if not isinstance(files, list):
         return False, "release package manifest files field is missing or invalid"

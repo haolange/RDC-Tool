@@ -2,6 +2,14 @@
 
 ## 待发布 `Unreleased`
 
+## 1.1.0 — 2026-10-29
+
+- 汇总原生事件取证与远端回放能力，补齐 shader 编译、替换、设备恢复与回放证据契约。
+- Shader patch 绑定精确目标 ID 与原始源码，拒绝有歧义或来源不匹配的替换。
+- 同一 daemon context 启动串行化，锁竞争共用有界 deadline，避免重复启动和无限等待。
+- 发行包记录清洁源码提交号、完整文件哈希及一致版本的 Python distribution metadata；升级清除上一份发行清单中已替代的程序文件。
+- 修复 bash smoke 入口变量，沿用 RenderDoc 1.45 基线及同安装捆绑 Python/CLI 绑定；实际能力以 catalog 指纹和参数契约校验。
+
 ## 1.0.2 — 2026-09-23
 
 - 将 `rd.session.*` worker 操作预算统一提高到 60 秒；CLI daemon transport 继续增加 5 秒响应缓冲，门限为 65 秒。
