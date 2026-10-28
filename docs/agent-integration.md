@@ -54,3 +54,14 @@ The generated reader-facing tool list is [Tool reference](tool-reference.md). Mi
 The current assembled and verified baseline is **RenderDoc 1.45**. RDC-Tool does not track every upstream minor release: a newer runtime becomes the baseline only after matching runtime packaging, catalog checks, tests and release gates pass. RenderDoc 1.44 and earlier official GUI releases are not separate assembly targets. Use the replay path matching this bundled runtime. Capture-format compatibility follows upstream RenderDoc.
 
 RDC-Agent **0.6.x** pairs with RDC-Tool **1.0.0** and the current RenderDoc **1.45** runtime. Catalog definitions and fingerprints, not package version numbers, authorize operations. Local PNG export does not prove Android device presentation.
+
+## RDC-Agent 集成验收（2026-10-28）
+
+本次消费者实测使用 RDC-Tool 源码基线 `3c3bfff6fbaa36499c9170c81aada4142de15b6d`，冻结 catalog 指纹 `e1e6fd9158e829d7dd4422726e47189ef3ae992c965474d11b1200a327a5d110`。本轮没有修改 Tool 的操作定义、原生实现或安装，也没有制作或发布新包；本节只同步真实集成结果。
+
+- RDC-Agent 在 Android 远端同一 capture 上完成自主定位、shader 分析、一次精度许可修改及一次语义不变重建对照。两次替换均真实应用、撤销，恢复图与基线一致，恢复后替换集合为空。身份、lease、签名回执和原生审批保持生效。
+- 初次独审因冻结的 40 次工具额度耗尽返回 partial。用户随后明确批准一个仅核对三项现存材料的只读补审：回执时序、两次历史替换集合、ASM 常量；实际 34/48 次工具调用完成，没有重开回放或重跑实验。原结果、消费和期限保留，没有修改 Tool 来绕过 Harness 门禁。
+- 最终报告接受当前 capture 的局部修正、已观察区域的有限画质和真实恢复；不代表工程源码已部署、跨设备验证、驱动内部机制已证明或所有像素无损。画质属于 Agent 评审，具体候选的发色方向另有用户确认。
+- 回放由正式入口关闭，随后核验自有 daemon、worker 退出；保留用户 helper、原始 capture 和必要证据，删除隔离凭据及中间资产。`context clear` 成功仍不能代替进程退出证明。
+
+消费者实际 Main SHA-256 为 `952658f0484006186f974cc6afad4edcc95af8d2578a998b8b84f4d0cef8c64b`；最终报告 `invart-c7be1f318789-1793169763702`，内容 SHA-256 `d1437b485ffa0d850e2f7a1bbd607e625a286952340518b0ca2122dd4db8b9e3`。完整范围与验证记录见 [RDC-Agent Acceptance Ledger](https://github.com/haolange/RDC-Agent/blob/main/docs/product/acceptance-ledger.md)。这些是本次消费链路证据，不能代替 Tool 后续源码变更或发行包的验证。
