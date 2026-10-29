@@ -323,3 +323,12 @@ Non-clean second development host; source repositories and independent user data
 | F4 License correction | Historical L1–L3 | 通过 | Closed by prior publication. If downloading 1.0.0 retain both correction attachments; never claim its original ZIP was overwritten |
 | F5 Local data and runtime cutover | F1,F2 | 通过 | Same-volume roots/structured references converted once; C-drive Release bound. Capture hashes/IDs/names preserved; all 41 historical session files rechecked unchanged. Independent unregistered session preserved. Temporary Skill saved, reopened and deleted through native UI, directory absent afterward. Recovery copies removed after acceptance; no canonical QA full-access expansion |
 | F6 Verification and cleanup | F2,F3,F5 | 通过 | 21 installation tests plus 2 CSP regressions and focused engineering checks/build passed. Owned test roots/QA credentials/scripts and completed recovery copies removed; evidence and release download retained. Normal desktop close returned launcher exit 0, no owned Electron/launcher/Tool/helper/forward remains, instance.lock absent. Desktop startup ownership returned. No full-suite rerun or repack; related commits/main pushes subsequently authorized, no new release |
+
+## Android 冷启动补丁 1.1.2 发行与安装验收（2026-10-29）
+
+- 用户明确授权两库提交推送 main、补丁发行和官方升级；未创建分支。发行源 `bcb1275ed8fa5acc908e08ac328da3d581c2ff54`，稳定 latest [v1.1.2](https://github.com/haolange/RDC-Tool/releases/tag/v1.1.2)，tag 不随验收文档提交移动。
+- 清洁源码正式打包，3143 个 ZIP entries CRC、manifest/SBOM/版本/许可证与完整发行门禁通过；ZIP SHA256 `3bd5ca30c0601e91bffb3021241ba53028e9c04163aadd592bbdc39eb0bd81e1`。仅 ZIP/SHA256SUMS 两项远端资产，digest 核对一致。既有 828 测试及 2 subtests，新增发布阶段 99 项回归通过；发行源 CI success。
+- 已发布包内官方 upgrade 将本机 1.1.1 升至 1.1.2；全 3140 程序清单文件哈希一致，旧 dist-info 移除。升级前与运行后 1592 个保护文件一致（含安装内 493 个非程序文件），用户 PATH 与原 ADB server 保留。
+- 真实 Electron Agent 服务复用安装版 Python/CLI/ADB，Android 首次打开与 EID3029 设备呈现通过；owning General 冻结 catalog/CLI/lease 后导出实际最终纹理，主进程签名验证、篡改拒绝与 OS 可执行路径/进程出生身份核对通过。完整跨库事实见 RDC-Agent `docs/product/acceptance-ledger.md` 同日发行条目；无真实模型或 shader 修复声明。
+- 保留边界：末帧复制事件无普通截图输出时明确失败；一次后续重开伴随手机 RenderDoc helper Vulkan pipeline compilation SIGSEGV，人工重开成功，尚无驱动根因或完整设备稳定性矩阵结论。
+- clear context 后 stop daemon，daemon/worker 与手机自有 helper 退出；官方桌面再次启动与正常退出，canonical 锁释放。清理本轮临时提取、测试依赖、脚本/日志/QA 数据及 43 个测试链接；正式发行包与最小证据保留，用户数据保持。
