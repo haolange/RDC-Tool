@@ -100,8 +100,6 @@ class PatchConfig:
     max_patch_ops: int = 50
     auto_revert_on_crash: bool = True
     preserve_original_shaders: bool = True
-    spirv_tools_path: Optional[str] = None  # SPIRV-Tools binaries 的路径
-    dxc_path: Optional[str] = None  # DXC compiler 的路径
 
 
 @dataclass
@@ -148,8 +146,6 @@ class RdcToolConfig:
             cfg.log_level = p
         if p := os.environ.get("RDC_TOOL_GPU_VENDOR"):
             cfg.backend.gpu_vendor = p
-        if p := os.environ.get("RDC_TOOL_SPIRV_TOOLS_PATH"):
-            cfg.patch.spirv_tools_path = p
         if p := os.environ.get("RDC_TOOL_HEADLESS"):
             cfg.replay.headless = p.lower() in ("1", "true", "yes")
         if p := os.environ.get("RDC_TOOL_BISECT_CONFIDENCE_SHARPNESS"):

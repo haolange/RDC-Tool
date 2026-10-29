@@ -50,3 +50,11 @@ RDC-Agent command must be the absolute `<installation>/binaries/windows/x64/pyth
 Run `git lfs pull` after cloning. Both Windows and Android files under `binaries/` are replay runtime and must remain available. The self-contained release zip includes them; pip-installed RenderDoc is not a replacement. The default installation is `%LOCALAPPDATA%\Programs\rdc-tool`.
 
 Installation doctor rejects an outdated layout. The installer does not discover, copy or silently run a retired installation. Configure RDC-Agent with the new installation's absolute bundled Python path and its `cli/run_cli.py`.
+
+## 自包含主机工具
+
+Windows 包同时携带 Python、RenderDoc 运行库、Android arm32/arm64 helper APK、ADB 36.0.2 及其 DLL、SPIRV-Tools v2026.4 的 spirv-as/spirv-dis。正常运行不要求安装系统 Python、Android SDK、RenderDoc 或 Vulkan SDK。USB/GPU 驱动及设备调试授权属于系统与设备前置条件，不能由工具存在推断已就绪。
+
+主机工具位于 binaries/windows/x64/adb 与 binaries/windows/x64/spirv-tools；版本、上游地址、源归档哈希、构建信息和许可证位置记录于 manifest.runtime.json 的 bundled_tools。文件内容哈希纳入同一 runtime manifest 与发行清单。doctor 分别报告实际来源与捆绑文件完整性；缺少或损坏必需组件会失败，未接设备不会冒充安装损坏。
+
+高级用户可显式设置 RDC_TOOL_ANDROID_ADB_PATH（绝对可执行文件路径）、RDC_TOOL_SPIRV_TOOLS_PATH（绝对目录）；RenderDoc 的已有显式运行库覆盖保持其原契约。显式路径无效直接报错，不再从 PATH、SDK 或其他 RenderDoc 安装静默补齐。

@@ -490,7 +490,7 @@ class SessionManager:
             base_cmd.extend(["-s", device_serial])
         def remote_digest() -> str:
             result = subprocess.run(base_cmd + ["shell", "sha256sum", remote_path],
-                                    check=False, capture_output=True, text=True, timeout=30)
+                                    check=False, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30)
             if result.returncode == 0 and result.stdout.split():
                 return result.stdout.split()[0]
             # Only an explicit missing-file response permits creating a path.
@@ -505,19 +505,19 @@ class SessionManager:
                 raise RuntimeError("Remote capture cache content does not match its digest; refusing overwrite")
             return remote_path
         subprocess.run(base_cmd + ["shell", "mkdir", "-p", remote_dir],
-                       check=True, capture_output=True, text=True, timeout=30)
+                       check=True, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30)
         # Register only a path created by this connection. RenderDoc deletes it
         # when the owning connection closes, including failed/cancelled opens.
         state.remote_server.TakeOwnershipCapture(remote_path)
         try:
             subprocess.run(base_cmd + ["push", str(rdc_path), remote_path],
-                           check=True, capture_output=True, text=True, timeout=240)
+                           check=True, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=240)
             if remote_digest() != digest:
                 raise RuntimeError("Android capture transfer SHA256 verification failed")
         except BaseException as original:
             try:
                 cleanup = subprocess.run(base_cmd + ["shell", "rm", "-f", remote_path],
-                                         check=False, capture_output=True, text=True, timeout=30)
+                                         check=False, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30)
                 if cleanup.returncode:
                     raise RuntimeError(cleanup.stderr.strip() or "ADB removal failed")
             except Exception as cleanup_error:

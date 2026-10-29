@@ -32,7 +32,6 @@ def test_resolve_adb_path_uses_env_override(monkeypatch: pytest.MonkeyPatch, tmp
     adb_path.write_text("", encoding="utf-8")
 
     monkeypatch.setenv("RDC_TOOL_ANDROID_ADB_PATH", str(adb_path))
-    monkeypatch.setattr(remote_bootstrap.shutil, "which", lambda _: None)
 
     assert remote_bootstrap.resolve_adb_path() == str(adb_path.resolve())
 
@@ -403,3 +402,14 @@ def test_cancel_during_owned_launch_records_and_stops_only_created_process(monke
         remote_bootstrap._connection_budget.reset(token)
     assert commands[-1] == ('am', 'force-stop', 'helper')
     assert result.started_activity is False and result.owned_pids == []
+
+
+def test_noninteractive_adb_never_inherits_worker_protocol_stdin(monkeypatch):
+    import subprocess
+    calls = []
+    def run(argv, **kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(returncode=0, stdout="List of devices attached\n", stderr="")
+    monkeypatch.setattr(remote_bootstrap.subprocess, "run", run)
+    remote_bootstrap._run_process(["adb", "devices", "-l"])
+    assert calls[0]["stdin"] == subprocess.DEVNULL

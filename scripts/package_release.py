@@ -157,6 +157,9 @@ def _write_release_metadata(staging_root: Path, files: list[dict[str, object]], 
         "files": files,
     }
     licenses = _license_inventory(staging_root)
+    runtime_manifest = json.loads((staging_root / "binaries/windows/x64/manifest.runtime.json").read_text(encoding="utf-8"))
+    for name, tool in runtime_manifest.get("bundled_tools", {}).items():
+        licenses.append({"name": name, **tool})
     sbom = {
         "schema": "rdc-tool.sbom.v1",
         "name": PACKAGE_PREFIX,

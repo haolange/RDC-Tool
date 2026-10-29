@@ -109,7 +109,8 @@ def test_spirv_tools_use_scoped_runtime_and_cleanup(monkeypatch, tmp_path, opera
     from pathlib import Path
     root = tmp_path / "owned-runtime"
     monkeypatch.setattr(patch_engine, "cli_runtime_dir", lambda: root)
-    monkeypatch.setattr(patch_engine.shutil, "which", lambda name: name)
+    from rdc_tool import host_tools
+    monkeypatch.setattr(host_tools, "resolve_host_tool", lambda name: Path(name))
     paths = []
     def run(argv, **kwargs):
         source = Path(argv[1]); output = Path(argv[argv.index("-o") + 1])

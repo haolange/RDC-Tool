@@ -7,7 +7,6 @@ import contextvars
 import threading
 import re
 import shlex
-import shutil
 import socket
 import subprocess
 import time
@@ -59,6 +58,9 @@ def _remaining(maximum: float) -> float:
 
 
 def _run_process(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+    kwargs.setdefault("stdin", subprocess.DEVNULL)
+    if os.name == "nt":
+        kwargs.setdefault("creationflags", subprocess.CREATE_NO_WINDOW)
     budget = _connection_budget.get()
     if budget is None:
         return subprocess.run(cmd, **kwargs)
@@ -123,40 +125,12 @@ class AndroidBootstrapOptions:
 
 
 
-def _candidate_adb_paths() -> list[str]:
-    candidates: list[str] = []
-    for value in (
-        os.environ.get("RDC_TOOL_ANDROID_ADB_PATH", "").strip(),
-        os.environ.get("ADB", "").strip(),
-    ):
-        if value:
-            candidates.append(value)
-
-    for env_name in ("ANDROID_SDK_ROOT", "ANDROID_HOME"):
-        root = os.environ.get(env_name, "").strip()
-        if not root:
-            continue
-        candidates.append(str(Path(root) / "platform-tools" / "adb.exe"))
-        candidates.append(str(Path(root) / "platform-tools" / "adb"))
-
-    local_app_data = os.environ.get("LOCALAPPDATA", "").strip()
-    if local_app_data:
-        candidates.append(str(Path(local_app_data) / "Android" / "Sdk" / "platform-tools" / "adb.exe"))
-
-    return candidates
-
-
 def resolve_adb_path() -> str:
-    for candidate in _candidate_adb_paths():
-        if candidate and Path(candidate).is_file():
-            return str(Path(candidate).resolve())
-    found = shutil.which("adb")
-    if found:
-        return str(Path(found).resolve())
-    raise AndroidRemoteBootstrapError(
-        "adb_unavailable",
-        "adb executable not found. Install Android platform-tools or set RDC_TOOL_ANDROID_ADB_PATH.",
-    )
+    from rdc_tool.host_tools import resolve_host_tool, HostToolUnavailableError
+    try:
+        return str(resolve_host_tool("adb"))
+    except HostToolUnavailableError as error:
+        raise AndroidRemoteBootstrapError("adb_unavailable", str(error)) from error
 
 
 def _run_subprocess(

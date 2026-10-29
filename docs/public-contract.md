@@ -118,3 +118,7 @@ A startup lock acquisition timeout returns the existing canonical JSON error env
 SPIR-V precision patch targets are ID operands: `variables` accepts `%7` or the ID token `7`, parsed to the same exact operand for both match reporting and edit application. Whitespace around the operand is ignored; malformed or empty operands are rejected and never become a global edit. An explicitly empty variables array retains the documented all-decorations scope. The operation does not infer a target from a case, shader stage or variable-number prefix.
 
 `rd.shader.edit_and_replace.expected_source_hash` binds the currently bound **original** source before patching. It is distinct from the full replacement file/text hash. A mismatch is a validation rejection before compilation or replacement and carries `replacement_attempted=false` plus `context_preserved=true`; consumers retain their existing identity and no-mutation proof checks.
+
+## Bundled host tools
+
+Windows installations own ADB and its required DLLs, spirv-as and spirv-dis. Default resolution is installation-relative and never searches PATH or an external SDK. Explicit RDC_TOOL_ANDROID_ADB_PATH and RDC_TOOL_SPIRV_TOOLS_PATH overrides remain supported and fail clearly when invalid. All Android bootstrap and capture-transfer paths use the same resolver. doctor reports host_tools with actual path/source/availability and rejects missing or corrupt bundled payloads. No connected Android device is required for a healthy installation.

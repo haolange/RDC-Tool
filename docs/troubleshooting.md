@@ -75,3 +75,7 @@ If SaveTexture reports DataNotAvailable after an idle period, inspect the first 
 ## Concurrent daemon startup
 
 `daemon_start_lock_timeout` means this caller could not acquire the context startup lock within 30 seconds. Another caller may still be checking or starting that daemon. Inspect the reported context and waiting stage, let the existing startup finish, then retry the same context. Do not delete `.start.lock`, clear context state or stop a live owner to bypass this wait. The timeout is distinct from daemon readiness and operation-response timeouts; it does not prove the existing owner failed.
+
+## Android 列表为空与主机工具缺失
+
+先运行 doctor，区分安装依赖缺失、ADB server 查询失败、合法空设备列表和设备 unauthorized/offline。修复安装内 ADB 或清除错误的显式覆盖后重试；不要求连接前清空设备进程，不按进程名结束其他用户服务。Agent 菜单提供状态与刷新，展开期间自动检测热插拔；关闭菜单停止检测。正常默认路径不依赖外部 SDK/PATH。

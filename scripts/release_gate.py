@@ -284,6 +284,12 @@ def _check_manifest(root: Path) -> tuple[bool, str]:
     return True, f"validated {len(files)} runtime files"
 
 
+def _check_bundled_host_tools() -> tuple[bool, str]:
+    from rdc_tool.host_tools import validate_bundled_host_tools
+    ok, failures = validate_bundled_host_tools()
+    return ok, "; ".join(failures) if failures else "bundled ADB and SPIR-V tools verified"
+
+
 def _check_bundled_python() -> tuple[bool, str]:
     ok, failures, details = validate_bundled_python_layout()
     if ok:
@@ -573,6 +579,7 @@ def _run_gate(argv: list[str] | None = None) -> tuple[list[tuple[str, bool, str]
 
     ok_manifest, msg_manifest = _check_manifest(root)
     results.append(("manifest:integrity", ok_manifest, msg_manifest))
+    results.append(("manifest:bundled-host-tools", *_check_bundled_host_tools()))
     ok_bundled_python, bundled_python_detail = _check_bundled_python()
     results.append(("manifest:bundled-python", ok_bundled_python, bundled_python_detail))
 

@@ -10,3 +10,6 @@
 # manifest, so platform line-ending conversion must never rewrite them.
 binaries/windows/x64/python/** -text
 binaries/windows/x64/pymodules/** -text
+
+binaries/windows/x64/adb/** -text
+binaries/windows/x64/spirv-tools/** -text

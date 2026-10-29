@@ -9,7 +9,6 @@ import json
 import logging
 import os
 import re
-import shutil
 import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -32,6 +31,7 @@ from rdc_tool.io_utils import safe_json_text, safe_stream_write
 from rdc_tool.python_runtime import current_python_runtime_details, validate_bundled_python_layout
 from rdc_tool.runtime_catalog import load_tool_catalog, tool_catalog_path, catalog_payload, describe_operation
 from rdc_tool.runtime_paths import (
+    android_binaries_root,
     artifacts_dir,
     binaries_root,
     bundled_python_executable,
@@ -425,6 +425,10 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         if not path.is_file()
     ]
 
+    android_failures = [str(android_binaries_root() / abi / f"org.renderdoc.renderdoccmd.{abi}.apk")
+                        for abi in ("arm32", "arm64")
+                        if not (android_binaries_root() / abi / f"org.renderdoc.renderdoccmd.{abi}.apk").is_file()]
+
     catalog_error = ""
     catalog_count = 0
     try:
@@ -450,8 +454,11 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         "posix_shell": str(root / "bin" / "rdc-tool"),
         "python_cli": str(root / "cli" / "run_cli.py"),
     }
-    spirv_as = shutil.which("spirv-as") or shutil.which("spirv-as.exe")
-    spirv_dis = shutil.which("spirv-dis") or shutil.which("spirv-dis.exe")
+    from rdc_tool.host_tools import host_tools_status, validate_bundled_host_tools
+    host_tools = host_tools_status()
+    host_tools_ok, host_tool_failures = validate_bundled_host_tools()
+    spirv_as = host_tools["spirv_as"]["path"]
+    spirv_dis = host_tools["spirv_dis"]["path"]
     details = {
         "product": "rdc-tool",
         "tools_root": str(root),
@@ -474,6 +481,9 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
             "renderdoc_json": str(renderdoc_json),
             "renderdoc_pyd": str(renderdoc_pyd),
         },
+        "android_apk_failures": android_failures,
+        "host_tools": host_tools,
+        "host_tools_failures": host_tool_failures,
         "shader_tools": {
             "spirv_as": {
                 "available": bool(spirv_as),
@@ -512,6 +522,9 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     ok = (
         not dependencies_missing
         and python_ok
+        and not android_failures
+        and host_tools_ok
+        and all(item["available"] for item in host_tools.values())
         and not renderdoc_failures
         and not catalog_error
         and (root / "bin/rdc-tool.cmd").is_file()

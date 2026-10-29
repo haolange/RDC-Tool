@@ -37,6 +37,7 @@ def test_package_release_builds_self_contained_zip(tmp_path: Path, monkeypatch) 
         "binaries/windows/x64/manifest.runtime.json",
     ):
         _write(root / rel)
+    _write(root / "binaries/windows/x64/manifest.runtime.json", "{}")
     _write(root / "intermediate/logs/secret.log", "must not ship\n")
     _write(root / "tests/fixtures/sample.rdc", "fixture must not ship\n")
     _write(root / "docs/sample.rdc", "rdc suffix must not ship\n")

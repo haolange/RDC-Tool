@@ -1,5 +1,5 @@
 {
-  "file_count": 2962,
+  "file_count": 2971,
   "files": [
     {
       "path": "d3dcompiler_47.dll",
@@ -11187,32 +11187,32 @@
       "sha256": "ee4e96732e7cf222587b995fe4ad3de4d2e0faea014e713e4fc78727dd86e3fe"
     },
     {
-      "path": "python/Lib/site-packages/rdc_tool-1.1.0.dist-info/entry_points.txt",
+      "path": "python/Lib/site-packages/rdc_tool-1.1.1.dist-info/entry_points.txt",
       "size": 47,
       "sha256": "2720680c99ec405e86f241519dee9fc6c4d53791a51e40a5d9cccbebf3fd339b"
     },
     {
-      "path": "python/Lib/site-packages/rdc_tool-1.1.0.dist-info/INSTALLER",
+      "path": "python/Lib/site-packages/rdc_tool-1.1.1.dist-info/INSTALLER",
       "size": 17,
       "sha256": "51365a5cdacc8aeb2d13f6cdd78ea872a335ff02436e3de3eb286f68a2379b7d"
     },
     {
-      "path": "python/Lib/site-packages/rdc_tool-1.1.0.dist-info/METADATA",
+      "path": "python/Lib/site-packages/rdc_tool-1.1.1.dist-info/METADATA",
       "size": 313,
-      "sha256": "1027f2b6a98ead60202291658769409f6cc5ae7962337410aefd4db8764863ca"
+      "sha256": "97c2a3810f808e80f13dda7b1980b329f02cc96ac11ff1a012877f2195ac63c7"
     },
     {
-      "path": "python/Lib/site-packages/rdc_tool-1.1.0.dist-info/RECORD",
+      "path": "python/Lib/site-packages/rdc_tool-1.1.1.dist-info/RECORD",
       "size": 485,
-      "sha256": "c762f8119a899ae42cd2f38351cd9b416d30d7e374487759b5255e9b08244e22"
+      "sha256": "7657b1c6d2534d7136ae196bc21e4be026df109d45f1ec95c4b264ce41c9b2cf"
     },
     {
-      "path": "python/Lib/site-packages/rdc_tool-1.1.0.dist-info/top_level.txt",
+      "path": "python/Lib/site-packages/rdc_tool-1.1.1.dist-info/top_level.txt",
       "size": 9,
       "sha256": "efff3c2c8328c68e5b94f4e3698c5467e4bfa9c2644221bbab900e6d374a797a"
     },
     {
-      "path": "python/Lib/site-packages/rdc_tool-1.1.0.dist-info/WHEEL",
+      "path": "python/Lib/site-packages/rdc_tool-1.1.1.dist-info/WHEEL",
       "size": 97,
       "sha256": "463175fe3af4c31caf91a5c8fa35f9163d3b2586f93311450718453bf2217f7c"
     },
@@ -14810,6 +14810,51 @@
       "path": "symsrv.dll",
       "size": 127944,
       "sha256": "1d91eab8b40e70c7db6d53d3b15d50bf0784f113307307395302333003b63d98"
+    },
+    {
+      "path": "adb/AdbWinApi.dll",
+      "size": 108184,
+      "sha256": "a00cf631dd12c82561ffccefdb1a99a27c527253b04f06ca8fc1bb86ba2148c4"
+    },
+    {
+      "path": "adb/AdbWinUsbApi.dll",
+      "size": 73368,
+      "sha256": "e4d72d5ba3bf4b027f1b7a3781aae0b04712c1a52244bea277fb57dd75a85702"
+    },
+    {
+      "path": "adb/NOTICE.txt",
+      "size": 1161702,
+      "sha256": "bfedfb7b22c5d204baecbccfbb9a6de6e848ef19f9318088f15769bfbf4b8f79"
+    },
+    {
+      "path": "adb/adb.exe",
+      "size": 7741592,
+      "sha256": "56656270da132f44e9cb4fb86a12ba965635c80423d43dcdd944d9fec4ab4622"
+    },
+    {
+      "path": "adb/source.properties",
+      "size": 38,
+      "sha256": "6f16c7815ee0a1b820ca24c8fdad8e26f07da492b22c2b370c6db136425a2136"
+    },
+    {
+      "path": "spirv-tools/LICENSE.txt",
+      "size": 11358,
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    {
+      "path": "spirv-tools/SPIRV-Headers-LICENSE.txt",
+      "size": 23503,
+      "sha256": "ea43b1de38a6f90c488800d66dec1ed671e68cda530266bc96951fb5b6307613"
+    },
+    {
+      "path": "spirv-tools/spirv-as.exe",
+      "size": 757760,
+      "sha256": "e45c343f10b4616e6398042b2b92edfbad0c3695e6872890c9fe186c849afa2c"
+    },
+    {
+      "path": "spirv-tools/spirv-dis.exe",
+      "size": 708096,
+      "sha256": "24b9a63e529050f76c999e2fdef59b3be26195137e9236dad71beee2a8b73b8b"
     }
   ],
   "bundled_python": {
@@ -14822,5 +14867,37 @@
     "site_packages": "python/Lib/site-packages",
     "dll_dir": "python/DLLs",
     "pth_file": "python/python314._pth"
+  },
+  "bundled_tools": {
+    "adb": {
+      "version": "36.0.2",
+      "source_url": "https://dl.google.com/android/repository/platform-tools_r36.0.2-win.zip",
+      "source_sha256": "b024d4f319d6ad3004de1ba7b96a5c7c5f3512e8b14126308d598b4ab93dcead",
+      "license": "LicenseRef-Android-Platform-Tools-NOTICE",
+      "license_path": "binaries/windows/x64/adb/NOTICE.txt",
+      "path": "adb/adb.exe"
+    },
+    "spirv_as": {
+      "version": "v2026.4",
+      "source_url": "https://github.com/KhronosGroup/SPIRV-Tools/archive/refs/tags/v2026.4.zip",
+      "source_sha256": "c2399673510cfaa515e9197db18c2ae5860925f497ad8735c93f00f931c41cbd",
+      "headers_revision": "496543121ce6419f23d6fa5d7194ba66c36212d2",
+      "headers_source_sha256": "b33782a6ccd124e6e02634f6382456b0aba2242c6ec5b68d07be20ee77a5b6bc",
+      "license": "Apache-2.0 AND MIT",
+      "license_path": "binaries/windows/x64/spirv-tools/LICENSE.txt",
+      "build": "MSVC 19.51.36257 x64 Release static CRT; CMake Ninja; SPIRV_SKIP_TESTS=ON",
+      "path": "spirv-tools/spirv-as.exe"
+    },
+    "spirv_dis": {
+      "version": "v2026.4",
+      "source_url": "https://github.com/KhronosGroup/SPIRV-Tools/archive/refs/tags/v2026.4.zip",
+      "source_sha256": "c2399673510cfaa515e9197db18c2ae5860925f497ad8735c93f00f931c41cbd",
+      "headers_revision": "496543121ce6419f23d6fa5d7194ba66c36212d2",
+      "headers_source_sha256": "b33782a6ccd124e6e02634f6382456b0aba2242c6ec5b68d07be20ee77a5b6bc",
+      "license": "Apache-2.0 AND MIT",
+      "license_path": "binaries/windows/x64/spirv-tools/LICENSE.txt",
+      "build": "MSVC 19.51.36257 x64 Release static CRT; CMake Ninja; SPIRV_SKIP_TESTS=ON",
+      "path": "spirv-tools/spirv-dis.exe"
+    }
   }
 }

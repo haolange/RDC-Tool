@@ -90,6 +90,9 @@ def test_staging_is_removed_on_success_and_archive_failure(tmp_path, monkeypatch
     def copy(root, destination):
         staging.append(destination.parent)
         (destination / 'LICENSE').write_bytes(b'fixture')
+        runtime = destination / 'binaries/windows/x64/manifest.runtime.json'
+        runtime.parent.mkdir(parents=True)
+        runtime.write_text('{}')
         return []
     monkeypatch.setattr(package_release, '_copy_release_tree', copy)
     assert package_release.main(['--out-dir', 'success']) == 0

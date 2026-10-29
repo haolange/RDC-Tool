@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import shutil
 import re
 import subprocess
 import time
@@ -1762,9 +1761,8 @@ class PatchEngine:
                 payload = raw_bytes.tobytes()
             except Exception:
                 return ""
-        tool = shutil.which("spirv-dis") or shutil.which("spirv-dis.exe")
-        if not tool:
-            return ""
+        from rdc_tool.host_tools import resolve_host_tool
+        tool = str(resolve_host_tool("spirv_dis"))
         runtime_dir = cli_runtime_dir() / "patch_engine"
         runtime_dir.mkdir(parents=True, exist_ok=True)
         stem = f"spirv_{uuid.uuid4().hex[:10]}"
@@ -1913,11 +1911,8 @@ class PatchEngine:
 
     @staticmethod
     def _assemble_spirv_asm(source: str) -> bytes:
-        tool = shutil.which("spirv-as") or shutil.which("spirv-as.exe")
-        if not tool:
-            raise RuntimeError(
-                "Raw SPIR-V ASM replacement requires spirv-as when the replay backend only accepts SPIRV binary encoding"
-            )
+        from rdc_tool.host_tools import resolve_host_tool
+        tool = str(resolve_host_tool("spirv_as"))
         runtime_dir = cli_runtime_dir() / "patch_engine"
         runtime_dir.mkdir(parents=True, exist_ok=True)
         stem = f"spirv_asm_{uuid.uuid4().hex[:10]}"

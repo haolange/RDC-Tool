@@ -119,3 +119,19 @@ def test_package_runtime_rejects_site_packages_source_inside_output_tree(tmp_pat
     )
 
     assert code == 1
+
+
+def test_runtime_regeneration_keeps_bundled_host_files_and_provenance(tmp_path, monkeypatch):
+    tools_root = tmp_path / "tools"
+    out_root = tools_root / "binaries/windows/x64"
+    metadata = {"adb": {"version": "fixture", "source_url": "https://example.test/source", "license": "fixture"}}
+    for relative in package_runtime.BUNDLED_HOST_FILES:
+        _write(out_root / relative, b"host-tool")
+    _write(out_root / "unrelated/cache.bin", b"excluded")
+    _write(out_root / "manifest.runtime.json", json.dumps({"bundled_tools": metadata}))
+    monkeypatch.setattr(package_runtime, "_tools_root", lambda: tools_root)
+    assert package_runtime.main([]) == 0
+    manifest = json.loads((out_root / "manifest.runtime.json").read_text(encoding="utf-8"))
+    assert manifest["bundled_tools"] == metadata
+    assert {entry["path"] for entry in manifest["files"]} == set(package_runtime.BUNDLED_HOST_FILES)
+    assert manifest["file_count"] == len(package_runtime.BUNDLED_HOST_FILES)

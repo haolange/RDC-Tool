@@ -16,6 +16,7 @@ SCRIPT_ROOT = Path(__file__).resolve().parents[1]
 if str(SCRIPT_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPT_ROOT))
 
+from rdc_tool.host_tools import BUNDLED_HOST_FILES
 from rdc_tool.runtime_requirements import should_bundle_site_package
 from scripts.distribution_metadata import write_distribution_metadata
 from scripts._shared import ensure_within_root, resolve_repo_path, tools_root, write_text
@@ -255,6 +256,9 @@ def _iter_manifest_files(out_root: Path) -> Iterable[Path]:
             continue
         if path.suffix.lower() in DENY_SUFFIXES:
             continue
+        if rel in BUNDLED_HOST_FILES:
+            yield path
+            continue
         if rel.startswith("python/"):
             yield path
             continue
@@ -348,6 +352,10 @@ def main(argv: list[str] | None = None) -> int:
     if bundled_python:
         manifest["bundled_python"] = bundled_python
     manifest_path = out_root / "manifest.runtime.json"
+    if manifest_path.is_file():
+        previous = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if "bundled_tools" in previous:
+            manifest["bundled_tools"] = previous["bundled_tools"]
     write_text(manifest_path, json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
     print(f"[pack] wrote {manifest_path} with {len(manifest_entries)} files")
     return 0

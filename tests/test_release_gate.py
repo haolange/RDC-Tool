@@ -44,7 +44,8 @@ def _write_smoke_log(root: Path, *, passed: bool = True) -> None:
     path.write_text(marker + "\n", encoding="utf-8")
 
 
-def _mock_release_gate_basics(monkeypatch, root: Path) -> None:  # type: ignore[no-untyped-def]
+def _mock_release_gate_basics(monkeypatch, root: Path) -> None:
+    monkeypatch.setattr(release_gate, "_check_bundled_host_tools", lambda: (True, "fixture host tools"))  # type: ignore[no-untyped-def]
     monkeypatch.setattr(release_gate, "_tools_root", lambda: root)
     monkeypatch.setattr(release_gate, "_run", lambda cmd, cwd, **kwargs: (True, "ok"))
     monkeypatch.setattr(release_gate, "_run_public_command", lambda args, cwd: (True, "usage: rdc-tool"))
@@ -401,3 +402,11 @@ def test_native_runtime_manifest_uses_file_integrity_without_release_revision(tm
     file.write_bytes(b'changed')
     ok, detail = release_gate._check_manifest(tmp_path)
     assert not ok and 'mismatch' in detail
+
+
+def test_release_gate_rejects_missing_host_tools(monkeypatch, tmp_path):
+    _prepare_root(tmp_path)
+    _mock_release_gate_basics(monkeypatch, tmp_path)
+    monkeypatch.setattr(release_gate, "_rg_no_match", lambda pattern, cwd: (True, ""))
+    monkeypatch.setattr(release_gate, "_check_bundled_host_tools", lambda: (False, "missing adb"))
+    assert release_gate.main(["--report", "intermediate/logs/gate.md"]) == 1
