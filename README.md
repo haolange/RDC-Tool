@@ -16,7 +16,7 @@ Source checkouts require Git LFS and `git lfs pull`. `binaries/windows` and `bin
 
 ## Entry Points
 
-The current release is **1.1.1**. It includes native replay evidence, remote replay and shader safety corrections, bounded daemon startup contention, and source-revision release provenance. For RDC-Agent, select the extracted `rdc-tool` folder in Settings → Tools; standalone installation and PATH changes are optional.
+The current release is **1.1.2**. It includes bounded Android cold-start preparation, validation of the selected device state, a self-contained toolchain, and source-revision release provenance. For RDC-Agent, select the extracted `rdc-tool` folder in Settings → Tools; standalone installation and PATH changes are optional.
 
 ```bat
 rdc-tool --version
@@ -92,4 +92,4 @@ Double-click `install.cmd` for installation; run `rdc-tool` from the installed `
 
 The current assembled and verified baseline is **RenderDoc 1.45**. RDC-Tool does not track every upstream minor release: a newer runtime becomes the baseline only after matching runtime packaging, catalog checks, tests and release gates pass. RenderDoc 1.44 and earlier official GUI releases are not separate assembly targets. Use the replay path matching this bundled runtime. Capture-format compatibility follows upstream RenderDoc.
 
-RDC-Agent **0.6.x** currently ships alongside RDC-Tool **1.1.1** and the current RenderDoc **1.45** runtime. Catalog definitions and fingerprints, not package version numbers, authorize operations. Local PNG export does not prove Android device presentation.
+RDC-Agent **0.6.x** currently ships alongside RDC-Tool **1.1.2** and the current RenderDoc **1.45** runtime. Catalog definitions and fingerprints, not package version numbers, authorize operations. Local PNG export does not prove Android device presentation.

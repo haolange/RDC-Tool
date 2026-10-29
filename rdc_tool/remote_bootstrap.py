@@ -60,7 +60,7 @@ def _remaining(maximum: float) -> float:
 def _run_process(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
     kwargs.setdefault("stdin", subprocess.DEVNULL)
     if os.name == "nt":
-        kwargs.setdefault("creationflags", subprocess.CREATE_NO_WINDOW)
+        kwargs.setdefault("creationflags", subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP)
     budget = _connection_budget.get()
     if budget is None:
         return subprocess.run(cmd, **kwargs)
@@ -492,13 +492,28 @@ def _bootstrap_android_remote(
 ) -> AndroidBootstrapResult:
     opts = options or AndroidBootstrapOptions()
     adb_path = resolve_adb_path()
-    device_proc = _run_subprocess(
-        [adb_path, "devices", "-l"],
-        timeout_s=10.0,
-        error_code="adb_devices_failed",
-        error_message="Failed to query adb devices",
+    _run_subprocess(
+        [adb_path, "start-server"], timeout_s=10.0,
+        error_code="adb_server_start_failed", error_message="Failed to start adb server",
     )
-    device = choose_adb_device(parse_adb_devices(device_proc.stdout), opts.device_serial)
+    requested_serial = str(opts.device_serial or "").strip()
+    if requested_serial:
+        state = _run_subprocess(
+            [adb_path, "-s", requested_serial, "get-state"], timeout_s=10.0,
+            error_code="adb_device_query_failed", error_message="Failed to query selected Android device",
+        ).stdout.strip()
+        if not re.fullmatch(r"[a-z][a-z_-]{0,31}", state):
+            raise AndroidRemoteBootstrapError("adb_device_invalid_response", "Selected Android device query returned an invalid state",
+                details={"stage": "adb_device_state", "command": [adb_path, "-s", requested_serial, "get-state"], "state": state[:96]})
+        device = choose_adb_device([AdbDevice(requested_serial, state)], requested_serial)
+    else:
+        device_proc = _run_subprocess(
+            [adb_path, "devices", "-l"], timeout_s=10.0,
+            error_code="adb_devices_failed", error_message="Failed to query adb devices",
+        )
+        if not device_proc.stdout.lstrip().startswith("List of devices attached"):
+            raise AndroidRemoteBootstrapError("adb_devices_invalid_response", "ADB device query returned an invalid response")
+        device = choose_adb_device(parse_adb_devices(device_proc.stdout))
     arch, abi = detect_device_arch(adb_path, device.serial)
     running = {helper: _package_pids(adb_path, device.serial, helper) for helper in _PACKAGE_MAP.values()}
     borrowed = any(running.values())

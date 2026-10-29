@@ -79,3 +79,14 @@ If SaveTexture reports DataNotAvailable after an idle period, inspect the first 
 ## Android 列表为空与主机工具缺失
 
 先运行 doctor，区分安装依赖缺失、ADB server 查询失败、合法空设备列表和设备 unauthorized/offline。修复安装内 ADB 或清除错误的显式覆盖后重试；不要求连接前清空设备进程，不按进程名结束其他用户服务。Agent 菜单提供状态与刷新，展开期间自动检测热插拔；关闭菜单停止检测。正常默认路径不依赖外部 SDK/PATH。
+
+
+## Windows Android 首次连接与隐藏进程
+
+Android bootstrap 的 ADB 子进程统一使用 detached process 与显式 stdio；不使用 CREATE_NO_WINDOW 或隐藏的新控制台。某些 Windows 环境下 ADB 会以退出码 0 返回空输出，导致误判设备不存在；连接和清理共用同一个启动边界，仍保留超时、取消、kill/join 和资源归属校验，不通过反复查询掩盖错误。
+
+选择设备不会启动 helper。实际 rd.remote.connect 在所属 context 中按查询、已有服务复用或自有 helper 启动、就绪探测、forward 与握手推进。设备列表非空不等于服务已就绪；失败按原生错误码定位阶段。复用用户服务不取得停止、重装或改配置的权限；关闭先 clear context 再 stop 自有 daemon。
+
+Android bootstrap 在同一连接 deadline/cancel scope 内先显式确保所选 ADB server 就绪，再查询设备状态、准备 helper/socket、forward 与握手。已有明确 serial 时只执行该设备的 `get-state` 并要求 `device`，不重新枚举或自动选择其它设备；仅未指定 serial 的独立 CLI 调用枚举并严格校验设备列表响应头。退出码为零但缺少设备列表响应头属于 `adb_devices_invalid_response`，不能冒充无设备；server 启动失败为 `adb_server_start_failed`，不继续创建 helper。正常空设备列表仍按设备状态报告，不做隐藏重试或切换 ADB 来源。
+
+已选设备的空/异常状态响应报告 `adb_device_invalid_response`；offline、unauthorized、bootloader 等非回放状态拒绝 helper 准备。设备查询本身失败保留 ADB 原始错误原因，不解析错误文案来假定授权状态。

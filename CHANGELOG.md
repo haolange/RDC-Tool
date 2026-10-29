@@ -2,6 +2,12 @@
 
 ## 待发布 `Unreleased`
 
+## 1.1.2 — 2026-10-29
+
+- 修复 Windows 后台 worker 的 Android 冷启动：使用同安装 ADB 有界启动 server，显式设备按冻结 serial 查询 get-state，仅在 device 状态继续准备。
+- 未指定 serial 时保留明确枚举并校验响应；空响应与未授权、离线分别失败，不静默切换设备、不增加隐藏重试。
+- ADB 子进程在 Windows 使用分离进程组，继续复用连接 deadline、取消和退出回收；不改变 helper 归属、catalog 或用户数据边界。
+
 ## 1.1.1 — 2026-10-29
 
 - Windows 安装自包含 ADB 36.0.2、所需 DLL 与 SPIRV-Tools v2026.4 汇编/反汇编程序，固定来源、哈希与许可证并写入 SBOM。

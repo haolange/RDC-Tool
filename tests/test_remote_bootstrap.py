@@ -413,3 +413,94 @@ def test_noninteractive_adb_never_inherits_worker_protocol_stdin(monkeypatch):
     monkeypatch.setattr(remote_bootstrap.subprocess, "run", run)
     remote_bootstrap._run_process(["adb", "devices", "-l"])
     assert calls[0]["stdin"] == subprocess.DEVNULL
+
+
+@pytest.mark.skipif(remote_bootstrap.os.name != "nt", reason="Windows ADB process creation")
+@pytest.mark.parametrize("with_budget", [False, True])
+def test_adb_uses_detached_stdio_without_hidden_console(monkeypatch, with_budget):
+    captured = []
+    def check(cmd, **kwargs):
+        captured.append(kwargs)
+        return SimpleNamespace(returncode=0, stdout="List of devices attached\nserial device\n", stderr="")
+    class Process:
+        returncode = 0
+        def __init__(self, cmd, **kwargs):
+            check(cmd, **kwargs)
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def communicate(self, **kwargs): return "List of devices attached\nserial device\n", ""
+    monkeypatch.setattr(remote_bootstrap.subprocess, "run", check)
+    monkeypatch.setattr(remote_bootstrap.subprocess, "Popen", Process)
+    token = remote_bootstrap._connection_budget.set(remote_bootstrap.ConnectionBudget(1000) if with_budget else None)
+    try:
+        result = remote_bootstrap._run_process(["adb", "devices", "-l"], capture_output=True, text=True, timeout=1)
+    finally:
+        remote_bootstrap._connection_budget.reset(token)
+    assert "serial device" in result.stdout
+    assert captured[0]["creationflags"] == (remote_bootstrap.subprocess.DETACHED_PROCESS | remote_bootstrap.subprocess.CREATE_NEW_PROCESS_GROUP)
+    assert not captured[0]["creationflags"] & remote_bootstrap.subprocess.CREATE_NO_WINDOW
+    assert captured[0]["stdin"] == remote_bootstrap.subprocess.DEVNULL
+
+
+
+@pytest.mark.parametrize("output,code", [
+    ("", "adb_devices_invalid_response"),
+    ("unexpected output", "adb_devices_invalid_response"),
+    ("List of devices attached\n\n", "adb_no_device"),
+])
+def test_bootstrap_ensures_server_once_and_distinguishes_query_failure_from_absence(monkeypatch, output, code):
+    calls = []
+    monkeypatch.setattr(remote_bootstrap, "resolve_adb_path", lambda: "owned-adb")
+    def run(cmd, **kwargs):
+        assert remote_bootstrap._connection_budget.get() is not None
+        calls.append(cmd)
+        return SimpleNamespace(returncode=0, stdout=output if "devices" in cmd else "", stderr="")
+    monkeypatch.setattr(remote_bootstrap, "_run_subprocess", run)
+    monkeypatch.setattr(remote_bootstrap, "detect_device_arch", lambda *a: pytest.fail("helper preparation before valid device"))
+    with pytest.raises(remote_bootstrap.AndroidRemoteBootstrapError) as error:
+        remote_bootstrap.bootstrap_android_remote()
+    assert error.value.code == code
+    assert calls == [["owned-adb", "start-server"], ["owned-adb", "devices", "-l"]]
+    assert remote_bootstrap._connection_budget.get() is None
+
+
+def test_bootstrap_server_failure_never_queries_or_prepares_device(monkeypatch):
+    calls = []
+    monkeypatch.setattr(remote_bootstrap, "resolve_adb_path", lambda: "owned-adb")
+    def run(cmd, **kwargs):
+        calls.append(cmd)
+        raise remote_bootstrap.AndroidRemoteBootstrapError(kwargs["error_code"], "server unavailable")
+    monkeypatch.setattr(remote_bootstrap, "_run_subprocess", run)
+    with pytest.raises(remote_bootstrap.AndroidRemoteBootstrapError) as error:
+        remote_bootstrap.bootstrap_android_remote()
+    assert error.value.code == "adb_server_start_failed"
+    assert calls == [["owned-adb", "start-server"]]
+
+
+
+@pytest.mark.parametrize("state", ["device", "offline", "unauthorized", "bootloader", "recovery", "", "device\nunknown"])
+def test_selected_device_queries_only_its_frozen_serial_before_helper_preparation(monkeypatch, state):
+    calls = []
+    monkeypatch.setattr(remote_bootstrap, "resolve_adb_path", lambda: "owned-adb")
+    def run(cmd, **kwargs):
+        assert remote_bootstrap._connection_budget.get() is not None
+        calls.append(cmd)
+        return SimpleNamespace(returncode=0, stdout=state if "get-state" in cmd else "", stderr="")
+    monkeypatch.setattr(remote_bootstrap, "_run_subprocess", run)
+    arch = []
+    monkeypatch.setattr(remote_bootstrap, "detect_device_arch", lambda adb, serial: arch.append(serial) or ("arm64", "arm64-v8a"))
+    monkeypatch.setattr(remote_bootstrap, "_package_pids", lambda *args: [42])
+    monkeypatch.setattr(remote_bootstrap, "allocate_local_port", lambda _: 38960)
+    monkeypatch.setattr(remote_bootstrap, "_prepare_android_service", lambda result, *args: result)
+    options = remote_bootstrap.AndroidBootstrapOptions(device_serial=" serial ")
+    if state == "device":
+        result = remote_bootstrap.bootstrap_android_remote(options=options)
+        assert result.device_serial == "serial"
+        assert arch == ["serial"]
+    else:
+        with pytest.raises(remote_bootstrap.AndroidRemoteBootstrapError) as error:
+            remote_bootstrap.bootstrap_android_remote(options=options)
+        assert error.value.code == ("adb_device_invalid_response" if not state or "\n" in state else "adb_device_unavailable")
+        assert arch == []
+    assert calls == [["owned-adb", "start-server"], ["owned-adb", "-s", "serial", "get-state"]]
+    assert remote_bootstrap._connection_budget.get() is None
