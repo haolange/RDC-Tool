@@ -389,7 +389,7 @@ def test_get_context_defers_remote_session_recovery(monkeypatch: pytest.MonkeyPa
                         "ownership_state": "session_owned",
                         "device_serial": "e38b8019",
                         "requested": {"host": "127.0.0.1", "port": 38920},
-                        "options": {"install_apk": True, "push_config": True, "local_port": 62417, "remote_port": 38920},
+                        "options": {"repair_policy": "auto_safe", "push_config": True, "local_port": 62417, "remote_port": 38920},
                         "bootstrap": {"remote_port": 38920},
                     },
                 }
@@ -552,7 +552,7 @@ def test_session_resume_restores_persisted_remote_session_and_metadata(
                         "device_serial": "e38b8019",
                         "requested": {"host": "127.0.0.1", "port": 38920},
                         "options": {
-                            "install_apk": True,
+                            "repair_policy": "auto_safe",
                             "push_config": True,
                             "local_port": 62417,
                             "remote_port": 38920,
@@ -742,7 +742,7 @@ def test_context_snapshot_preserves_remote_session_recovery_metadata(tmp_path: P
                         "device_serial": "e38b8019",
                         "requested": {"host": "127.0.0.1", "port": 38920},
                         "options": {
-                            "install_apk": True,
+                            "repair_policy": "auto_safe",
                             "push_config": True,
                             "local_port": 62417,
                             "remote_port": 38920,

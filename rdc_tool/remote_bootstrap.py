@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import os
+import hashlib
+import json
+import struct
+import zipfile
 import contextvars
 import threading
 import re
@@ -12,9 +16,12 @@ import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from rdc_tool.runtime_paths import android_binaries_root, runtime_root
+from rdc_tool.android_apk_identity import read_apk_identity
+from rdc_tool.android_install_state import parse_active_install_sessions
+from rdc_tool.timeout_policy import DEFAULT_DAEMON_REQUEST_TIMEOUT_S
 
 DEFAULT_ANDROID_REMOTE_PORT = 38920
 DEFAULT_ANDROID_TIMEOUT_MS = 120000
@@ -60,7 +67,9 @@ def _remaining(maximum: float) -> float:
 def _run_process(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
     kwargs.setdefault("stdin", subprocess.DEVNULL)
     if os.name == "nt":
-        kwargs.setdefault("creationflags", subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP)
+        # Inherit the worker's hidden console. ADB can silently lose captured
+        # output under DETACHED_PROCESS or CREATE_NO_WINDOW on Windows.
+        kwargs.setdefault("creationflags", subprocess.CREATE_NEW_PROCESS_GROUP)
     budget = _connection_budget.get()
     if budget is None:
         return subprocess.run(cmd, **kwargs)
@@ -113,13 +122,21 @@ class AndroidBootstrapResult:
     install_reason: str = ""
     uninstalled_existing: bool = False
     cleanup_actions: list[str] = field(default_factory=list)
+    stage: str = "checking"
+    expected_version: str = ""
+    apk_sha256: str = ""
+    installed_identity: str = ""
+    service_identity: list[str] = field(default_factory=list)
 
 
 @dataclass
 class AndroidBootstrapOptions:
     device_serial: str = ""
     local_port: int = 0
-    install_apk: bool = True
+    repair_policy: str = "auto_safe"
+    repair_confirmation: Optional[dict[str, str]] = None
+    expected_version: str = ""
+    progress: Optional[Callable[[str], None]] = None
     push_config: bool = True
 
 
@@ -169,42 +186,209 @@ def _run_subprocess(
     return proc
 
 
-def _ensure_android_helper_installed(adb_path: str, device_serial: str, package_name: str, apk_path: str, result: AndroidBootstrapResult) -> None:
-    probe = _adb_shell(
-        adb_path, device_serial, "pm", "list", "packages", package_name,
-        timeout_s=15.0, error_code="android_package_probe_failed",
-        error_message="Failed to determine whether the Android helper is installed",
-    )
+def _helper_snapshot(result: AndroidBootstrapResult) -> dict[str, object]:
+    """Observe identities without mutating the existing package or service."""
+    probe = _adb_shell(result.adb_path, result.device_serial, "dumpsys", "package", result.package_name,
+        timeout_s=15.0, error_code="android_package_probe_failed", error_message="Failed to inspect Android helper identity")
+    text = str(probe.stdout or "")
+    if str(probe.stderr or "").strip():
+        raise AndroidRemoteBootstrapError("android_package_probe_failed", "Android helper identity is unavailable")
+    version = re.search(r"(?m)^\s*versionName=(\S+)", text)
+    code = re.search(r"(?m)^\s*versionCode=(\d+)", text)
+    # Hash immutable installed package facts, not timestamps or process counters.
+    facts = re.findall(r"(?m)^\s*(?:versionCode|versionName|codePath|firstInstallTime|lastUpdateTime|signatures|apkSigningVersion)=[^\r\n]+", text)
+    installed = hashlib.sha256("\n".join(line.strip() for line in facts).encode()).hexdigest() if facts else ""
+    identities: list[str] = []
+    for pid in _package_pids(result.adb_path, result.device_serial, result.package_name):
+        stat = _adb_shell(result.adb_path, result.device_serial, "cat", f"/proc/{pid}/stat",
+            timeout_s=10.0, error_code="android_helper_state_unknown", error_message="Failed to verify Android helper process identity")
+        fields = str(stat.stdout or "").rsplit(")", 1)
+        tail = fields[1].split() if len(fields) == 2 else []
+        if len(tail) < 20 or not tail[19].isdigit():
+            raise AndroidRemoteBootstrapError("android_helper_state_unknown", "Android helper process birth identity is unavailable")
+        identities.append(f"{pid}:{tail[19]}")
+    if not result.apk_path:
+        arch = next(key for key, name in _PACKAGE_MAP.items() if name == result.package_name)
+        _, target_path = select_android_package(arch)
+        result.apk_path = str(target_path)
+    apk = Path(result.apk_path)
+    if not apk.is_file():
+        raise AndroidRemoteBootstrapError("android_apk_missing", "Matching Android RenderDoc helper APK is missing", details={"apk_path": str(apk)})
+    try:
+        target = read_apk_identity(str(apk))
+    except (ValueError, OSError, KeyError, IndexError, zipfile.BadZipFile, struct.error) as exc:
+        raise AndroidRemoteBootstrapError("android_apk_invalid", "Matching Android helper APK identity is invalid") from exc
+    if target["package_name"] != result.package_name:
+        raise AndroidRemoteBootstrapError("android_apk_invalid", "APK package identity does not match selected helper")
+    return {"package_name": result.package_name, "device_serial": result.device_serial,
+        "apk_sha256": target["apk_sha256"], "target_version_code": target["version_code"],
+        "installed_version_code": int(code.group(1)) if code else None, "installed_identity": installed,
+        "service_identity": identities, "expected_version": result.expected_version,
+        "actual_version": version.group(1) if version else ""}
+
+
+def _repair_assessment(result: AndroidBootstrapResult, actions: list[str]) -> dict[str, object]:
+    facts = _helper_snapshot(result)
+    payload = {**facts, "actions": actions}
+    payload["fingerprint"] = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    return payload
+
+
+def _require_repair_confirmation(result: AndroidBootstrapResult, opts: AndroidBootstrapOptions, actions: list[str]) -> dict[str, object]:
+    assessment = _repair_assessment(result, actions)
+    if not assessment["installed_identity"]:
+        raise AndroidRemoteBootstrapError("android_package_probe_failed", "Cannot authorize repair without installed package identity")
+    provided = (opts.repair_confirmation or {}).get("fingerprint")
+    if opts.repair_policy != "confirmed" or not provided:
+        raise AndroidRemoteBootstrapError("remote_repair_required", "Android helper repair requires confirmation", details={"remote": {
+            "stage": "checking", "code": "remote_repair_required", "device_serial": result.device_serial,
+            "expected_version": result.expected_version, "actual_version": assessment["actual_version"], "repair": assessment}})
+    if provided != assessment["fingerprint"]:
+        raise AndroidRemoteBootstrapError("remote_repair_state_changed", "Android helper state changed; inspect the new repair assessment", details={"remote": {
+            "stage": "checking", "code": "remote_repair_state_changed", "device_serial": result.device_serial, "repair": assessment}})
+    return assessment
+
+
+def _device_install_action(result: AndroidBootstrapResult, sessions: list[dict[str, object]], observation: str) -> dict[str, object]:
+    return {"kind": "android_install", "state": "unconfirmed", "device_serial": result.device_serial,
+        "package_name": result.package_name, "apk_sha256": result.apk_sha256, "sessions": sessions, "observation": observation}
+
+
+def _inspect_android_install_state(result: AndroidBootstrapResult) -> dict[str, object]:
+    try:
+        probe = _adb_shell(result.adb_path, result.device_serial, "dumpsys", "package", "installs",
+            timeout_s=15.0, error_code="android_install_state_unknown", error_message="Failed to inspect PackageManager active installs")
+        if str(probe.stderr or "").strip():
+            raise ValueError("PackageManager returned diagnostic output")
+        active = parse_active_install_sessions(probe.stdout)
+    except (AndroidRemoteBootstrapError, ValueError) as error:
+        if isinstance(error, AndroidRemoteBootstrapError) and error.code in {"remote_connect_cancelled", "remote_connect_timeout"}:
+            raise
+        return {"installation_state": "unknown", "observation": "unreadable", "sessions": [], "diagnostic": str(error)[:4096]}
+    blocking = [session for session in active if session["package_name"] in (None, result.package_name)]
+    return {"installation_state": "pending" if blocking else "clear", "observation": "pending" if blocking else "verified", "sessions": blocking}
+
+
+def _preflight_android_install(result: AndroidBootstrapResult) -> None:
+    observed = _inspect_android_install_state(result)
+    if observed["installation_state"] != "clear":
+        details = {"device_action": _device_install_action(result, observed["sessions"], str(observed["observation"]))}
+        if "diagnostic" in observed:
+            details["diagnostic"] = observed["diagnostic"]
+        raise AndroidRemoteBootstrapError("remote_install_unconfirmed", "Device PackageManager installation outcome is unresolved; no mutation was started", details=details)
+
+
+def _read_android_helper_apk(result: AndroidBootstrapResult) -> dict[str, object]:
+    if not Path(result.apk_path).is_file():
+        raise AndroidRemoteBootstrapError("android_apk_missing", f"Missing Android RenderDocCmd APK: {result.apk_path}")
+    try:
+        target = read_apk_identity(result.apk_path)
+    except (ValueError, OSError, KeyError, IndexError, zipfile.BadZipFile, struct.error) as error:
+        raise AndroidRemoteBootstrapError("android_apk_invalid", "Android helper APK identity is invalid") from error
+    if target["package_name"] != result.package_name:
+        raise AndroidRemoteBootstrapError("android_apk_invalid", "APK package identity does not match requested helper")
+    result.apk_sha256 = str(target["apk_sha256"])
+    return target
+
+
+def _install_android_helper(result: AndroidBootstrapResult, opts: AndroidBootstrapOptions, *, update: bool = False, downgrade: bool = False) -> None:
+    _read_android_helper_apk(result)
+    _preflight_android_install(result)
+    result.stage = "installing"
+    if opts.progress: opts.progress("installing")
+    command = _adb_base_cmd(result.adb_path, result.device_serial) + ["install"]
+    if update: command.append("-r")
+    if downgrade: command.append("-d")
+    command += ["-g", "--force-queryable", result.apk_path]
+    # PackageManager commit is joined even if cancellation arrives. Record a
+    # successful installation before observing the cancelled intent.
+    timeout = _remaining(180.0)
+    token = _connection_budget.set(None)
+    try:
+        proc = _run_process(command, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, check=False)
+    except subprocess.TimeoutExpired as error:
+        # The ADB client has joined, but PackageManager may still own a sealed
+        # device-side session. Never claim rollback or device-side completion.
+        stdout = error.stdout.decode("utf-8", errors="replace") if isinstance(error.stdout, bytes) else str(error.stdout or "")
+        stderr = error.stderr.decode("utf-8", errors="replace") if isinstance(error.stderr, bytes) else str(error.stderr or "")
+        raise AndroidRemoteBootstrapError("android_apk_install_timeout",
+            "Android helper installation deadline expired; device PackageManager completion is unconfirmed",
+            details={"command": command, "timeout_seconds": timeout, "stdout": stdout[:4096], "stderr": stderr[:4096],
+                "device_action": _device_install_action(result, [], "unreadable")}) from error
+    finally:
+        _connection_budget.reset(token)
+    if proc.returncode != 0 or not re.search(r"(?m)^Success\s*$", str(proc.stdout or "")):
+        diagnostic = str(proc.stderr or proc.stdout or "").strip()
+        if "INSTALL_FAILED_UPDATE_INCOMPATIBLE" in diagnostic and update:
+            _require_repair_confirmation(result, opts, ["reinstall_helper"])
+            # Confirmation for a different action cannot authorize uninstall.
+            _preflight_android_install(result)
+            _remaining(1.0)
+            token = _connection_budget.set(None)
+            try:
+                removed = _adb_shell(result.adb_path, result.device_serial, "pm", "uninstall", result.package_name,
+                    timeout_s=30.0, error_code="android_apk_uninstall_failed", error_message="Failed to remove confirmed conflicting helper")
+            finally:
+                _connection_budget.reset(token)
+            if str(removed.stdout or "").strip() != "Success":
+                raise AndroidRemoteBootstrapError("android_apk_uninstall_failed", "PackageManager did not confirm helper removal")
+            result.uninstalled_existing = True
+            _remaining(1.0)
+            _install_android_helper(result, AndroidBootstrapOptions(expected_version=opts.expected_version, progress=opts.progress))
+            result.install_mode = "force_replace"
+            return
+        if "INSTALL_FAILED_VERSION_DOWNGRADE" in diagnostic and update and not downgrade:
+            _require_repair_confirmation(result, opts, ["downgrade_helper"])
+            _install_android_helper(result, opts, update=True, downgrade=True)
+            return
+        raise AndroidRemoteBootstrapError("android_apk_install_failed", f"Failed to install Android helper: {diagnostic or 'command failed'}", details={"returncode": proc.returncode})
+    result.installed_apk = True
+    result.install_mode = "update" if update else "install"
+    result.install_reason = "incompatible_helper" if update else "missing_helper"
+    result.cleanup_actions.append("apk-installed")
+    _remaining(1.0)
+
+
+def _ensure_android_helper_installed(result: AndroidBootstrapResult, opts: AndroidBootstrapOptions) -> None:
+    adb_path, device_serial, package_name = result.adb_path, result.device_serial, result.package_name
+    probe = _adb_shell(adb_path, device_serial, "pm", "list", "packages", package_name,
+        timeout_s=15.0, error_code="android_package_probe_failed", error_message="Failed to determine whether the Android helper is installed")
     packages = [line.strip() for line in probe.stdout.splitlines() if line.strip()]
     if getattr(probe, "stderr", "").strip() or any(re.fullmatch(r"package:[A-Za-z0-9_.]+", line) is None for line in packages):
-        raise AndroidRemoteBootstrapError(
-            "android_package_probe_failed", "Android package query returned an unknown state",
-            details={"package_name": package_name},
-        )
-    if f"package:{package_name}" in packages:
-        result.install_mode = "existing"
-        result.install_reason = "installed_helper_preserved"
+        raise AndroidRemoteBootstrapError("android_package_probe_failed", "Android package query returned an unknown state")
+    if f"package:{package_name}" not in packages:
+        _install_android_helper(result, opts)
         return
+    result.install_mode, result.install_reason = "existing", "installed_helper_preserved"
+    if not result.expected_version:
+        return
+    facts = _helper_snapshot(result)
+    result.installed_identity, result.apk_sha256 = str(facts["installed_identity"]), str(facts["apk_sha256"])
+    installed, expected = facts["installed_version_code"], facts["target_version_code"]
+    if installed is None or installed == expected:
+        return  # Native handshake remains the authority, not versionName.
+    if facts["service_identity"]:
+        _require_repair_confirmation(result, opts, ["restart_helper"])
+    if installed > expected:
+        _require_repair_confirmation(result, opts, ["downgrade_helper"])
+    _install_android_helper(result, opts, update=True, downgrade=installed > expected)
 
-    if not Path(apk_path).is_file():
-        raise AndroidRemoteBootstrapError(
-            "android_apk_missing", f"Missing Android RenderDocCmd APK: {apk_path}",
-            details={"apk_path": str(apk_path)},
-        )
-    command = _adb_base_cmd(adb_path, device_serial) + ["install", "-g", "--force-queryable", str(apk_path)]
-    proc = _run_process(command, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                        timeout=180.0, check=False)
-    if proc.returncode != 0:
-        stderr = (proc.stderr or proc.stdout or "").strip()
-        raise AndroidRemoteBootstrapError(
-            "android_apk_install_failed",
-            f"Failed to install RenderDocCmd APK {Path(apk_path).name}: {stderr or 'command failed'}",
-            details={"command": command, "returncode": proc.returncode},
-        )
-    result.installed_apk = True
-    result.install_mode = "install"
-    result.install_reason = "missing_helper"
-    result.cleanup_actions.append("apk-installed")
+
+def repair_incompatible_android_helper(result: AndroidBootstrapResult, opts: AndroidBootstrapOptions) -> None:
+    """Repair only after native incompatibility; never used for a busy server."""
+    if not result.started_activity:
+        _require_repair_confirmation(result, opts, ["restart_helper"])
+        confirmed = _repair_assessment(result, ["restart_helper"])
+        if confirmed["fingerprint"] != (opts.repair_confirmation or {}).get("fingerprint"):
+            raise AndroidRemoteBootstrapError("remote_repair_state_changed", "Helper state changed before restart")
+        _adb_shell(result.adb_path, result.device_serial, "am", "force-stop", result.package_name,
+            timeout_s=15.0, error_code="android_remote_stop_failed", error_message="Failed to stop confirmed helper")
+    errors = cleanup_android_remote(result)
+    if errors:
+        raise AndroidRemoteBootstrapError("android_cleanup_failed", "Could not release helper before repair", details={"cleanup_errors": errors})
+    if _package_pids(result.adb_path, result.device_serial, result.package_name):
+        raise AndroidRemoteBootstrapError("remote_repair_state_changed", "Helper restarted before repair")
+    _install_android_helper(result, opts, update=True)
 
 
 def _adb_base_cmd(adb_path: str, device_serial: str = "") -> list[str]:
@@ -474,6 +658,52 @@ def _select_remote_socket_port(requested_port: int, before_ports: list[int], aft
     )
 
 
+def _select_android_device(adb_path: str, requested_serial: str) -> AdbDevice:
+    requested_serial = str(requested_serial or "").strip()
+    if requested_serial:
+        command = [adb_path, "-s", requested_serial, "get-state"]
+        probe = _run_subprocess(command, timeout_s=10.0,
+            error_code="adb_device_query_failed", error_message="Failed to query selected Android device")
+        state = probe.stdout.strip()
+        if not re.fullmatch(r"[a-z][a-z_-]{0,31}", state):
+            raise AndroidRemoteBootstrapError("adb_device_invalid_response", "Selected Android device query returned an invalid state",
+                details={"stage": "adb_device_state", "command": command, "returncode": probe.returncode,
+                    "stdout": str(probe.stdout or "")[:4096], "stderr": str(probe.stderr or "")[:4096]})
+        device = choose_adb_device([AdbDevice(requested_serial, state)], requested_serial)
+    else:
+        command = [adb_path, "devices", "-l"]
+        device_proc = _run_subprocess(command, timeout_s=10.0,
+            error_code="adb_devices_failed", error_message="Failed to query adb devices")
+        if not device_proc.stdout.lstrip().startswith("List of devices attached"):
+            raise AndroidRemoteBootstrapError("adb_devices_invalid_response", "ADB device query returned an invalid response",
+                details={"stage": "adb_device_state", "command": command, "returncode": device_proc.returncode,
+                    "stdout": str(device_proc.stdout or "")[:4096], "stderr": str(device_proc.stderr or "")[:4096]})
+        device = choose_adb_device(parse_adb_devices(device_proc.stdout))
+    return device
+
+
+def inspect_android_installation(device_serial: str) -> dict[str, object]:
+    """Inspect only: no APK install, helper start, forward, connection or abandon."""
+    if not device_serial or any(char.isspace() for char in device_serial):
+        raise AndroidRemoteBootstrapError("adb_device_serial_invalid", "Installation inspection requires an exact device serial")
+    token = None
+    if _connection_budget.get() is None:
+        token = _connection_budget.set(ConnectionBudget(int(DEFAULT_DAEMON_REQUEST_TIMEOUT_S * 1000)))
+    try:
+        adb_path = resolve_adb_path()
+        device = _select_android_device(adb_path, device_serial)
+        arch, abi = detect_device_arch(adb_path, device.serial)
+        package, apk = select_android_package(arch)
+        result = AndroidBootstrapResult(adb_path, device.serial, package, "", abi, "127.0.0.1", 0,
+            DEFAULT_ANDROID_REMOTE_PORT, str(apk), "")
+        _read_android_helper_apk(result)
+        return {"device_serial": result.device_serial, "package_name": result.package_name,
+            "apk_sha256": result.apk_sha256, **_inspect_android_install_state(result)}
+    finally:
+        if token is not None:
+            _connection_budget.reset(token)
+
+
 def bootstrap_android_remote(*, remote_port: int = DEFAULT_ANDROID_REMOTE_PORT, options: Optional[AndroidBootstrapOptions] = None) -> AndroidBootstrapResult:
     token = None
     if _connection_budget.get() is None:
@@ -496,24 +726,7 @@ def _bootstrap_android_remote(
         [adb_path, "start-server"], timeout_s=10.0,
         error_code="adb_server_start_failed", error_message="Failed to start adb server",
     )
-    requested_serial = str(opts.device_serial or "").strip()
-    if requested_serial:
-        state = _run_subprocess(
-            [adb_path, "-s", requested_serial, "get-state"], timeout_s=10.0,
-            error_code="adb_device_query_failed", error_message="Failed to query selected Android device",
-        ).stdout.strip()
-        if not re.fullmatch(r"[a-z][a-z_-]{0,31}", state):
-            raise AndroidRemoteBootstrapError("adb_device_invalid_response", "Selected Android device query returned an invalid state",
-                details={"stage": "adb_device_state", "command": [adb_path, "-s", requested_serial, "get-state"], "state": state[:96]})
-        device = choose_adb_device([AdbDevice(requested_serial, state)], requested_serial)
-    else:
-        device_proc = _run_subprocess(
-            [adb_path, "devices", "-l"], timeout_s=10.0,
-            error_code="adb_devices_failed", error_message="Failed to query adb devices",
-        )
-        if not device_proc.stdout.lstrip().startswith("List of devices attached"):
-            raise AndroidRemoteBootstrapError("adb_devices_invalid_response", "ADB device query returned an invalid response")
-        device = choose_adb_device(parse_adb_devices(device_proc.stdout))
+    device = _select_android_device(adb_path, opts.device_serial)
     arch, abi = detect_device_arch(adb_path, device.serial)
     running = {helper: _package_pids(adb_path, device.serial, helper) for helper in _PACKAGE_MAP.values()}
     borrowed = any(running.values())
@@ -536,7 +749,9 @@ def _bootstrap_android_remote(
         remote_port=int(remote_port),
         apk_path=str(apk_path),
         forward_spec=forward_spec,
+        expected_version=opts.expected_version,
     )
+    if opts.progress: opts.progress("checking")
     return _prepare_android_service(result, opts, borrowed, activity_component)
 
 
@@ -549,6 +764,9 @@ def _prepare_android_service(result: AndroidBootstrapResult, opts: AndroidBootst
             errors = cleanup_android_remote(result)
         finally:
             _connection_budget.reset(token)
+        if isinstance(exc, AndroidRemoteBootstrapError):
+            exc.details.setdefault("remote", {"stage": result.stage, "code": exc.code, "device_serial": result.device_serial})
+            exc.details["installation"] = {"installed_apk": result.installed_apk, "uninstalled_existing": result.uninstalled_existing, "install_mode": result.install_mode}
         if errors:
             if isinstance(exc, AndroidRemoteBootstrapError):
                 exc.details["cleanup_errors"] = errors
@@ -558,19 +776,21 @@ def _prepare_android_service(result: AndroidBootstrapResult, opts: AndroidBootst
 
 
 def _prepare_android_service_steps(result: AndroidBootstrapResult, opts: AndroidBootstrapOptions, borrowed: bool, activity_component: str) -> AndroidBootstrapResult:
-    adb_path, package_name, apk_path = result.adb_path, result.package_name, result.apk_path
+    adb_path, package_name = result.adb_path, result.package_name
     device = AdbDevice(serial=result.device_serial, state="device", detail="")
     remote_port, forward_spec = result.remote_port, result.forward_spec
     existing_socket_ports = _list_renderdoc_socket_ports(adb_path, device.serial)
 
     if not borrowed:
-        if opts.install_apk:
-            _ensure_android_helper_installed(adb_path, device.serial, package_name, str(apk_path), result)
+        if not result.installed_apk:
+            _ensure_android_helper_installed(result, opts)
 
         if opts.push_config and result.installed_apk:
             _ensure_renderdoc_conf(result)
 
 
+        result.stage = "starting"
+        if opts.progress: opts.progress("starting")
         launch_error: AndroidRemoteBootstrapError | None = None
         try:
             _adb_shell(
@@ -766,6 +986,8 @@ def describe_android_remote(result: AndroidBootstrapResult) -> dict[str, object]
         "install_reason": result.install_reason,
         "uninstalled_existing": result.uninstalled_existing,
         "cleanup_actions": list(result.cleanup_actions),
+        "expected_version": result.expected_version,
+        "apk_sha256": result.apk_sha256,
     }
 
 

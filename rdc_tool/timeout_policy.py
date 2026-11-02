@@ -8,6 +8,9 @@ from typing import Any
 REMOTE_CONNECT_DEFAULT_TIMEOUT_MS = 200000
 REMOTE_CONNECT_DAEMON_BUFFER_S = 90.0
 DAEMON_RESPONSE_BUFFER_S = 5.0
+REMOTE_CONNECT_WORKER_GRACE_S = REMOTE_CONNECT_DAEMON_BUFFER_S - DAEMON_RESPONSE_BUFFER_S
+REMOTE_CONNECT_TRANSPORT_GRACE_S = DAEMON_RESPONSE_BUFFER_S
+REMOTE_CONNECT_PROCESS_GRACE_S = DAEMON_RESPONSE_BUFFER_S
 REMOTE_OPEN_REPLAY_TIMEOUT_S = 200.0
 LOCAL_OPEN_FILE_TIMEOUT_S = 120.0
 LOCAL_OPEN_REPLAY_TIMEOUT_S = 120.0
@@ -51,6 +54,14 @@ def _coerce_timeout_ms(value: Any, default: int) -> int:
     return parsed if parsed > 0 else int(default)
 
 
+def remote_connect_timeout_policy() -> dict[str, Any]:
+    """Public operation metadata, derived from the runtime's only timeout policy."""
+    return {"argument": "timeout_ms", "default_timeout_ms": REMOTE_CONNECT_DEFAULT_TIMEOUT_MS,
+        "worker_grace_ms": int(REMOTE_CONNECT_WORKER_GRACE_S * 1000),
+        "transport_grace_ms": int(REMOTE_CONNECT_TRANSPORT_GRACE_S * 1000),
+        "process_grace_ms": int(REMOTE_CONNECT_PROCESS_GRACE_S * 1000)}
+
+
 def remote_connect_timeout_ms(args: dict[str, Any] | None) -> int:
     payload = args if isinstance(args, dict) else {}
     return _coerce_timeout_ms(payload.get("timeout_ms"), REMOTE_CONNECT_DEFAULT_TIMEOUT_MS)
@@ -90,7 +101,7 @@ def operation_timeout_s(operation: str, args: dict[str, Any] | None) -> float:
 def transport_timeout_s(operation: str, args: dict[str, Any] | None) -> float:
     base = operation_timeout_s(operation, args)
     if operation == "rd.remote.connect":
-        return base + REMOTE_CONNECT_DAEMON_BUFFER_S
+        return worker_exec_timeout_s(operation, args) + REMOTE_CONNECT_TRANSPORT_GRACE_S
     return base + DAEMON_RESPONSE_BUFFER_S
 
 
@@ -99,7 +110,8 @@ def daemon_exec_timeout_s(operation: str, args: dict[str, Any] | None) -> float:
 
 
 def worker_exec_timeout_s(operation: str, args: dict[str, Any] | None) -> float:
-    return operation_timeout_s(operation, args)
+    native = operation_timeout_s(operation, args)
+    return native + REMOTE_CONNECT_WORKER_GRACE_S if operation == "rd.remote.connect" else native
 
 
 def harness_timeout_s(operation: str, args: dict[str, Any] | None) -> float:

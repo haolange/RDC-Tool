@@ -82,7 +82,7 @@ def test_install_helper_preserves_existing_apk(monkeypatch: pytest.MonkeyPatch) 
     result = AndroidBootstrapResult(adb_path="adb", device_serial="serial-1", package_name="org.renderdoc.renderdoccmd.arm64",
         activity_name="helper.Loader", abi="arm64-v8a", host="127.0.0.1", port=38960, remote_port=38920,
         apk_path="apk", forward_spec="tcp:38960")
-    remote_bootstrap._ensure_android_helper_installed("adb", "serial-1", result.package_name, "apk", result)
+    remote_bootstrap._ensure_android_helper_installed(result, remote_bootstrap.AndroidBootstrapOptions())
     assert result.installed_apk is False
     assert result.install_mode == "existing"
     assert result.uninstalled_existing is False
@@ -93,8 +93,11 @@ def test_install_helper_reports_failure_without_destructive_retry(monkeypatch: p
     commands = []
     apk = tmp_path / "helper.apk"
     apk.write_bytes(b"fixture")
+    monkeypatch.setattr(remote_bootstrap, "read_apk_identity", lambda _: {"package_name": "org.renderdoc.renderdoccmd.arm64", "version_code": 145, "apk_sha256": "a" * 64})
     def fake_run(cmd, **kwargs):
         commands.append(cmd)
+        if cmd[-3:] == ["dumpsys", "package", "installs"]:
+            return SimpleNamespace(returncode=0, stdout="Active install sessions:\n", stderr="")
         if "shell" in cmd:
             return SimpleNamespace(returncode=0, stdout="", stderr="")
         return SimpleNamespace(returncode=1, stdout="", stderr="INSTALL_FAILED_VERSION_DOWNGRADE")
@@ -103,7 +106,7 @@ def test_install_helper_reports_failure_without_destructive_retry(monkeypatch: p
         activity_name="helper.Loader", abi="arm64-v8a", host="127.0.0.1", port=38960, remote_port=38920,
         apk_path=str(apk), forward_spec="tcp:38960")
     with pytest.raises(remote_bootstrap.AndroidRemoteBootstrapError) as excinfo:
-        remote_bootstrap._ensure_android_helper_installed("adb", "serial-1", result.package_name, str(apk), result)
+        remote_bootstrap._ensure_android_helper_installed(result, remote_bootstrap.AndroidBootstrapOptions())
     assert excinfo.value.code == "android_apk_install_failed"
     assert result.uninstalled_existing is False
     assert not any("uninstall" in cmd or "-r" in cmd for cmd in commands)
@@ -385,6 +388,7 @@ def test_cancel_during_owned_launch_records_and_stops_only_created_process(monke
     budget = remote_bootstrap.ConnectionBudget(10000)
     commands = []
     monkeypatch.setattr(remote_bootstrap, '_list_renderdoc_socket_ports', lambda *a: [])
+    monkeypatch.setattr(remote_bootstrap, '_ensure_android_helper_installed', lambda *a: None)
     monkeypatch.setattr(remote_bootstrap, '_package_pids', lambda *a: [321])
     def shell(adb, serial, *args, **kwargs):
         commands.append(args)
@@ -396,7 +400,7 @@ def test_cancel_during_owned_launch_records_and_stops_only_created_process(monke
     token = remote_bootstrap._connection_budget.set(budget)
     try:
         with pytest.raises(remote_bootstrap.AndroidRemoteBootstrapError) as error:
-            remote_bootstrap._prepare_android_service(result, remote_bootstrap.AndroidBootstrapOptions(install_apk=False, push_config=False), False, 'helper/.Loader')
+            remote_bootstrap._prepare_android_service(result, remote_bootstrap.AndroidBootstrapOptions(push_config=False), False, 'helper/.Loader')
         assert error.value.code == 'remote_connect_cancelled'
     finally:
         remote_bootstrap._connection_budget.reset(token)
@@ -417,7 +421,7 @@ def test_noninteractive_adb_never_inherits_worker_protocol_stdin(monkeypatch):
 
 @pytest.mark.skipif(remote_bootstrap.os.name != "nt", reason="Windows ADB process creation")
 @pytest.mark.parametrize("with_budget", [False, True])
-def test_adb_uses_detached_stdio_without_hidden_console(monkeypatch, with_budget):
+def test_adb_uses_hidden_child_preserving_captured_stdio(monkeypatch, with_budget):
     captured = []
     def check(cmd, **kwargs):
         captured.append(kwargs)
@@ -437,8 +441,8 @@ def test_adb_uses_detached_stdio_without_hidden_console(monkeypatch, with_budget
     finally:
         remote_bootstrap._connection_budget.reset(token)
     assert "serial device" in result.stdout
-    assert captured[0]["creationflags"] == (remote_bootstrap.subprocess.DETACHED_PROCESS | remote_bootstrap.subprocess.CREATE_NEW_PROCESS_GROUP)
-    assert not captured[0]["creationflags"] & remote_bootstrap.subprocess.CREATE_NO_WINDOW
+    assert captured[0]["creationflags"] == remote_bootstrap.subprocess.CREATE_NEW_PROCESS_GROUP
+    assert not captured[0]["creationflags"] & (remote_bootstrap.subprocess.DETACHED_PROCESS | remote_bootstrap.subprocess.CREATE_NO_WINDOW)
     assert captured[0]["stdin"] == remote_bootstrap.subprocess.DEVNULL
 
 
@@ -501,6 +505,11 @@ def test_selected_device_queries_only_its_frozen_serial_before_helper_preparatio
         with pytest.raises(remote_bootstrap.AndroidRemoteBootstrapError) as error:
             remote_bootstrap.bootstrap_android_remote(options=options)
         assert error.value.code == ("adb_device_invalid_response" if not state or "\n" in state else "adb_device_unavailable")
+        if error.value.code == "adb_device_invalid_response":
+            assert error.value.details["command"] == ["owned-adb", "-s", "serial", "get-state"]
+            assert error.value.details["returncode"] == 0
+            assert error.value.details["stdout"] == state
+            assert error.value.details["stderr"] == ""
         assert arch == []
     assert calls == [["owned-adb", "start-server"], ["owned-adb", "-s", "serial", "get-state"]]
     assert remote_bootstrap._connection_budget.get() is None

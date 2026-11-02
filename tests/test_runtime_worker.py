@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 
+from rdc_tool import server
 from rdc_tool.daemon import worker as daemon_worker
 
 
@@ -65,6 +66,7 @@ def test_worker_uses_source_runtime_directly(tmp_path: Path, monkeypatch) -> Non
     def _fake_popen(cmd, **kwargs):  # type: ignore[no-untyped-def]
         captured["cmd"] = cmd
         captured["env"] = kwargs["env"]
+        captured["kwargs"] = kwargs
         return _FakeProcess()
 
     monkeypatch.setattr(daemon_worker.subprocess, "Popen", _fake_popen)
@@ -79,6 +81,14 @@ def test_worker_uses_source_runtime_directly(tmp_path: Path, monkeypatch) -> Non
         assert env["RDC_TOOL_RENDERDOC_PATH"] == str((source_root / "pymodules").resolve())
         assert env["RDC_TOOL_WORKER_SOURCE_MANIFEST"] == str((source_root / "manifest.runtime.json").resolve())
         assert env["RDC_TOOL_DAEMON_PID"] == str(os.getpid())
+        if os.name == "nt":
+            options = captured["kwargs"]
+            assert options["creationflags"] == (daemon_worker.subprocess.CREATE_NEW_CONSOLE | daemon_worker.subprocess.CREATE_NEW_PROCESS_GROUP)
+            assert not options["creationflags"] & (daemon_worker.subprocess.CREATE_NO_WINDOW | daemon_worker.subprocess.DETACHED_PROCESS)
+            assert options["startupinfo"].dwFlags & daemon_worker.subprocess.STARTF_USESHOWWINDOW
+            assert options["startupinfo"].wShowWindow == daemon_worker.subprocess.SW_HIDE
+            assert options["stdin"] == daemon_worker.subprocess.PIPE
+            assert options["stdout"] == daemon_worker.subprocess.PIPE
 
         worker_state = worker.snapshot()
         assert worker_state["binaries_dir"] == str(source_root.resolve())
@@ -141,3 +151,23 @@ def test_request_does_not_implicitly_spawn_a_missing_worker(monkeypatch):
     monkeypatch.setattr(worker, "ensure_started", lambda: pytest.fail("request must not replace its controller"))
     with pytest.raises(RuntimeError, match="unavailable"):
         worker.request("exec", {"operation": "rd.export.texture"})
+
+
+def test_worker_shutdown_uses_real_facade_and_preserves_daemon_context(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    import rdc_tool
+    from rdc_tool import runtime_worker
+    calls, outputs = [], []
+    monkeypatch.setenv("RDC_TOOL_CONTEXT_ID", "default")
+    async def shutdown(*, clear_context_state: bool = True):
+        calls.append(clear_context_state)
+    monkeypatch.setattr(server, "_runtime_module", lambda: SimpleNamespace(runtime_shutdown=shutdown))
+    monkeypatch.setattr(rdc_tool, "server", server)
+    monkeypatch.setattr(runtime_worker.sys, "stdin", io.StringIO('{"id":"stop","method":"shutdown"}\n'))
+    monkeypatch.setattr(runtime_worker, "_emit", outputs.append)
+    assert runtime_worker.main(["--context-id", "shutdown-facade"]) == 0
+    assert outputs[-1] == {"id": "stop", "ok": True, "result": {"stopped": True}}
+    assert calls == [False]
+    asyncio.run(server.runtime_shutdown())
+    assert calls == [False, True]

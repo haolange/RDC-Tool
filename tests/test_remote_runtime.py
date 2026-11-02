@@ -104,7 +104,7 @@ def test_android_recovery_uses_discovered_socket_and_fresh_local_forward(monkeyp
         'origin_context_id': 'default', 'device_serial': 'test-device',
         'requested': {'host': '127.0.0.1', 'port': 38920},
         'options': {'device_serial': 'test-device', 'local_port': 58884, 'remote_port': 39920,
-                    'install_apk': False, 'push_config': False},
+                    'repair_policy': 'auto_safe', 'push_config': False},
         'bootstrap': {
             'device_serial': 'test-device', 'package_name': 'test-helper',
             'port': 58884, 'remote_port': 39920, 'forward_spec': 'tcp:58884',

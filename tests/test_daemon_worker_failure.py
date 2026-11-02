@@ -60,6 +60,7 @@ def test_worker_request_success_keeps_state_and_controller(monkeypatch):
     monkeypatch.setattr(daemon_server, "load_context_state", lambda *args: pytest.fail("success must not quarantine"))
     assert daemon._request_worker("exec", {"operation": "rd.shader.revert_replacement"}) == response
     assert len(calls) == 1
+    assert calls[0][1]["progress_sink"] is daemon
 
 
 @pytest.mark.parametrize("existing_worker", [False, True])

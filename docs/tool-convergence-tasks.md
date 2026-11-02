@@ -332,3 +332,23 @@ Non-clean second development host; source repositories and independent user data
 - 真实 Electron Agent 服务复用安装版 Python/CLI/ADB，Android 首次打开与 EID3029 设备呈现通过；owning General 冻结 catalog/CLI/lease 后导出实际最终纹理，主进程签名验证、篡改拒绝与 OS 可执行路径/进程出生身份核对通过。完整跨库事实见 RDC-Agent `docs/product/acceptance-ledger.md` 同日发行条目；无真实模型或 shader 修复声明。
 - 保留边界：末帧复制事件无普通截图输出时明确失败；一次后续重开伴随手机 RenderDoc helper Vulkan pipeline compilation SIGSEGV，人工重开成功，尚无驱动根因或完整设备稳定性矩阵结论。
 - clear context 后 stop daemon，daemon/worker 与手机自有 helper 退出；官方桌面再次启动与正常退出，canonical 锁释放。清理本轮临时提取、测试依赖、脚本/日志/QA 数据及 43 个测试链接；正式发行包与最小证据保留，用户数据保持。
+
+## Android 服务准备、未决安装核验与验收边界（2026-10-30）
+
+- 来源：Tools main基线 `e19ee333aa51eddba7eeb6ebff10b18822aba332`、Agent main基线 `94e09f36da01f39ba74b77dc1dc6de1726046eac` 加本轮工作树；保持当前分支，未提交、推送或发布。逐节点源码/构建身份与最小证据位于相邻Agent `.local/remote-readiness/verify/engineering-receipt.json`、`implementation-identity.json`、`runtime-receipt.json`、`window-lifecycle-receipt.json`；不复制成第二份原始日志归档。
+- 当前契约：rd.remote.connect由同安装APK/ADB/native负责缺失安装、兼容运行服务借用与受支持保数据升级，busy不抢占；签名替换、降级、卸载或停止未知服务必须明确确认并绑定实际设备/安装/进程/目标APK/动作fingerprint。PackageManager未决状态通过canonical error.details.device_action保留，取消ACK、host退出或包暂时不存在均不能证明安装已结束；唯一只读rd.remote.inspect_installation返回clear/pending/unknown，clear只排除相关未决安装，不证明服务可用，不自行安装、启动、卸载或abandon。
+- 工程通过：最终全量890项测试及2个subtests，catalog/reference/Markdown（27文件）与源码release gate通过；当前catalog为129操作，fingerprint `3b632b109c1644c84635dc6cb10f2ae163776d708e2b51d5e2b1278a41fd0dfa`。超时政策由定义真源生成，worker保留native budget后的收口余量，transport/宿主继续保留响应余量；Agent按冻结catalog推导外壳预算。Windows canonical worker隐藏自有控制台、ADB group/stdio边界的确定性回归与工程门禁通过，不等于真实安装成功或间歇空stdout故障已经消除。相邻Agent全量4175+4既有opt-in跳过、ratchet78.01/79.37/66.30/75.66及后续99项owner保护/19项UI增量分节点记录，不相加成虚构全量。
+- 隔离产品窗口通过：Agent正式Browser及标准start:human验证选择即准备、无会话禁用、同owning context打开、切换取消/确认、busy、fingerprint显式确认、未决安装核验、原始诊断、键盘焦点、中英文、主题/大字/390px，以及重启不自动连接。全部是明确UI-FIXTURE CLI和存储样本，不使用手机、模型或真实Provider，不能作为Tools安装/Ping/Open/Android呈现证据。隔离进程、锁与fixture目录清理单独有回执。
+- 真实设备变更与未通过范围：用户授权helper136→145；保数据替换遇签名冲突后，已确认卸载实际提交，首轮145安装超时。用户仅批准PM session1443114869取消，初始ACK不是设备终态。18:40一次canonical只读核验clear/verified且helper absent为历史观察。其后一次get-state exit0空stdout/stderr在修改前拒绝，单次带诊断核验通过仍未定位间歇原因；未因此持续重试或放松校验。
+- 最终真实Main新尝试：沿同145目标授权仅一次prepare实际进入checking→installing；121.438秒后原生android_apk_install_timeout，Agent类型化stage=installing/recovery=verify_installation/deviceAction=package_install/unconfirmed，未ready/Ping/Open。本次uninstalledExisting=false不否定前轮已卸载事实；约215秒宿主门限没有在原生回执前提前终止。取消或clear不清除未决owner；随后停止设备操作，未重新查询包和PM状态，当前只能报告unconfirmed，不能用早前absent/pending代替现态，也不宣称145安装、回放或设备呈现通过。
+- 保护与恢复边界：最后尝试自有native context/daemon/worker已收口，随后QA主进程明确终止并非正常窗口退出；host清理不代表设备动作完成。借用ADB保留，原capture和用户配置保护单独核验。后续应保留同目标APK与冻结CLI/catalog身份，经只读安装核验获得可证明终态后再决定下一步；用户暂不重启，未代为重启、另行卸载、重复安装或取消其他PM session。安装未决不作为全部验收通过，当前配置/CLI交付状态与总清理由独立最终回执确认。
+- 本机CLI交付例外（用户明确授权）：用户选择“现在切到源码入口”，明确允许Android正向验收未过时先切换。实际用户配置 `C:/Users/vulcangu/.rdc-agent/config.json` 经hash-guard原子提交，仅Python executable、cli/run_cli.py参数前缀和workingDirectory三个路径改为 `D:/Projects/Native/rdx/RDC-Tool` 同根源码入口，其余配置语义不变，正式release目录未改。实际读绑定 --version 返回exit0、rdc-tool1.1.2，原子临时文件0；回执在相邻Agent `.local/remote-readiness/verify/local-cli-binding.json`。未接设备，不将该绑定成功记为Android安装、ready、Ping或Open通过；最终设备动作仍unconfirmed。
+- 最终总清理（2026-10-30）：相邻Agent `.local/remote-readiness/verify/cleanup-receipt.json` 核对自有tmp、测试依赖、ui-fixture及coverage报告均已清理，nofollow核验后去除冗余验证文件，保留最终回执、来源节点、必要日志和三张画面；不以逻辑字节量冒称实际释放空间。node_modules、out、源码Tools及正式release保留。无本轮Task进程、5127监听或canonical锁；借用ADB32864原启动身份保留，原capture的SHA256/大小/mtime复核一致。桌面启动权已交还。设备PM仍unconfirmed，host清理不是设备回滚或安装完成证明，Android ready/Ping/Open正向链仍未通过。
+
+## 2026-11-02 两库同步与回归交付
+
+- 范围：保持main，在Tools `e19ee333`基础上交付Remote准备／修复实现；配套Agent同步云端 `efb3df4f`，保留模型目录和计划审批恢复修复。服务准备仍唯一由 `rd.remote.connect`负责，Agent当前会话提前持有连接并在Open复用；不新增第二套安装、设备选择或兼容路径。
+- 验证：冻结工作树完整890 tests及2 subtests通过（98.89s）；catalog129操作、生成reference、Markdown27文件、release gate及diff通过。catalog指纹 `3b632b109c1644c84635dc6cb10f2ae163776d708e2b51d5e2b1278a41fd0dfa` 与Agent冻结目录／专业手册一致。使用既有Python和缓存测试依赖，无全局安装；不制作发行包。Agent合并后完整4228 tests通过、4项既有opt-in跳过，type/lint/contracts/gates/build通过。
+- 工程与真实设备分开：本轮不操作Android安装或服务。此前145目标APK安装超时、设备结果unconfirmed仍未解除，未证明实际Ping、Open或设备呈现；UI夹具与代码回归不能替代该链。保留已授权同安装来源和身份校验，未知状态先只读核验，不能靠重新安装、停止ADB或默认回退伪造恢复。
+- 状态：实现及工程回归通过；窗口与清理结果由配套Agent本次验收账本记录。既有真实Android正向验收未通过的历史保持原样。
+- 配套窗口收口：Agent最终构建经正式Browser及原生Electron隔离验收，通过提前准备／同context打开／切换取消／busy／修复／未知安装及持久化计划恢复；全部为UI夹具，无真实Android或模型调用。自有测试／QA目录、进程和监听器已收口，当前用户安装及原capture不改动。设备端unconfirmed维持未验证，不影响如实交付本轮工程和窗口结果。

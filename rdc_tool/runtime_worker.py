@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import asdict
+import logging
 import asyncio
 import json
 import os
@@ -13,6 +15,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict
 
 from rdc_tool.io_utils import safe_json_text, safe_stream_write
+from rdc_tool.progress import ProgressEvent, ProgressSink
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -24,6 +27,18 @@ if hasattr(sys.stdin, "reconfigure"):
 
 def _emit(payload: Dict[str, Any]) -> None:
     safe_stream_write(safe_json_text(payload) + "\n", sys.stdout)
+
+
+class _WorkerProgressSink(ProgressSink):
+    def __init__(self, request_id: str) -> None:
+        self.request_id = request_id
+
+    def publish(self, event: ProgressEvent) -> None:
+        try:
+            _emit({"id": self.request_id, "kind": "progress", "event": asdict(event)})
+        except Exception:
+            # Progress delivery cannot change the native operation outcome.
+            logging.getLogger(__name__).warning("Worker progress delivery failed", exc_info=True)
 
 
 def _context_id() -> str:
@@ -116,6 +131,7 @@ def main(argv: list[str] | None = None) -> int:
                                 transport=str(params.get("transport") or "daemon"),
                                 remote=bool(params.get("remote", False)),
                                 context_id=context_id,
+                                progress_sink=_WorkerProgressSink(req_id),
                             )
                         )
                         _emit({"id": req_id, "ok": True, "result": result})

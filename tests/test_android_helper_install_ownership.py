@@ -5,16 +5,18 @@ import pytest
 from rdc_tool import remote_bootstrap as rb
 
 
-def result():
+def result(apk_path="unused.apk"):
     return rb.AndroidBootstrapResult(adb_path="adb", device_serial="device", package_name="org.renderdoc.renderdoccmd.arm64",
         activity_name="helper.Loader", abi="arm64-v8a", host="127.0.0.1", port=1, remote_port=2,
-        apk_path="unused.apk", forward_spec="tcp:1")
+        apk_path=apk_path, forward_spec="tcp:1")
 
 
 def runner(monkeypatch, package_output, *, probe_code=0, install_code=0, install_error=""):
     commands = []
     def run(cmd, **kwargs):
         commands.append(cmd)
+        if cmd[-3:] == ["dumpsys", "package", "installs"]:
+            return SimpleNamespace(returncode=0, stdout="Active install sessions:\n", stderr="")
         if "shell" in cmd and "pm" in cmd:
             return SimpleNamespace(returncode=probe_code, stdout=package_output, stderr="probe denied" if probe_code else "")
         return SimpleNamespace(returncode=install_code, stdout="Success" if not install_code else "", stderr=install_error)
@@ -25,7 +27,7 @@ def runner(monkeypatch, package_output, *, probe_code=0, install_code=0, install
 def test_installed_stopped_helper_is_reused_without_install_or_local_apk(monkeypatch):
     commands = runner(monkeypatch, "package:org.renderdoc.renderdoccmd.arm64\n")
     value = result()
-    rb._ensure_android_helper_installed("adb", "device", value.package_name, "does-not-exist.apk", value)
+    rb._ensure_android_helper_installed(value, rb.AndroidBootstrapOptions())
     assert not any("install" in cmd or "uninstall" in cmd for cmd in commands)
     assert value.installed_apk is False
     assert value.uninstalled_existing is False
@@ -37,7 +39,7 @@ def test_installed_stopped_helper_is_reused_without_install_or_local_apk(monkeyp
 def test_unknown_package_state_fails_before_any_install(monkeypatch, output, code):
     commands = runner(monkeypatch, output, probe_code=code)
     with pytest.raises(rb.AndroidRemoteBootstrapError) as caught:
-        rb._ensure_android_helper_installed("adb", "device", result().package_name, "unused.apk", result())
+        rb._ensure_android_helper_installed(result(), rb.AndroidBootstrapOptions())
     assert caught.value.code == "android_package_probe_failed"
     assert not any("install" in cmd or "uninstall" in cmd for cmd in commands)
 
@@ -45,9 +47,10 @@ def test_unknown_package_state_fails_before_any_install(monkeypatch, output, cod
 def test_absent_helper_is_installed_once_without_replace_flag(monkeypatch, tmp_path):
     apk = tmp_path / "helper.apk"
     apk.write_bytes(b"fixture")
+    monkeypatch.setattr(rb, "read_apk_identity", lambda _: {"package_name": result().package_name, "version_code": 145, "apk_sha256": "a" * 64})
     commands = runner(monkeypatch, "")
-    value = result()
-    rb._ensure_android_helper_installed("adb", "device", value.package_name, str(apk), value)
+    value = result(str(apk))
+    rb._ensure_android_helper_installed(value, rb.AndroidBootstrapOptions())
     installs = [cmd for cmd in commands if "install" in cmd]
     assert len(installs) == 1
     assert "-r" not in installs[0]
@@ -60,9 +63,10 @@ def test_absent_helper_is_installed_once_without_replace_flag(monkeypatch, tmp_p
 def test_install_failure_or_package_race_never_uninstalls_or_retries(monkeypatch, tmp_path, failure):
     apk = tmp_path / "helper.apk"
     apk.write_bytes(b"fixture")
+    monkeypatch.setattr(rb, "read_apk_identity", lambda _: {"package_name": result().package_name, "version_code": 145, "apk_sha256": "a" * 64})
     commands = runner(monkeypatch, "", install_code=1, install_error=failure)
     with pytest.raises(rb.AndroidRemoteBootstrapError) as caught:
-        rb._ensure_android_helper_installed("adb", "device", result().package_name, str(apk), result())
+        rb._ensure_android_helper_installed(result(str(apk)), rb.AndroidBootstrapOptions())
     assert caught.value.code == "android_apk_install_failed"
     assert len([cmd for cmd in commands if "install" in cmd]) == 1
     assert not any("uninstall" in cmd or "-r" in cmd for cmd in commands)
@@ -75,7 +79,7 @@ def test_package_probe_stderr_cannot_be_treated_as_absent(monkeypatch):
         return SimpleNamespace(returncode=0, stdout="", stderr="permission denied")
     monkeypatch.setattr(rb.subprocess, "run", run)
     with pytest.raises(rb.AndroidRemoteBootstrapError) as caught:
-        rb._ensure_android_helper_installed("adb", "device", result().package_name, "unused.apk", result())
+        rb._ensure_android_helper_installed(result(), rb.AndroidBootstrapOptions())
     assert caught.value.code == "android_package_probe_failed"
     assert not any("install" in cmd for cmd in commands)
 
@@ -85,8 +89,8 @@ def test_starting_process_does_not_acquire_existing_installation_config(monkeypa
     value = result()
     config_writes = []
     shell_commands = []
-    def ensure(*args):
-        args[-1].installed_apk = fresh_install
+    def ensure(item, options):
+        item.installed_apk = fresh_install
     monkeypatch.setattr(rb, "_ensure_android_helper_installed", ensure)
     monkeypatch.setattr(rb, "_ensure_renderdoc_conf", lambda item: config_writes.append(item.package_name))
     monkeypatch.setattr(rb, "_list_renderdoc_socket_ports", lambda *args: [2])

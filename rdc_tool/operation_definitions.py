@@ -1,5 +1,6 @@
 """Canonical public operation definitions. Catalogs and manuals are generated from this module."""
 from __future__ import annotations
+from rdc_tool.timeout_policy import REMOTE_CONNECT_DEFAULT_TIMEOUT_MS, remote_connect_timeout_policy
 
 OPERATIONS = [{'name': 'rd.buffer.get_data',
   'group': '3.7，缓冲区与网格数据访问 (Buffer & Mesh Data Access)',
@@ -2003,27 +2004,38 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'effects': ['replay_position'],
   'evidence_kind': None,
   'path_inputs': []},
- {'name': 'rd.remote.connect',
+ {'name': 'rd.remote.inspect_installation',
   'group': '3.12，远程连接与自动化抓帧 (Remote Capture & Target Control)',
-  'description': '连接到远程 RenderDoc server；支持 direct RenderDoc endpoint 和 Android adb bootstrap。 已安装但未运行的helper仍复用其安装与配置；仅确认包缺失才非替换安装一次，错误或冲突不自动卸载重装。启动进程的所有权不扩展到现有安装或配置。',
-  'parameter_raw': 'host (string, optional): host (str, renderdoc transport required; adb_android '
-                   'optional)<br>port (integer, optional): port (int, optional, default '
-                   '38920)<br>timeout_ms (integer, optional): timeout_ms (int, optional, default '
-                   '5000)<br>options (object, optional): options (dict, optional): {transport?: '
-                   "'renderdoc'|'adb_android', device_serial?, local_port?, install_apk?, "
-                   'push_config?}',
-  'returns_raw': 'ok (bool)<br>data (dict): {remote_id, server_info}; for adb_android, '
-                 'server_info/bootstrap details identify the endpoint, device and ownership: '
-                 'started_activity/owned_pids describe only this attempt; existing helpers are '
-                 'borrowed without install, configuration or launch. Success requires RenderDoc '
-                 'connection and Ping. Socket readiness waits at most 15 seconds within the total '
-                 'timeout; query failure, missing/ambiguous socket and native busy/incompatible '
-                 'status remain distinct. Disconnect closes only this connection and verified '
-                 'owned resources. Cleanup failures accompany the original error.<br>artifacts '
-                 '(list)<br>error (dict|null): direct renderdoc transport requires host; '
-                 'adb_android may omit host and defaults to the local bootstrap endpoint; '
-                 'unsupported transports return `remote_transport_unsupported`<br>meta '
-                 '(dict)<br>projections (dict, optional)',
+  'description': 'Read-only inspection of selected Android PackageManager active installs and same-install target APK identity in the owning daemon context. Does not install, uninstall, start a helper, connect or abandon a session.',
+  'parameter_raw': 'device_serial (string, required): exact selected Android device serial',
+  'returns_raw': 'data: {context_id, device_serial, package_name, apk_sha256, installation_state: clear|pending|unknown, observation: verified|pending|unreadable, sessions, diagnostic?}. clear proves no relevant pending installation only; it does not prove helper installation, runtime compatibility or connection readiness.',
+  'param_names': ['device_serial'],
+  'prerequisites': [{'requires': 'capability.remote', 'via_tools': ['rd.core.init'], 'reason': 'Requires remote capability and a non-default owning daemon context.'}],
+  'namespace': 'remote',
+  'input_schema': {'type': 'object', 'properties': {'device_serial': {'type': 'string', 'minLength': 1, 'pattern': '^\\S+$'}}, 'required': ['device_serial'], 'additionalProperties': False},
+  'scope': 'global', 'effects': [], 'evidence_kind': None, 'path_inputs': []},
+ {'name': 'rd.remote.connect',
+  'timeout_policy': remote_connect_timeout_policy(),
+  'group': '3.12，远程连接与自动化抓帧 (Remote Capture & Target Control)',
+  'description': '连接远程 RenderDoc server。Android 在同一连接入口检查设备、安装身份与兼容性；缺失时安装同安装 APK，停止的旧 helper '
+                 '可保留数据升级。兼容运行服务只借用；busy 不抢占。停止未知服务、卸载或降级须使用与当前设备/包/进程和目标 APK 身份绑定的明确修复确认。',
+  'parameter_raw': 'host (string, optional): direct endpoint host<br>port (integer, optional): '
+                   'default 38920<br>timeout_ms (integer, optional): total preparation/connection '
+                   'deadline<br>options (object, optional): {transport, device_serial, local_port, '
+                   'push_config, repair_policy: auto_safe|confirmed, repair_confirmation?: '
+                   '{fingerprint}}',
+  'returns_raw': 'ok (bool)<br>data: {context_id, remote_id, server_info}; success requires native '
+                 'handshake and Ping. Android bootstrap includes ownership, install_mode '
+                 '(existing|install|update|force_replace), installed_apk, uninstalled_existing, '
+                 'expected_version and apk_sha256. Only owned process/forward resources are '
+                 'cleaned; installed packages are not rolled back on cancellation.<br>error: typed '
+                 'remote/Android code; details.remote {stage, code, device_serial, '
+                 'expected_version?, actual_version?, repair?}; repair contains fingerprint, '
+                 'actions, package_name, device_serial, apk_sha256, installed_identity and '
+                 'service_identity. Resubmit only the fingerprint with repair_policy=confirmed '
+                 'after explicit approval; changed state invalidates it. Busy never triggers '
+                 'repair. Progress stages checking/installing/starting/verifying use the existing '
+                 'daemon active_operation surface. timeout_policy declares the native argument/default, worker join, transport and process grace in milliseconds.',
   'param_names': ['host', 'port', 'timeout_ms', 'options'],
   'prerequisites': [{'requires': 'capability.remote',
                      'via_tools': ['rd.core.init'],
@@ -2031,20 +2043,32 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                                'current runtime.'}],
   'namespace': 'remote',
   'input_schema': {'type': 'object',
-                   'properties': {'host': {'description': 'host (str, renderdoc transport '
-                                                          'required; adb_android optional)',
+                   'properties': {'host': {'description': 'host (str, renderdoc transport required; '
+                                                          'adb_android optional)',
                                            'type': 'string'},
                                   'port': {'description': 'port (int, optional, default 38920)',
                                            'type': 'integer'},
-                                  'timeout_ms': {'description': 'timeout_ms (int, optional, '
-                                                                'default 5000)',
-                                                 'type': 'integer'},
-                                  'options': {'description': 'options (dict, optional): '
-                                                             '{transport?: '
-                                                             "'renderdoc'|'adb_android', "
-                                                             'device_serial?, local_port?, '
-                                                             'install_apk?, push_config?}',
-                                              'type': 'object'}},
+                                  'timeout_ms': {'description': f'total native deadline in milliseconds (default {REMOTE_CONNECT_DEFAULT_TIMEOUT_MS})',
+                                                 'type': 'integer', 'minimum': 1, 'default': REMOTE_CONNECT_DEFAULT_TIMEOUT_MS},
+                                  'options': {'type': 'object',
+                                              'properties': {'transport': {'type': 'string',
+                                                                           'enum': ['renderdoc',
+                                                                                    'adb_android']},
+                                                             'device_serial': {'type': 'string'},
+                                                             'local_port': {'type': 'integer',
+                                                                            'minimum': 0,
+                                                                            'maximum': 65535},
+                                                             'push_config': {'type': 'boolean'},
+                                                             'repair_policy': {'type': 'string',
+                                                                               'enum': ['auto_safe',
+                                                                                        'confirmed'],
+                                                                               'default': 'auto_safe'},
+                                                             'repair_confirmation': {'type': 'object',
+                                                                                     'properties': {'fingerprint': {'type': 'string',
+                                                                                                                    'pattern': '^[0-9a-f]{64}$'}},
+                                                                                     'required': ['fingerprint'],
+                                                                                     'additionalProperties': False}},
+                                              'additionalProperties': False}},
                    'required': [],
                    'additionalProperties': False},
   'scope': 'global',

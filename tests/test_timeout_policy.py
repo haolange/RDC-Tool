@@ -5,6 +5,7 @@ import json
 from types import SimpleNamespace
 
 from rdc_tool import cli, server
+from rdc_tool.remote_bootstrap import AndroidBootstrapResult
 from rdc_tool.context_snapshot import clear_context_snapshot, save_context_snapshot
 from rdc_tool.timeout_policy import (
     DAEMON_RESPONSE_BUFFER_S,
@@ -18,6 +19,8 @@ from rdc_tool.timeout_policy import (
     SESSION_CONTEXT_TIMEOUT_S,
     daemon_exec_timeout_s,
     worker_exec_timeout_s,
+    remote_connect_timeout_policy,
+    operation_timeout_s,
 )
 
 
@@ -163,7 +166,8 @@ def test_remote_ping_rehydrates_handle_from_context_snapshot(monkeypatch) -> Non
     monkeypatch.setattr(
         server.server_runtime,
         "bootstrap_android_remote",
-        lambda remote_port, options: SimpleNamespace(
+        lambda remote_port, options: AndroidBootstrapResult(
+            adb_path="adb-test",
             device_serial=options.device_serial,
             package_name="org.renderdoc.renderdoccmd.arm64",
             activity_name="org.renderdoc.renderdoccmd.arm64.Loader",
@@ -179,7 +183,7 @@ def test_remote_ping_rehydrates_handle_from_context_snapshot(monkeypatch) -> Non
             started_activity=True,
             owned_pids=[123],
             created_forward=True,
-            install_mode="upgrade",
+            install_mode="update",
             install_reason="test",
             uninstalled_existing=False,
             cleanup_actions=["adb-forward"],
@@ -235,3 +239,23 @@ def test_remote_ping_rehydrates_handle_from_context_snapshot(monkeypatch) -> Non
         server._runtime.context_snapshots.pop(context_id, None)
         server._runtime.remotes.clear()
         server._runtime.remotes.update(original_remotes)
+
+
+def test_remote_policy_catalog_and_runtime_share_native_and_join_budgets():
+    from rdc_tool.runtime_catalog import describe_operation
+    policy = remote_connect_timeout_policy()
+    assert policy == {"argument": "timeout_ms", "default_timeout_ms": REMOTE_CONNECT_DEFAULT_TIMEOUT_MS,
+        "worker_grace_ms": 85000, "transport_grace_ms": 5000, "process_grace_ms": 5000}
+    definition = describe_operation("rd.remote.connect")
+    assert definition["timeout_policy"] == policy
+    schema = definition["input_schema"]["properties"]["timeout_ms"]
+    assert schema["default"] == policy["default_timeout_ms"]
+    assert schema["minimum"] == 1
+    for native in (120000, 123456, REMOTE_CONNECT_DEFAULT_TIMEOUT_MS):
+        args = {"timeout_ms": native}
+        rounded = operation_timeout_s("rd.remote.connect", args)
+        worker = worker_exec_timeout_s("rd.remote.connect", args)
+        transport = daemon_exec_timeout_s("rd.remote.connect", args)
+        assert worker == rounded + policy["worker_grace_ms"] / 1000
+        assert transport == worker + policy["transport_grace_ms"] / 1000
+        assert transport == rounded + REMOTE_CONNECT_DAEMON_BUFFER_S

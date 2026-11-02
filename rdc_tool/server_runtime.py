@@ -60,6 +60,7 @@ from rdc_tool.core.errors import CoreError, RuntimeToolError
 from rdc_tool.core.engine import CoreEngine, ExecutionContext
 from rdc_tool.core.renderdoc_status import (
     build_renderdoc_error_details,
+    status_code_name,
     status_ok as _rd_status_ok,
     status_text as _rd_status_text,
 )
@@ -83,6 +84,9 @@ from rdc_tool.remote_bootstrap import (
     AndroidBootstrapResult,
     retain_android_helper_ownership,
     resolve_adb_path,
+    inspect_android_installation,
+    repair_incompatible_android_helper,
+    _prepare_android_service,
 )
 from rdc_tool.runtime_bootstrap import bootstrap_renderdoc_runtime
 from rdc_tool.runtime_paths import artifacts_dir, ensure_runtime_dirs, runtime_root
@@ -2497,7 +2501,7 @@ def _remote_snapshot_payload_from_handle(handle: RemoteHandle) -> Dict[str, Any]
         "device_serial": str(handle.device_serial or bootstrap.get("device_serial") or "").strip(),
         "local_port": _as_int(bootstrap.get("port"), 0),
         "remote_port": _as_int(bootstrap.get("remote_port"), requested["port"]),
-        "install_apk": True,
+        "repair_policy": "auto_safe",
         "push_config": True,
     }
     return {
@@ -3318,8 +3322,13 @@ def _wait_for_remote_endpoint(url: str, timeout_ms: int) -> None:
                 progress_pct=0.35,
                 details={"endpoint": url},
             )
+        native_code = status_code_name(getattr(status, "code", status)).lower()
         status_name = _status_text(status).lower()
-        terminal = "busy" in status_name or "incompatible" in status_name or "versionmismatch" in status_name
+        # Native enum names drive repair; text is diagnostic and only preserves
+        # terminal handling for status objects without an exposed enum.
+        busy = "busy" in native_code
+        mismatch = "incompatible" in native_code or "versionmismatch" in native_code
+        terminal = busy or mismatch or "busy" in status_name or "incompatible" in status_name or "versionmismatch" in status_name
         if terminal or time.perf_counter() >= deadline:
             details = build_renderdoc_error_details(
                 status if last_status is None else last_status,
@@ -3330,10 +3339,9 @@ def _wait_for_remote_endpoint(url: str, timeout_ms: int) -> None:
                 classification="remote_endpoint",
                 fix_hint="Verify the remote endpoint is reachable before opening a remote replay session.",
             )
-            raise RuntimeToolError(
-                f"CheckRemoteServerConnection({url}) failed: {details['renderdoc_status']['status_text']}",
-                details=details,
-            )
+            code = "remote_busy" if busy else "remote_version_mismatch" if mismatch else "remote_connect_timeout"
+            details["remote"] = {"stage": "verifying", "code": code}
+            raise CoreError(code, f"CheckRemoteServerConnection({url}) failed: {details['renderdoc_status']['status_text']}", "runtime", details)
         time.sleep(min(0.25, max(deadline - time.perf_counter(), 0.05)))
 
 
@@ -3401,15 +3409,30 @@ async def _connect_remote_endpoint(host: str, port: int, transport: str, options
             endpoint_host, endpoint_port = host, port
             if transport == "adb_android":
                 _progress("bootstrap_start", "Preparing Android remote connection", progress_pct=0.05)
-                bootstrap = bootstrap_android_remote(remote_port=port, options=AndroidBootstrapOptions(
+                android_options = AndroidBootstrapOptions(
                     device_serial=str(options.get("device_serial") or ""),
                     local_port=_as_int(options.get("local_port"), 0),
-                    install_apk=_as_bool(options.get("install_apk"), True),
-                    push_config=_as_bool(options.get("push_config"), True)))
+                    repair_policy=str(options.get("repair_policy") or "auto_safe"),
+                    repair_confirmation=options.get("repair_confirmation"),
+                    expected_version=_renderdoc_version_value(),
+                    progress=lambda stage: _progress(stage, f"Android service: {stage}"),
+                    push_config=_as_bool(options.get("push_config"), True))
+                bootstrap = bootstrap_android_remote(remote_port=port, options=android_options)
                 endpoint_host, endpoint_port = bootstrap.host, bootstrap.port
             detail = describe_android_remote(bootstrap) if bootstrap else {}
             url = _remote_url(endpoint_host, endpoint_port)
-            _wait_for_remote_endpoint(url, max(1, int(budget.remaining() * 1000)))
+            _progress("verifying", "Checking remote service compatibility")
+            try:
+                _wait_for_remote_endpoint(url, max(1, int(budget.remaining() * 1000)))
+            except CoreError as error:
+                if bootstrap is None or error.code != "remote_version_mismatch":
+                    raise
+                repair_incompatible_android_helper(bootstrap, android_options)
+                bootstrap = _prepare_android_service(bootstrap, android_options, False, f"{bootstrap.package_name}/.Loader")
+                detail = describe_android_remote(bootstrap)
+                url = _remote_url(bootstrap.host, bootstrap.port)
+                _progress("verifying", "Verifying repaired Android remote service")
+                _wait_for_remote_endpoint(url, max(1, int(budget.remaining() * 1000)))
             remote = _create_remote_server_connection(url)
             budget.remaining()
             ping = remote.Ping()
@@ -3446,17 +3469,27 @@ async def _connect_remote_endpoint(host: str, port: int, transport: str, options
         return await asyncio.shield(future)
     except asyncio.CancelledError:
         budget.cancelled.set()
+        receipt: Dict[str, Any] = {"remote": {"stage": "cancelled", "code": "remote_connect_cancelled",
+            "device_serial": str(options.get("device_serial") or "")}}
         try:
             bootstrap, remote, _ = await asyncio.shield(future)
-        except Exception:
-            pass  # The connection worker has finished its own rollback.
+        except Exception as error:
+            # The joined worker has released its resources. PackageManager may
+            # already have committed; retain its facts rather than imply rollback.
+            if isinstance(error, (AndroidRemoteBootstrapError, CoreError)):
+                receipt.update(error.details)
         else:
             # Cancellation can race with a completed worker, before handle publication.
             try:
                 await _offload(remote.ShutdownConnection)
             finally:
                 if bootstrap is not None:
-                    await _offload(cleanup_android_remote, bootstrap)
+                    cleanup_errors = await _offload(cleanup_android_remote, bootstrap)
+                    receipt["installation"] = {"installed_apk": bootstrap.installed_apk,
+                        "uninstalled_existing": bootstrap.uninstalled_existing, "install_mode": bootstrap.install_mode}
+                    if cleanup_errors:
+                        receipt["cleanup_errors"] = cleanup_errors
+        _progress("cancelled", "Remote connection cancelled after native actions settled", details=receipt)
         raise
 
 
@@ -3989,7 +4022,7 @@ def _remote_session_metadata(
             "port": requested_port,
         },
         "options": {
-            "install_apk": _as_bool(bootstrap.get("installed_apk"), True),
+            "repair_policy": "auto_safe",
             "push_config": _as_bool(bootstrap.get("pushed_config"), True),
             "device_serial": str(handle.device_serial or bootstrap.get("device_serial") or "").strip(),
             "local_port": int(handle.port or 0),
@@ -13009,6 +13042,18 @@ async def _dispatch_vfs(action: str, args: Dict[str, Any]) -> str:
 
 
 async def _dispatch_remote(action: str, args: Dict[str, Any]) -> str:
+    if action == "inspect_installation":
+        if _runtime_context_id() == "default":
+            return _err("Installation inspection requires an owning daemon context", code="remote_context_required", category="validation")
+        if not _runtime.enable_remote:
+            return _capability_error("remote_disabled", "Remote tools disabled by config", capability="remote",
+                reason="Remote tools are disabled by config.", source="runtime_config", optional=True)
+        try:
+            facts = await _offload(inspect_android_installation, str(args.get("device_serial") or ""))
+            return _ok(context_id=_runtime_context_id(), **facts)
+        except AndroidRemoteBootstrapError as error:
+            return _err(error.message, code=error.code, category="runtime", details=error.details)
+
     if action == "connect":
         options = _as_dict(args.get("options"), default={})
         transport = str(options.get("transport") or "renderdoc").strip().lower() or "renderdoc"
@@ -13036,6 +13081,13 @@ async def _dispatch_remote(action: str, args: Dict[str, Any]) -> str:
                 details={"transport": transport},
             )
 
+        if transport == "adb_android":
+            policy = options.get("repair_policy", "auto_safe")
+            confirmation = options.get("repair_confirmation")
+            if policy not in {"auto_safe", "confirmed"} or (policy == "confirmed" and (not isinstance(confirmation, dict) or not isinstance(confirmation.get("fingerprint"), str) or not re.fullmatch(r"[0-9a-f]{64}", confirmation["fingerprint"]))):
+                return _err("Invalid Android repair policy or confirmation", code="validation_error", category="validation")
+            if "install_apk" in options:
+                return _err("install_apk is not a supported remote option; use repair_policy", code="validation_error", category="validation")
         endpoint_host = host
         endpoint_port = port
         bootstrap_detail: Dict[str, Any] = {}
@@ -13049,7 +13101,9 @@ async def _dispatch_remote(action: str, args: Dict[str, Any]) -> str:
                 bootstrap_detail = describe_android_remote(bootstrap_result)
                 endpoint_host, endpoint_port = bootstrap_result.host, bootstrap_result.port
         except AndroidRemoteBootstrapError as exc:
-            return _err(exc.message, code=exc.code, category="runtime", details=exc.details)
+            details = dict(exc.details)
+            details.setdefault("remote", {"stage": "checking", "code": exc.code, "device_serial": str(options.get("device_serial") or "")})
+            return _err(exc.message, code=exc.code, category="runtime", details=details)
         except CoreError as exc:
             if bootstrap_result is not None:
                 try:
@@ -13057,6 +13111,8 @@ async def _dispatch_remote(action: str, args: Dict[str, Any]) -> str:
                 except Exception:
                     pass
             details = dict(exc.details)
+            remote_facts = details.setdefault("remote", {"stage": "verifying", "code": exc.code})
+            remote_facts.setdefault("device_serial", str(options.get("device_serial") or ""))
             details.setdefault("transport", transport)
             details.setdefault("host", endpoint_host)
             details.setdefault("port", endpoint_port)
@@ -13098,8 +13154,6 @@ async def _dispatch_remote(action: str, args: Dict[str, Any]) -> str:
             "transport": transport,
             "endpoint": _remote_url(endpoint_host, endpoint_port),
         }
-        if bootstrap_detail:
-            detail["bootstrap"] = dict(bootstrap_detail)
         _runtime.remotes[remote_id] = RemoteHandle(
             remote_id=remote_id,
             host=endpoint_host,

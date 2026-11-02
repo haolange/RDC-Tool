@@ -2,9 +2,9 @@
 
 This file is generated from the structured definitions in `rdc_tool/operation_definitions.py`. Do not edit it by hand; run `python -B scripts/generate_tool_reference.py`.
 
-- Tool count: 128
+- Tool count: 129
 - Group count: 18
-- Catalog fingerprint: `e1e6fd9158e829d7dd4422726e47189ef3ae992c965474d11b1200a327a5d110`
+- Catalog fingerprint: `3b632b109c1644c84635dc6cb10f2ae163776d708e2b51d5e2b1278a41fd0dfa`
 - Canonical transport: `rdc-tool call <rd.*> --format json`
 - Discovery: `rdc-tool tools list`, `rdc-tool tools search <query>`, and `rdc-tool tools describe <rd.*>`
 
@@ -24,7 +24,7 @@ The catalog declares what an operation accepts and what it can affect. Authoriza
 | 3.15，专家级宏工作流 (Expert Macro Workflows) | 1 |
 | 3.10，性能与高级分析 (Performance & Advanced Analysis) | 4 |
 | 3.4，管线状态查询 (Pipeline State Inspection) | 7 |
-| 3.12，远程连接与自动化抓帧 (Remote Capture & Target Control) | 11 |
+| 3.12，远程连接与自动化抓帧 (Remote Capture & Target Control) | 12 |
 | 3.5，资源探查 (Resource Inspection & History) | 6 |
 | 3.17，上下文快照工具 (Context Snapshot Tools) | 12 |
 | 3.8，Shader 探查、反射与替换 (Shader Inspection & Replacement) | 13 |
@@ -157,7 +157,8 @@ The catalog declares what an operation accepts and what it can affect. Authoriza
 
 | Tool | Summary | Input | Result | Scope and effects | Prerequisites |
 | --- | --- | --- | --- | --- | --- |
-| `rd.remote.connect` | 连接到远程 RenderDoc server；支持 direct RenderDoc endpoint 和 Android adb bootstrap。 已安装但未运行的helper仍复用其安装与配置；仅确认包缺失才非替换安装一次，错误或冲突不自动卸载重装。启动进程的所有权不扩展到现有安装或配置。 | `host`: string (optional)<br>`port`: integer (optional)<br>`timeout_ms`: integer (optional)<br>`options`: object (optional) | ok (bool)<br>data (dict): {remote_id, server_info}; for adb_android, server_info/bootstrap details identify the endpoint, device and ownership: started_activity/owned_pids describe only this attempt; existing helpers are borrowed without install, configuration or launch. Success requires RenderDoc connection and Ping. Socket readiness waits at most 15 seconds within the total timeout; query failure, missing/ambiguous socket and native busy/incompatible status remain distinct. Disconnect closes only this connection and verified owned resources. Cleanup failures accompany the original error.<br>artifacts (list)<br>error (dict\|null): direct renderdoc transport requires host; adb_android may omit host and defaults to the local bootstrap endpoint; unsupported transports return `remote_transport_unsupported`<br>meta (dict)<br>projections (dict, optional) | scope=global; effects=remote_control; evidence=none | capability.remote; via rd.core.init |
+| `rd.remote.inspect_installation` | Read-only inspection of selected Android PackageManager active installs and same-install target APK identity in the owning daemon context. Does not install, uninstall, start a helper, connect or abandon a session. | `device_serial`: string (required) | data: {context_id, device_serial, package_name, apk_sha256, installation_state: clear\|pending\|unknown, observation: verified\|pending\|unreadable, sessions, diagnostic?}. clear proves no relevant pending installation only; it does not prove helper installation, runtime compatibility or connection readiness. | scope=global; effects=none; evidence=none | capability.remote; via rd.core.init |
+| `rd.remote.connect` | 连接远程 RenderDoc server。Android 在同一连接入口检查设备、安装身份与兼容性；缺失时安装同安装 APK，停止的旧 helper 可保留数据升级。兼容运行服务只借用；busy 不抢占。停止未知服务、卸载或降级须使用与当前设备/包/进程和目标 APK 身份绑定的明确修复确认。 | `host`: string (optional)<br>`port`: integer (optional)<br>`timeout_ms`: integer (optional; default=200000; min=1)<br>`options`: object (optional) | ok (bool)<br>data: {context_id, remote_id, server_info}; success requires native handshake and Ping. Android bootstrap includes ownership, install_mode (existing\|install\|update\|force_replace), installed_apk, uninstalled_existing, expected_version and apk_sha256. Only owned process/forward resources are cleaned; installed packages are not rolled back on cancellation.<br>error: typed remote/Android code; details.remote {stage, code, device_serial, expected_version?, actual_version?, repair?}; repair contains fingerprint, actions, package_name, device_serial, apk_sha256, installed_identity and service_identity. Resubmit only the fingerprint with repair_policy=confirmed after explicit approval; changed state invalidates it. Busy never triggers repair. Progress stages checking/installing/starting/verifying use the existing daemon active_operation surface. timeout_policy declares the native argument/default, worker join, transport and process grace in milliseconds. | scope=global; effects=remote_control; evidence=none | capability.remote; via rd.core.init |
 | `rd.remote.copy_capture` | 将远程 capture 拷贝到本地路径（也可用于下载）。 | `remote_id`: string (required)<br>`capture_id`: integer (required)<br>`local_path`: string (required) | ok (bool)<br>data (dict): {saved_path}<br>artifacts (list)<br>error (dict\|null)<br>meta (dict)<br>projections (dict, 可选) | scope=global; effects=remote_control; evidence=none | remote_id; via rd.remote.connect<br>capability.remote; via rd.core.init |
 | `rd.remote.delete_capture` | 删除远程服务器上的 capture（谨慎使用）。 | `remote_id`: string (required)<br>`capture_id`: integer (required) | ok (bool)<br>data (dict): tool-specific payload<br>artifacts (list)<br>error (dict\|null)<br>meta (dict)<br>projections (dict, 可选) | scope=global; effects=remote_control; evidence=none | remote_id; via rd.remote.connect<br>capability.remote; via rd.core.init |
 | `rd.remote.disconnect` | 断开远程连接。 | `remote_id`: string (required) | ok (bool)<br>data (dict): tool-specific payload<br>artifacts (list)<br>error (dict\|null)<br>meta (dict)<br>projections (dict, 可选) | scope=global; effects=remote_control; evidence=none | remote_id; via rd.remote.connect<br>capability.remote; via rd.core.init |

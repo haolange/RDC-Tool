@@ -383,7 +383,7 @@ class DaemonRuntime(ProgressSink):
     def _request_worker(self, method: str, params: Dict[str, Any], *, timeout: float = 30.0) -> Dict[str, Any]:
         worker = self._ensure_worker()
         try:
-            response = worker.request(method, params, timeout=timeout)
+            response = worker.request(method, params, timeout=timeout, progress_sink=self)
             if not bool(response.get("ok")):
                 error = response.get("error") if isinstance(response.get("error"), dict) else {}
                 raise RuntimeError(str(error.get("message") or f"worker {method} failed"))

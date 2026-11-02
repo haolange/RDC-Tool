@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import math
 import os
 import queue
 import subprocess
@@ -13,12 +15,29 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from rdc_tool.io_utils import safe_json_text
+from rdc_tool.progress import ProgressEvent, ProgressSink
 from rdc_tool.runtime_paths import binaries_root, pymodules_dir
 from rdc_tool.runtime_worker_state import clear_worker_state, save_worker_state
 
 
 READY_TIMEOUT_S = 10.0
 REQUEST_TIMEOUT_S = 30.0
+
+
+def _decode_progress_event(payload: Any, operation: str) -> ProgressEvent:
+    fields = {"trace_id", "operation", "stage", "message", "progress_pct", "details", "ts_ms"}
+    if not isinstance(payload, dict) or set(payload) != fields:
+        raise RuntimeError("Invalid worker progress event fields")
+    if any(not isinstance(payload[key], str) for key in ("trace_id", "operation", "stage", "message")):
+        raise RuntimeError("Invalid worker progress event text")
+    if not payload["trace_id"].strip() or not payload["stage"].strip() or payload["operation"] != operation:
+        raise RuntimeError("Worker progress event identity mismatch")
+    percent = payload["progress_pct"]
+    if percent is not None and (isinstance(percent, bool) or not isinstance(percent, (int, float)) or not math.isfinite(percent)):
+        raise RuntimeError("Invalid worker progress percentage")
+    if not isinstance(payload["details"], dict) or type(payload["ts_ms"]) is not int or payload["ts_ms"] <= 0:
+        raise RuntimeError("Invalid worker progress event details")
+    return ProgressEvent(**payload)
 
 
 class RuntimeWorkerProcess:
@@ -98,7 +117,13 @@ class RuntimeWorkerProcess:
             "env": env,
         }
         if os.name == "nt":
-            popen_kwargs["creationflags"] = 0x08000000 | 0x00000200  # CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
+            # ADB children need a real console for reliable captured output.
+            # Own it in the worker and hide it at creation; children inherit it.
+            startup = subprocess.STARTUPINFO()
+            startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startup.wShowWindow = subprocess.SW_HIDE
+            popen_kwargs["startupinfo"] = startup
+            popen_kwargs["creationflags"] = subprocess.CREATE_NEW_CONSOLE | subprocess.CREATE_NEW_PROCESS_GROUP
 
         proc = subprocess.Popen(
             [sys.executable, "-m", "rdc_tool.runtime_worker", "--context-id", self.context_id],
@@ -141,7 +166,7 @@ class RuntimeWorkerProcess:
         self.stop()
         self._spawn()
 
-    def request(self, method: str, params: Optional[Dict[str, Any]] = None, *, timeout: float = REQUEST_TIMEOUT_S) -> Dict[str, Any]:
+    def request(self, method: str, params: Optional[Dict[str, Any]] = None, *, timeout: float = REQUEST_TIMEOUT_S, progress_sink: ProgressSink | None = None) -> Dict[str, Any]:
         with self._io_lock:
             if not self.is_running():
                 raise RuntimeError("worker process is unavailable; use the owning daemon lifecycle")
@@ -156,6 +181,7 @@ class RuntimeWorkerProcess:
             proc.stdin.flush()
 
             deadline = time.time() + max(1.0, float(timeout))
+            trace_id = ""
             while time.time() < deadline:
                 remaining = max(0.1, min(0.5, deadline - time.time()))
                 try:
@@ -166,6 +192,21 @@ class RuntimeWorkerProcess:
                     raise RuntimeError("worker exited before responding")
                 if str(payload.get("id") or "") != req_id:
                     continue
+                if payload.get("kind") == "progress":
+                    if method != "exec":
+                        raise RuntimeError("Unexpected worker progress for lifecycle request")
+                    event = _decode_progress_event(payload.get("event"), str((params or {}).get("operation") or ""))
+                    if trace_id and event.trace_id != trace_id:
+                        raise RuntimeError("Worker progress trace changed within a request")
+                    trace_id = event.trace_id
+                    if progress_sink is not None:
+                        try:
+                            progress_sink.publish(event)
+                        except Exception:
+                            logging.getLogger(__name__).warning("Daemon progress delivery failed", exc_info=True)
+                    continue
+                if payload.get("kind") is not None:
+                    raise RuntimeError("Unexpected worker response type")
                 self._save_state()
                 return payload
             raise TimeoutError(f"worker request timed out: {method}")

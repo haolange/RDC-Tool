@@ -56,8 +56,8 @@ async def runtime_startup() -> None:
     await _runtime_module().runtime_startup()
 
 
-async def runtime_shutdown() -> None:
-    await _runtime_module().runtime_shutdown()
+async def runtime_shutdown(*, clear_context_state: bool = True) -> None:
+    await _runtime_module().runtime_shutdown(clear_context_state=clear_context_state)
 
 
 async def dispatch_operation(
