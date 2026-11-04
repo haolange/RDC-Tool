@@ -28,7 +28,8 @@ def identity_fixture(root: Path) -> Path:
     return package
 
 
-def test_license_bytes_cannot_be_replaced_by_inventory_claim(tmp_path):
+def test_license_bytes_cannot_be_replaced_by_inventory_claim(tmp_path, monkeypatch):
+    monkeypatch.setattr(verify, 'native_manifest_status', lambda root: {'status': 'verified'})
     package = identity_fixture(tmp_path)
     verify._verify_release_identity(package, tmp_path / 'source')
     (package / 'LICENSE').write_bytes(b'Apache-2.0 truncated')
@@ -87,6 +88,8 @@ def test_staging_is_removed_on_success_and_archive_failure(tmp_path, monkeypatch
     staging = []
     monkeypatch.setattr(package_release, '_tools_root', lambda: tmp_path)
     monkeypatch.setattr(package_release, '_source_revision', lambda root: 'a' * 40)
+    monkeypatch.setattr(package_release, '_qualify_source', lambda root: None)
+    monkeypatch.setattr(package_release, '_qualify_package', lambda path: None)
     def copy(root, destination):
         staging.append(destination.parent)
         (destination / 'LICENSE').write_bytes(b'fixture')
@@ -111,6 +114,7 @@ def test_staging_is_removed_on_copy_failure(tmp_path, monkeypatch):
     staging = []
     monkeypatch.setattr(package_release, '_tools_root', lambda: tmp_path)
     monkeypatch.setattr(package_release, '_source_revision', lambda root: 'a' * 40)
+    monkeypatch.setattr(package_release, '_qualify_source', lambda root: None)
     def fail_copy(root, destination):
         staging.append(destination.parent)
         raise RuntimeError('copy failed')
@@ -156,3 +160,125 @@ def test_sbom_revision_must_match_manifest(tmp_path):
     path.write_text(json.dumps(payload), encoding='utf-8')
     with pytest.raises(RuntimeError, match='source_revision'):
         verify._verify_release_identity(package, tmp_path / 'source')
+
+
+def candidate_source_fixture(root, monkeypatch):
+    from scripts import package_runtime
+    from test_runtime_identity import native_inputs
+    inputs = native_inputs(root)
+    monkeypatch.setattr(package_runtime, '_tools_root', lambda: root)
+    assert package_runtime.main(inputs) == 0
+    for name in ('LICENSE', 'README.md'):
+        (root / name).write_text('fixture\n', encoding='utf-8')
+    (root / 'CHANGELOG.md').write_text(f'## {verify.TOOL_VERSION}\n', encoding='utf-8')
+    (root / 'pyproject.toml').write_text(f'[project]\nversion="{verify.TOOL_VERSION}"\n', encoding='utf-8')
+    for name in verify.EXPECTED_ENTRYPOINTS:
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('fixture', encoding='utf-8')
+    metadata = root / f'binaries/windows/x64/python/Lib/site-packages/rdc_tool-{verify.TOOL_VERSION}.dist-info/METADATA'
+    metadata.parent.mkdir(parents=True)
+    metadata.write_text(f'Version: {verify.TOOL_VERSION}\n', encoding='utf-8')
+    monkeypatch.setattr(package_release, '_tools_root', lambda: root)
+    monkeypatch.setattr(package_release, '_candidate_source', lambda root: {'base_revision': 'a' * 40, 'working_diff_sha256': 'd' * 64})
+
+
+def test_local_candidate_does_not_weaken_release_source_gate(tmp_path, monkeypatch):
+    candidate_source_fixture(tmp_path, monkeypatch)
+    def no_release(root):
+        raise RuntimeError('Release packaging requires a clean source checkout')
+    monkeypatch.setattr(package_release, '_source_revision', no_release)
+    assert package_release.main(['--candidate-dir', 'intermediate/candidate']) == 0
+    candidate = tmp_path / 'intermediate/candidate'
+    manifest = json.loads((candidate / 'CANDIDATE_MANIFEST.json').read_text(encoding='utf-8'))
+    assert manifest['kind'] == 'local_validation_candidate'
+    assert manifest['source_snapshot']['base_revision'] == 'a' * 40
+    assert len(manifest['source_snapshot']['shipped_source_sha256']) == 64
+    assert {'SBOM.json', 'LICENSE_INVENTORY.json'} <= {item['path'] for item in manifest['files']}
+    assert not (candidate / 'RELEASE_MANIFEST.json').exists()
+    verify._verify_release_identity(candidate, tmp_path, manifest_name='CANDIDATE_MANIFEST.json')
+    with pytest.raises(RuntimeError, match='clean source checkout'):
+        package_release.main([])
+    with pytest.raises(FileExistsError, match='overwrite'):
+        package_release.main(['--candidate-dir', 'intermediate/candidate'])
+    assert not list(candidate.parent.glob('.candidate-stage-*'))
+
+
+def test_local_candidate_rejects_source_drift_and_removes_its_stage(tmp_path, monkeypatch):
+    candidate_source_fixture(tmp_path, monkeypatch)
+    original_copy = package_release._copy_release_tree
+    def changed(root, destination):
+        files = original_copy(root, destination)
+        (root / 'README.md').write_text('changed during copy', encoding='utf-8')
+        return files
+    monkeypatch.setattr(package_release, '_copy_release_tree', changed)
+    with pytest.raises(RuntimeError, match='Source input changed'):
+        package_release.main(['--candidate-dir', 'intermediate/candidate'])
+    assert not (tmp_path / 'intermediate/candidate').exists()
+    assert not list((tmp_path / 'intermediate').glob('.candidate-stage-*'))
+
+
+def test_local_candidate_rejects_damaged_native_or_output_outside_disposable_root(tmp_path, monkeypatch):
+    candidate_source_fixture(tmp_path, monkeypatch)
+    with pytest.raises(ValueError, match='intermediate'):
+        package_release.main(['--candidate-dir', 'binaries/candidate'])
+    (tmp_path / 'binaries/windows/x64/renderdoc.dll').write_bytes(b'damaged')
+    with pytest.raises(RuntimeError, match='paired native build'):
+        package_release.main(['--candidate-dir', 'intermediate/candidate'])
+    assert not (tmp_path / 'intermediate/candidate').exists()
+
+
+def test_candidate_integrity_detects_source_tampering_and_false_snapshot(tmp_path, monkeypatch):
+    candidate_source_fixture(tmp_path, monkeypatch)
+    assert package_release.main(['--candidate-dir', 'intermediate/candidate']) == 0
+    candidate = tmp_path / 'intermediate/candidate'
+    readme = candidate / 'README.md'
+    before = readme.read_bytes()
+    readme.write_bytes(b'tampered')
+    with pytest.raises(RuntimeError, match='package bytes'):
+        verify._verify_release_identity(candidate, tmp_path, manifest_name='CANDIDATE_MANIFEST.json')
+    readme.write_bytes(before)
+    sbom_path = candidate / 'SBOM.json'
+    sbom = json.loads(sbom_path.read_text(encoding='utf-8'))
+    sbom['source_snapshot']['working_diff_sha256'] = 'e' * 64
+    sbom_path.write_text(json.dumps(sbom), encoding='utf-8')
+    with pytest.raises(RuntimeError, match='package bytes|source snapshot'):
+        verify._verify_release_identity(candidate, tmp_path, manifest_name='CANDIDATE_MANIFEST.json')
+
+
+def test_candidate_uses_verified_runtime_output_without_changing_current_install(tmp_path, monkeypatch):
+    from scripts import package_runtime
+    from test_runtime_identity import native_inputs
+    candidate_source_fixture(tmp_path, monkeypatch)
+    # The configured current runtime can differ from the new paired build.
+    original = tmp_path / 'binaries/windows/x64/renderdoc.dll'
+    original.write_bytes(b'current user runtime')
+    inputs = native_inputs(tmp_path)
+    before = {path.relative_to(tmp_path).as_posix(): path.read_bytes()
+              for path in tmp_path.rglob('*') if path.is_file()}
+    assert package_runtime.main(inputs + ['--output-root', 'intermediate/task/runtime']) == 0
+    assert package_release.main(['--candidate-dir', 'intermediate/task/candidate',
+                                 '--runtime-root', 'intermediate/task/runtime']) == 0
+    for name, contents in before.items():
+        assert (tmp_path / name).read_bytes() == contents
+    candidate = tmp_path / 'intermediate/task/candidate'
+    assert (candidate / 'binaries/windows/x64/renderdoc.dll').read_bytes() == b'renderdoc'
+    assert (candidate / 'README.md').read_bytes() == (tmp_path / 'README.md').read_bytes()
+    manifest = json.loads((candidate / 'CANDIDATE_MANIFEST.json').read_text(encoding='utf-8'))
+    assert manifest['source_snapshot']['base_revision'] == 'a' * 40
+    assert manifest['source_snapshot']['shipped_source_sha256'] == package_release.source_file_digest(manifest['files'])
+    assert not (candidate / 'RELEASE_MANIFEST.json').exists()
+    verify._verify_release_identity(candidate, tmp_path, manifest_name='CANDIDATE_MANIFEST.json')
+    assert not list(candidate.parent.glob('.candidate-stage-*'))
+
+
+def test_runtime_input_override_is_candidate_only_and_cannot_overlap_output(tmp_path, monkeypatch):
+    candidate_source_fixture(tmp_path, monkeypatch)
+    with pytest.raises(ValueError, match='only valid with --candidate-dir'):
+        package_release.main(['--runtime-root', 'intermediate/task/runtime'])
+    runtime = tmp_path / 'intermediate/task/runtime'
+    runtime.mkdir(parents=True)
+    with pytest.raises(ValueError, match='overlaps'):
+        package_release.main(['--runtime-root', 'intermediate/task/runtime',
+                              '--candidate-dir', 'intermediate/task/runtime/candidate'])
+    assert not (runtime / 'candidate').exists()

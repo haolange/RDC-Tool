@@ -1,7 +1,7 @@
 {
   "schema_version": "1",
   "source_path": "rdc_tool/operation_definitions.py",
-  "fingerprint": "3b632b109c1644c84635dc6cb10f2ae163776d708e2b51d5e2b1278a41fd0dfa",
+  "fingerprint": "980d49d70062196bbd25bac30730e46de952d02556645528cc95b7087a41c90f",
   "tool_count": 129,
   "groups": {
     "3.7，缓冲区与网格数据访问 (Buffer & Mesh Data Access)": 6,
@@ -3265,18 +3265,8 @@
             "type": "string"
           },
           "stage": {
-            "description": "Use canonical shader stage: vs, hs, ds, gs, ps, cs, ms, or as. Pixel shader is ps.",
-            "type": "string",
-            "enum": [
-              "vs",
-              "hs",
-              "ds",
-              "gs",
-              "ps",
-              "cs",
-              "ms",
-              "as"
-            ]
+            "description": "Case-insensitive VS/HS/DS/GS/PS/CS/MS/AS. Pixel shader is PS. RT is recognized but unsupported; stage names are validated before replay access with structured errors.",
+            "type": "string"
           },
           "event_id": {
             "type": "integer",
@@ -3300,9 +3290,9 @@
     {
       "name": "rd.pipeline.get_stage_state",
       "group": "3.4，管线状态查询 (Pipeline State Inspection)",
-      "description": "获取指定 Shader Stage 的 Pipeline 子状态。",
-      "parameter_raw": "session_id (string): session_id (str)<br>stage (string): stage (str): 'VS'|'HS'|'DS'|'GS'|'PS'|'CS'|'AS'|'MS'|'RT'<br>event_id (integer, optional): Replay event; omitted uses the owning session current event.<br>max_bytes (integer, optional): See input_schema for constraints.",
-      "returns_raw": "ok (bool)<br>data (dict): {stage_state}<br>artifacts (list)<br>error (dict|null)<br>meta (dict)<br>projections (dict, 可选)",
+      "description": "获取指定 Shader Stage 的 Pipeline 子状态；RT 明确返回不支持，不映射为 Pixel Stage。",
+      "parameter_raw": "session_id (string): session_id (str)<br>stage (string): stage (str): 'VS'|'HS'|'DS'|'GS'|'PS'|'CS'|'AS'|'MS' (case-insensitive); RT is recognized but unsupported<br>event_id (integer, optional): Replay event; omitted uses the owning session current event.<br>max_bytes (integer, optional): See input_schema for constraints.",
+      "returns_raw": "ok (bool)<br>data (dict): {stage_state}<br>artifacts (list)<br>error (dict|null): unknown stages return validation/invalid_shader_stage; RT or a missing native stage enum returns capability/shader_stage_unsupported. Stage rejection precedes replay access and includes effects_attempted=false, context_preserved=true, failure_stage=validate_stage.<br>meta (dict)<br>projections (dict, 可选)",
       "param_names": [
         "session_id",
         "stage",
@@ -3328,7 +3318,7 @@
             "type": "string"
           },
           "stage": {
-            "description": "stage (str): 'VS'|'HS'|'DS'|'GS'|'PS'|'CS'|'AS'|'MS'|'RT'",
+            "description": "Case-insensitive VS/HS/DS/GS/PS/CS/AS/MS. RT is recognized but unsupported; unknown names are rejected before replay access.",
             "type": "string"
           },
           "event_id": {
@@ -3535,7 +3525,7 @@
       "group": "3.12，远程连接与自动化抓帧 (Remote Capture & Target Control)",
       "description": "连接远程 RenderDoc server。Android 在同一连接入口检查设备、安装身份与兼容性；缺失时安装同安装 APK，停止的旧 helper 可保留数据升级。兼容运行服务只借用；busy 不抢占。停止未知服务、卸载或降级须使用与当前设备/包/进程和目标 APK 身份绑定的明确修复确认。",
       "parameter_raw": "host (string, optional): direct endpoint host<br>port (integer, optional): default 38920<br>timeout_ms (integer, optional): total preparation/connection deadline<br>options (object, optional): {transport, device_serial, local_port, push_config, repair_policy: auto_safe|confirmed, repair_confirmation?: {fingerprint}}",
-      "returns_raw": "ok (bool)<br>data: {context_id, remote_id, server_info}; success requires native handshake and Ping. Android bootstrap includes ownership, install_mode (existing|install|update|force_replace), installed_apk, uninstalled_existing, expected_version and apk_sha256. Only owned process/forward resources are cleaned; installed packages are not rolled back on cancellation.<br>error: typed remote/Android code; details.remote {stage, code, device_serial, expected_version?, actual_version?, repair?}; repair contains fingerprint, actions, package_name, device_serial, apk_sha256, installed_identity and service_identity. Resubmit only the fingerprint with repair_policy=confirmed after explicit approval; changed state invalidates it. Busy never triggers repair. Progress stages checking/installing/starting/verifying use the existing daemon active_operation surface. timeout_policy declares the native argument/default, worker join, transport and process grace in milliseconds.",
+      "returns_raw": "ok (bool)<br>data: {context_id, remote_id, server_info}; success requires native handshake and Ping. Android bootstrap includes ownership, install_mode (existing|install|update|force_replace), installed_apk, uninstalled_existing, expected_version and apk_sha256 (local target APK hash). installed_apk_path and installed_apk_sha256 observe the selected device package through pm path and sha256sum; apk_identity_status is matched|different|unavailable with apk_identity_reason. Missing, split or unreadable package/hash is unavailable, never assumed matched. These read-only diagnostics do not decide compatibility or authorize repair; cancellation/deadline retain the shared connection budget. Only owned process/forward resources are cleaned; installed packages are not rolled back on cancellation.<br>error: typed remote/Android code. An install returns remote_install_unconfirmed with details.device_action {kind: android_install, state: unconfirmed, device_serial, package_name, apk_sha256, sessions, observation: unreadable} when an install returns no unambiguous terminal receipt, including exit zero with empty output; explicit PackageManager Failure remains android_apk_install_failed. No automatic retry or follow-up install is performed. details.remote {stage, code, device_serial, expected_version?, actual_version?, repair?}; repair contains fingerprint, actions, package_name, device_serial, apk_sha256, installed_identity and service_identity. Resubmit only the fingerprint with repair_policy=confirmed after explicit approval; changed state invalidates it. Busy never triggers repair. Progress stages checking/installing/starting/verifying use the existing daemon active_operation surface. timeout_policy declares the native argument/default, worker join, transport and process grace in milliseconds.",
       "param_names": [
         "host",
         "port",
@@ -3902,7 +3892,7 @@
     {
       "name": "rd.remote.list_targets",
       "group": "3.12，远程连接与自动化抓帧 (Remote Capture & Target Control)",
-      "description": "列出远程可连接的 targets（已注入/已运行应用、可抓帧进程等）。",
+      "description": "列出远程已注入应用的实时 targets；Android 按所选设备的 target sockets 发现，保留逻辑 target_id，排除 replay server。读取失败不返回空列表；busy target 仅报告、不抢占。",
       "parameter_raw": "remote_id (string): remote_id (str)",
       "returns_raw": "ok (bool)<br>data (dict): {targets}<br>artifacts (list)<br>error (dict|null)<br>meta (dict)<br>projections (dict, 可选)",
       "param_names": [
@@ -7171,7 +7161,7 @@
       "group": "3.18，VFS 导航工具 (VFS Navigation Tools)",
       "description": "读取 read-only VFS 节点的 JSON 表示，用于路径式浏览与导航；需要精确调试、导出或状态切换时仍应回到 canonical `rd.*` tools。",
       "parameter_raw": "path (string): path (str): VFS 路径<br>session_id (string, optional): session_id (str, 可选): 当 path 指向 replay 相关域时用于解析当前 session",
-      "returns_raw": "ok (bool)<br>data (dict): {path, node}<br>artifacts (list)<br>error (dict|null)<br>meta (dict)",
+      "returns_raw": "ok (bool)<br>data (dict): {path, node}<br>artifacts (list)<br>error (dict|null)<br>meta (dict) /draws node.pagination preserves the canonical action-tree pagination unchanged; its truncated flag qualifies node.data and entries.",
       "param_names": [
         "path",
         "session_id"
@@ -7208,7 +7198,7 @@
       "group": "3.18，VFS 导航工具 (VFS Navigation Tools)",
       "description": "以 JSON-first 方式列出 read-only VFS 节点，用于浏览 draws/passes/resources/pipeline/context/artifacts 结构；它是导航辅助层，不是第二套调试真相。",
       "parameter_raw": "path (string, optional): path (str, 可选, 默认 '/'): VFS 路径<br>session_id (string, optional): session_id (str, 可选): 当 path 指向 replay 相关域时用于解析当前 session<br>projection (object, optional): See input_schema for constraints.",
-      "returns_raw": "ok (bool)<br>data (dict): {path, node, entries}<br>projections.tabular (dict, 可选): {format_version, columns, rows, row_count, tsv_text?} as a tabular summary for scan/readability only, not semantic ranking<br>artifacts (list)<br>error (dict|null)<br>meta (dict)",
+      "returns_raw": "ok (bool)<br>data (dict): {path, node, entries}<br>projections.tabular (dict, 可选): {format_version, columns, rows, row_count, tsv_text?} as a tabular summary for scan/readability only, not semantic ranking<br>artifacts (list)<br>error (dict|null)<br>meta (dict) /draws node.pagination preserves the canonical action-tree pagination unchanged; its truncated flag qualifies node.data, entries and tabular rows.",
       "param_names": [
         "path",
         "session_id",
@@ -7265,7 +7255,7 @@
       "group": "3.18，VFS 导航工具 (VFS Navigation Tools)",
       "description": "解析 VFS 路径到对应节点元数据，用于判断 path 是否存在、是否需要 session 以及当前可用的 browse-only 视图，不代替 canonical debug/export/state APIs。",
       "parameter_raw": "path (string): path (str): VFS 路径<br>session_id (string, optional): session_id (str, 可选): 当 path 指向 replay 相关域时用于解析当前 session",
-      "returns_raw": "ok (bool)<br>data (dict): {path, node}<br>artifacts (list)<br>error (dict|null)<br>meta (dict)",
+      "returns_raw": "ok (bool)<br>data (dict): {path, node}<br>artifacts (list)<br>error (dict|null)<br>meta (dict) /draws node.pagination preserves the canonical action-tree pagination unchanged; its truncated flag qualifies node.data and entries.",
       "param_names": [
         "path",
         "session_id"
@@ -7302,7 +7292,7 @@
       "group": "3.18，VFS 导航工具 (VFS Navigation Tools)",
       "description": "按 VFS 路径返回树形 read-only 视图，适合初步浏览 session 结构或向人展示层级视图；它是 browse-only 辅助层，不代替 canonical inspection tools。",
       "parameter_raw": "path (string, optional): path (str, 可选, 默认 '/')<br>session_id (string, optional): session_id (str, 可选)<br>depth (integer, optional): depth (int, 可选, 默认 1)<br>max_nodes (integer, optional): max_nodes (int, 可选, 默认 2000): maximum emitted nodes before truncation",
-      "returns_raw": "ok (bool)<br>data (dict): {path, tree, max_nodes, emitted_nodes, truncated, truncation_reason}; broad /draws tree nodes defer per-event details with detail_deferred=true and recommended_next_tool='rd.event.get_action_details' instead of embedding full action subtrees. Broad resource domains are bounded and truncated with truncation_reason='max_nodes_exceeded'. Use rd.vfs.ls or targeted rd.vfs.cat for large /resources, /textures, and /buffers exploration.<br>artifacts (list)<br>error (dict|null)<br>meta (dict)",
+      "returns_raw": "ok (bool)<br>data (dict): {path, tree, max_nodes, emitted_nodes, truncated, truncation_reason}; broad /draws tree nodes defer per-event details with detail_deferred=true and recommended_next_tool='rd.event.get_action_details' instead of embedding full action subtrees. Broad resource domains are bounded and truncated with truncation_reason='max_nodes_exceeded'. Use rd.vfs.ls or targeted rd.vfs.cat for large /resources, /textures, and /buffers exploration. /draws nodes retain canonical action-tree pagination unchanged. Tree truncated includes upstream pagination truncation even at depth=0, with truncation_reason='upstream_pagination_truncated' unless the VFS node budget also truncates, when the existing 'max_nodes_exceeded' reason takes precedence. Source pagination remains visible in either case; requested VFS depth alone does not mark truncation.<br>artifacts (list)<br>error (dict|null)<br>meta (dict)",
       "param_names": [
         "path",
         "session_id",
@@ -7600,7 +7590,7 @@
       "group": "3.10，性能计数器与测量 (Performance Counters)",
       "description": "Measure the full single-queue replay with native GPU timestamps, restoring the original event.",
       "parameter_raw": "session_id (string): owning replay<br>samples (integer): retained samples, 1..16<br>warmup (integer): discarded warmup replays, 0..4",
-      "returns_raw": "data: frame_timing method, unit, range, scope, sampling conditions and individual positive samples; restored_event_id and replay_state_restored. Excludes initial-content restoration, includes replay scheduling gaps, never original application time. Unsupported backend, incomplete queues and failed timestamps are errors, not zero samples.",
+      "returns_raw": "data: frame_timing method, unit, range, scope, sampling conditions and individual positive samples; restored_event_id and replay_state_restored. Excludes initial-content restoration, includes replay scheduling gaps, never original application time. When FrameGPUDuration is missing from the runtime enum or is not enumerated for the active replay, fail with frame_timing_unavailable/category=capability and details identifying the counter and reason. Failed or incomplete native samples use frame_timing_sample_failed/category=runtime. Unsupported capability and failed timestamps are errors, not zero samples; no event-duration or CPU-time fallback is used.",
       "param_names": [
         "session_id",
         "samples",

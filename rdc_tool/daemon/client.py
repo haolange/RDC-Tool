@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import errno
 import json
 import os
 import secrets
@@ -18,6 +17,9 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Optional, Tuple
 
 from rdc_tool.context_snapshot import clear_context_snapshot, context_snapshot_path
+from rdc_tool.daemon.ownership import (
+    DaemonOwnerUnavailable, OwnerLease, locked_publication, owner_identity, owner_is_busy, try_lock, wait_for_owner_exit,
+)
 from rdc_tool.io_utils import atomic_write_json
 from rdc_tool.runtime_state import clear_context_state, context_log_path, context_state_path, list_context_ids
 from rdc_tool.runtime_paths import cli_runtime_dir
@@ -75,15 +77,8 @@ def _locked_daemon_start(context: str):
             while True:
                 if time.monotonic() >= deadline:
                     raise DaemonStartLockTimeout(context, "file_lock", started, timeout)
-                handle.seek(0)
-                try:
-                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                if try_lock(handle):
                     break
-                except OSError as exc:
-                    # CRT documents EACCES as byte-lock contention. File-open
-                    # permissions and non-contention failures must not be retried.
-                    if exc.errno != errno.EACCES or getattr(exc, "winerror", None) not in (None, 33):
-                        raise
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise DaemonStartLockTimeout(context, "file_lock", started, timeout)
@@ -325,10 +320,17 @@ def _normalize_daemon_state_payload(payload: Dict[str, Any], context: Optional[s
 
 def load_daemon_state(context: Optional[str] = "default") -> Dict[str, Any]:
     path = _daemon_state_path(context)
-    payload = _load_json(path)
-    if not payload:
+    status, payload = _load_json_with_status(path)
+    if status == "missing":
         return {}
-    return _normalize_daemon_state_payload(payload, context)
+    try:
+        state = _normalize_daemon_state_payload(payload, context)
+        valid = status == "ok" and int(state["pid"]) > 0 and state["pipe_name"] and state["token"]
+    except (TypeError, ValueError, OverflowError):
+        valid = False
+    if not valid:
+        raise DaemonOwnerUnavailable(_normalize_context(context), path, "invalid_state")
+    return state
 
 
 def list_daemon_context_ids() -> list[str]:
@@ -339,10 +341,17 @@ def list_daemon_context_ids() -> list[str]:
     for path in state_dir.glob("daemon_state*.json"):
         if path.is_file():
             ids.append(_context_from_state_path(path))
-    return ids
+    for path in state_dir.glob("daemon_state*.owner.lock"):
+        state_path = path.with_name(path.name.removesuffix(".owner.lock") + ".json")
+        ctx = _context_from_state_path(state_path)
+        if owner_is_busy(state_path, ctx):
+            ids.append(ctx)
+    return sorted(set(ids))
 
 
 def context_occupies_capacity(context: Optional[str] = None) -> bool:
+    if owner_is_busy(_daemon_state_path(context), _normalize_context(context)):
+        return True
     state = load_daemon_state(context=context)
     if not state:
         return False
@@ -363,15 +372,45 @@ def list_occupying_context_ids() -> list[str]:
     return sorted(ctx for ctx in ids if context_occupies_capacity(ctx))
 
 
-def save_daemon_state(payload: Dict[str, Any], context: Optional[str] = "default") -> None:
-    _save_json(_daemon_state_path(context), _normalize_daemon_state_payload(payload, context))
+def save_daemon_state(
+    payload: Dict[str, Any], context: Optional[str] = "default", *, lease: OwnerLease | None = None,
+) -> None:
+    ctx = _normalize_context(context)
+    path = _daemon_state_path(ctx)
+    normalized = _normalize_daemon_state_payload(payload, ctx)
+    with locked_publication(path, ctx):
+        status, current = _load_json_with_status(path)
+        if status == "ok" and current and owner_identity(current) != owner_identity(normalized):
+            raise DaemonOwnerUnavailable(ctx, path, "state_owner_changed")
+        if lease is None and (status == "invalid" or owner_is_busy(path, ctx)):
+            raise DaemonOwnerUnavailable(ctx, path, "state_owner_unconfirmed")
+        if lease is not None and (lease.handle.closed or lease.path != path.resolve() or int(normalized.get("pid") or 0) != os.getpid()):
+            raise DaemonOwnerUnavailable(ctx, path, "owner_lease_closed")
+        _save_json(path, normalized)
 
 
-def clear_daemon_state(context: Optional[str] = "default") -> None:
-    try:
-        _daemon_state_path(context).unlink(missing_ok=True)
-    except Exception:
-        pass
+def clear_daemon_state(
+    context: Optional[str] = "default", *, expected: Dict[str, Any] | None = None,
+    lease: OwnerLease | None = None,
+) -> None:
+    ctx = _normalize_context(context)
+    path = _daemon_state_path(ctx)
+    # Capture the identity before waiting for publication, so a late cleanup
+    # cannot remove a successor's state.
+    previous = expected if expected is not None else load_daemon_state(ctx)
+    with locked_publication(path, ctx):
+        status, current = _load_json_with_status(path)
+        if status == "missing":
+            if lease is None and owner_is_busy(path, ctx):
+                raise DaemonOwnerUnavailable(ctx, path, "owner_lock_busy")
+            return
+        if status != "ok" or owner_identity(current) != owner_identity(previous):
+            raise DaemonOwnerUnavailable(ctx, path, "state_owner_changed")
+        if lease is None and owner_is_busy(path, ctx):
+            raise DaemonOwnerUnavailable(ctx, path, "owner_lock_busy")
+        if lease is not None and (lease.handle.closed or lease.path != path.resolve() or int(previous.get("pid") or 0) != os.getpid()):
+            raise DaemonOwnerUnavailable(ctx, path, "owner_lease_closed")
+        path.unlink(missing_ok=True)
 
 
 def load_session_state(context: Optional[str] = "default") -> Dict[str, Any]:
@@ -421,7 +460,7 @@ def _remove_file_if_exists(path: Path, cleaned: list[str]) -> None:
 
 def _clear_orphan_context_artifacts(context: str, cleaned: Dict[str, list[str]]) -> None:
     ctx = _normalize_context(context)
-    if _context_has_unreleased_resources(ctx):
+    if owner_is_busy(_daemon_state_path(ctx), ctx) or _context_has_unreleased_resources(ctx):
         return
     _remove_file_if_exists(context_state_path(ctx), cleaned["context_files"])
     _remove_file_if_exists(context_snapshot_path(ctx), cleaned["snapshot_files"])
@@ -462,17 +501,23 @@ def _is_windows_process_running(pid: int) -> bool:
     try:
         import ctypes
 
-        handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, int(pid))
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.OpenProcess.argtypes = [ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong]
+        kernel.OpenProcess.restype = ctypes.c_void_p
+        kernel.GetExitCodeProcess.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong)]
+        kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+        handle = kernel.OpenProcess(0x1000, False, int(pid))
         if not handle:
-            return False
+            # Access denied or an unqueryable process is not proof of exit.
+            return ctypes.get_last_error() != 87  # ERROR_INVALID_PARAMETER: no such PID
         code = ctypes.c_ulong()
-        ok = ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(code))
-        ctypes.windll.kernel32.CloseHandle(handle)
+        ok = kernel.GetExitCodeProcess(handle, ctypes.byref(code))
+        kernel.CloseHandle(handle)
         if not ok:
             return True
         return bool(code.value == 259)
     except Exception:
-        return False
+        return True
 
 
 def _kill_process(pid: int) -> bool:
@@ -633,7 +678,7 @@ def _wait_for_pid_exit(pid: int, timeout_s: float) -> bool:
     return not _is_process_running(pid)
 
 
-def _shutdown_stateful_daemon(pid: int | None, state: Dict[str, Any], context: str) -> None:
+def _shutdown_stateful_daemon(pid: int | None, state: Dict[str, Any], context: str) -> bool:
     if pid and _is_process_running(pid):
         for _ in range(4):
             try:
@@ -641,11 +686,12 @@ def _shutdown_stateful_daemon(pid: int | None, state: Dict[str, Any], context: s
             except Exception:
                 pass
             if _wait_for_pid_exit(pid, 2.0):
-                return
+                return True
             time.sleep(0.5)
 
         _kill_process(pid)
-        _wait_for_pid_exit(pid, 3.0)
+        return _wait_for_pid_exit(pid, 3.0)
+    return True
 
 
 def cleanup_stale_daemon_states(context: Optional[str] = None) -> Dict[str, list[str]]:
@@ -663,10 +709,20 @@ def cleanup_stale_daemon_states(context: Optional[str] = None) -> Dict[str, list
         status, raw = _load_json_with_status(path)
         ctx = _context_from_state_path(path)
         if status == "missing":
+            if owner_is_busy(path, ctx):
+                live_contexts.add(ctx)
             continue
         if status == "invalid":
+            live_contexts.add(ctx)
             continue
-        state = _normalize_daemon_state_payload(raw, ctx) if raw else {}
+        try:
+            state = _normalize_daemon_state_payload(raw, ctx) if raw else {}
+            valid = state and int(state.get("pid") or 0) > 0 and state.get("pipe_name") and state.get("token")
+        except (TypeError, ValueError, OverflowError):
+            valid = False
+        if not valid:
+            live_contexts.add(ctx)
+            continue
         pid = int(state.get("pid") or 0)
         worker = state.get("worker") if isinstance(state.get("worker"), dict) else {}
         worker_pid = int(worker.get("pid") or 0)
@@ -685,7 +741,13 @@ def cleanup_stale_daemon_states(context: Optional[str] = None) -> Dict[str, list
                 if _kill_process(worker_pid):
                     cleaned["killed_pids"].append(str(worker_pid))
                     _wait_for_pid_exit(worker_pid, 3.0)
-            clear_daemon_state(ctx)
+            if (pid > 0 and _is_process_running(pid)) or (worker_pid > 0 and _is_process_running(worker_pid)):
+                live_contexts.add(ctx)
+                continue
+            if owner_is_busy(path, ctx):
+                live_contexts.add(ctx)
+                continue
+            clear_daemon_state(ctx, expected=state)
             clear_worker_state(ctx)
             cleaned["state_files"].append(path.name)
             if not _context_has_unreleased_resources(ctx):
@@ -704,13 +766,21 @@ def cleanup_stale_daemon_states(context: Optional[str] = None) -> Dict[str, list
     return cleaned
 
 
-def _update_saved_state_from_response(response: Dict[str, Any], context: str) -> Dict[str, Any]:
+def _update_saved_state_from_response(
+    response: Dict[str, Any], context: str, *, expected: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
     result = response.get("result")
     if isinstance(result, dict):
         daemon_state = result.get("state")
         if isinstance(daemon_state, dict):
             normalized = _normalize_daemon_state_payload(daemon_state, context)
-            save_daemon_state(normalized, context=context)
+            current = load_daemon_state(context)
+            if (expected and owner_identity(expected) != owner_identity(normalized)) or (
+                current and owner_identity(current) != owner_identity(normalized)
+            ):
+                raise DaemonOwnerUnavailable(context, _daemon_state_path(context), "response_owner_changed")
+            # The daemon publishes its own state. A delayed RPC response must
+            # never overwrite a newer heartbeat or another generation.
             return normalized
     state = load_daemon_state(context=context)
     if state:
@@ -739,9 +809,11 @@ def _ensure_daemon_locked(
     owner_pid: Optional[int], lease_timeout_seconds: int, idle_timeout_seconds: int,
 ) -> Tuple[bool, str, Dict[str, Any]]:
     chosen_ctx = _normalize_context(context)
-    cleanup_stale_daemon_states(context=chosen_ctx)
-
+    state_path = _daemon_state_path(chosen_ctx)
+    status, _ = _load_json_with_status(state_path)
     existing = load_daemon_state(context=chosen_ctx)
+    if not existing and (status == "invalid" or owner_is_busy(state_path, chosen_ctx)):
+        raise DaemonOwnerUnavailable(chosen_ctx, state_path, "invalid_state" if status == "invalid" else "owner_state_missing")
     if existing:
         pid = int(existing.get("pid") or 0)
         if pid > 0 and _is_process_running(pid):
@@ -753,21 +825,34 @@ def _ensure_daemon_locked(
                         context=chosen_ctx,
                         state=existing,
                     )
-                    existing = _update_saved_state_from_response(claimed, chosen_ctx) or existing
+                    existing = _update_saved_state_from_response(claimed, chosen_ctx, expected=existing) or existing
                 except Exception:
                     pass
             try:
                 response = daemon_request("status", params={}, context=chosen_ctx, state=existing)
-            except Exception:
-                _shutdown_stateful_daemon(pid, existing, chosen_ctx)
-                clear_daemon_state(chosen_ctx)
-                clear_session_state(chosen_ctx)
+                if not response.get("ok"):
+                    raise RuntimeError("Daemon status was rejected")
+            except Exception as exc:
+                raise DaemonOwnerUnavailable(chosen_ctx, state_path, "live_owner_status_failed") from exc
             else:
-                updated = _update_saved_state_from_response(response, chosen_ctx)
+                updated = _update_saved_state_from_response(response, chosen_ctx, expected=existing)
                 return True, "daemon already running", updated or existing
         else:
-            clear_daemon_state(chosen_ctx)
-            clear_session_state(chosen_ctx)
+            if owner_is_busy(state_path, chosen_ctx):
+                raise DaemonOwnerUnavailable(chosen_ctx, state_path, "owner_exit_unconfirmed")
+            cleanup_stale_daemon_states(context=chosen_ctx)
+            worker = existing.get("worker") if isinstance(existing.get("worker"), dict) else {}
+            worker_pid = int(worker.get("pid") or 0)
+            if worker_pid > 0 and _is_process_running(worker_pid):
+                raise DaemonOwnerUnavailable(chosen_ctx, state_path, "worker_exit_unconfirmed")
+            remaining_status, _ = _load_json_with_status(state_path)
+            if remaining_status != "missing":
+                # Cleanup retains state when any recorded owner/resource could
+                # not be released. It alone authorizes retiring that state.
+                raise DaemonOwnerUnavailable(chosen_ctx, state_path, "owner_exit_unconfirmed")
+
+    if owner_is_busy(state_path, chosen_ctx):
+        raise DaemonOwnerUnavailable(chosen_ctx, state_path, "owner_lock_busy")
 
     chosen_pipe = pipe_name or f"rdc-tool-daemon-{os.getpid()}-{secrets.token_hex(4)}"
     chosen_token = token or secrets.token_hex(16)
@@ -823,21 +908,22 @@ def _ensure_daemon_locked(
     )
 
     if not _wait_for_daemon_ready(state):
-        try:
-            if proc and proc.pid:
-                _kill_process(int(proc.pid))
-        finally:
-            clear_daemon_state(context=chosen_ctx)
-            clear_session_state(context=chosen_ctx)
+        if proc and proc.pid:
+            _kill_process(int(proc.pid))
+        if not _wait_for_pid_exit(int(proc.pid), 3.0) or owner_is_busy(state_path, chosen_ctx):
+            raise DaemonOwnerUnavailable(chosen_ctx, state_path, "startup_exit_unconfirmed")
+        clear_daemon_state(context=chosen_ctx, expected=state)
+        clear_session_state(context=chosen_ctx)
         return False, "daemon failed to start (ready timeout)", {}
 
     try:
         response = daemon_request("status", params={}, timeout=2.0, state=state, context=chosen_ctx)
-    except Exception:
-        save_daemon_state(state, context=chosen_ctx)
-        return True, f"daemon started ({chosen_pipe})", state
+        if not response.get("ok"):
+            raise RuntimeError("Daemon status was rejected")
+    except Exception as exc:
+        raise DaemonOwnerUnavailable(chosen_ctx, state_path, "started_owner_status_failed") from exc
 
-    updated = _update_saved_state_from_response(response, chosen_ctx)
+    updated = _update_saved_state_from_response(response, chosen_ctx, expected=state)
     return True, f"daemon started ({chosen_pipe})", updated or state
 
 
@@ -894,7 +980,7 @@ def attach_client(
     if not bool(response.get("ok")):
         err = response.get("error") if isinstance(response.get("error"), dict) else {}
         return False, str(err.get("message") or "attach client failed"), state
-    updated = _update_saved_state_from_response(response, chosen_ctx)
+    updated = _update_saved_state_from_response(response, chosen_ctx, expected=state)
     return True, message, updated or state
 
 
@@ -917,7 +1003,7 @@ def heartbeat_client(
     if not bool(response.get("ok")):
         err = response.get("error") if isinstance(response.get("error"), dict) else {}
         return False, str(err.get("message") or "heartbeat failed"), state
-    updated = _update_saved_state_from_response(response, chosen_ctx)
+    updated = _update_saved_state_from_response(response, chosen_ctx, expected=state)
     return True, "heartbeat updated", updated or state
 
 
@@ -939,7 +1025,7 @@ def detach_client(
     if not bool(response.get("ok")):
         err = response.get("error") if isinstance(response.get("error"), dict) else {}
         return False, str(err.get("message") or "detach failed"), state
-    updated = _update_saved_state_from_response(response, chosen_ctx)
+    updated = _update_saved_state_from_response(response, chosen_ctx, expected=state)
     return True, "client detached", updated or state
 
 
@@ -947,6 +1033,9 @@ def clear_context(context: Optional[str] = "default") -> Tuple[bool, str, Dict[s
     chosen_ctx = _normalize_context(context)
     state = load_daemon_state(context=chosen_ctx)
     if not state:
+        status, _ = _load_json_with_status(_daemon_state_path(chosen_ctx))
+        if status == "invalid" or owner_is_busy(_daemon_state_path(chosen_ctx), chosen_ctx):
+            raise DaemonOwnerUnavailable(chosen_ctx, _daemon_state_path(chosen_ctx), "owner_state_unavailable")
         cleanup_stale_daemon_states(context=chosen_ctx)
         if _context_has_unreleased_resources(chosen_ctx):
             return False, "context still owns resources; restart its daemon and clear it", {"context_id": chosen_ctx}
@@ -959,6 +1048,8 @@ def clear_context(context: Optional[str] = "default") -> Tuple[bool, str, Dict[s
     try:
         response = daemon_request("clear_context", params={}, context=chosen_ctx, state=state)
     except Exception:
+        if _is_process_running(int(state.get("pid") or 0)) or owner_is_busy(_daemon_state_path(chosen_ctx), chosen_ctx):
+            return False, "context clear failed; owner termination is unconfirmed", {"state": state}
         cleanup_stale_daemon_states(context=chosen_ctx)
         refreshed = load_daemon_state(context=chosen_ctx)
         if refreshed:
@@ -973,10 +1064,10 @@ def clear_context(context: Optional[str] = "default") -> Tuple[bool, str, Dict[s
     if not bool(response.get("ok")):
         err = response.get("error") if isinstance(response.get("error"), dict) else {}
         return False, str(err.get("message") or "context clear failed"), {}
+    updated = _update_saved_state_from_response(response, chosen_ctx, expected=state)
     clear_session_state(context=chosen_ctx)
     clear_context_snapshot(context=chosen_ctx)
     clear_context_state(context=chosen_ctx)
-    updated = _update_saved_state_from_response(response, chosen_ctx)
     result = response.get("result") if isinstance(response.get("result"), dict) else {}
     details = dict(result)
     if updated:
@@ -985,6 +1076,12 @@ def clear_context(context: Optional[str] = "default") -> Tuple[bool, str, Dict[s
 
 
 def stop_daemon(context: Optional[str] = "default") -> Tuple[bool, str]:
+    # A new starter must wait until both daemon and worker exits are confirmed.
+    with _locked_daemon_start(_normalize_context(context)):
+        return _stop_daemon_locked(context)
+
+
+def _stop_daemon_locked(context: Optional[str]) -> Tuple[bool, str]:
     chosen_ctx = _normalize_context(context)
     if _context_has_unreleased_resources(chosen_ctx):
         return False, "context still owns resources; clear it before stopping the daemon"
@@ -1001,16 +1098,18 @@ def stop_daemon(context: Optional[str] = "default") -> Tuple[bool, str]:
     pid = int(st.get("pid") or 0)
     worker = st.get("worker") if isinstance(st.get("worker"), dict) else {}
     worker_pid = int(worker.get("pid") or 0)
-    _shutdown_stateful_daemon(pid, st, chosen_ctx)
+    stopped = _shutdown_stateful_daemon(pid, st, chosen_ctx)
 
-    if pid and _is_process_running(pid):
+    if not stopped or (pid and _is_process_running(pid)):
         return False, "daemon stop timed out"
 
     if worker_pid > 0 and _is_process_running(worker_pid):
         if not _kill_process(worker_pid) or not _wait_for_pid_exit(worker_pid, 3.0):
             return False, "worker stop timed out"
 
-    clear_daemon_state(context=chosen_ctx)
+    if not wait_for_owner_exit(_daemon_state_path(chosen_ctx), chosen_ctx):
+        return False, "daemon ownership release timed out"
+    clear_daemon_state(context=chosen_ctx, expected=st)
     clear_session_state(context=chosen_ctx)
     clear_worker_state(context=chosen_ctx)
     return True, "daemon stopped"

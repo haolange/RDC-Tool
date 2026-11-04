@@ -100,6 +100,47 @@ def test_worker_uses_source_runtime_directly(tmp_path: Path, monkeypatch) -> Non
         worker._runtime = None
 
 
+def test_worker_rejects_declared_but_invalid_native_set_before_spawn(tmp_path, monkeypatch):
+    import pytest
+    source = _prepare_runtime_source(tmp_path)
+    manifest = source / "manifest.runtime.json"
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["native_build"] = {"source": {}, "builds": []}
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr(daemon_worker, "binaries_root", lambda: source)
+    monkeypatch.setattr(daemon_worker.subprocess, "Popen", lambda *a, **kw: pytest.fail("unverified runtime was spawned"))
+    worker = daemon_worker.RuntimeWorkerProcess(context_id="invalid-native")
+    with pytest.raises(RuntimeError, match="integrity failed before worker"):
+        worker._spawn()
+    assert worker._proc is None
+
+
+def test_mixed_loaded_runtime_rejects_new_work_but_keeps_cleanup_available(monkeypatch):
+    from types import SimpleNamespace
+    import rdc_tool
+    from rdc_tool import runtime_identity, runtime_worker
+    called = []
+    async def dispatch(operation, *args, **kwargs):
+        called.append(operation)
+        return {"closed": True}
+    async def shutdown(**kwargs):
+        called.append("shutdown")
+    monkeypatch.setattr(rdc_tool, "server", SimpleNamespace(dispatch_operation=dispatch, runtime_shutdown=shutdown))
+    monkeypatch.setattr(runtime_identity, "loaded_runtime_identity", lambda *args: {"status": "mismatch"})
+    requests = [
+        {"id": "query", "method": "exec", "params": {"operation": "rd.texture.get_pixel_history"}},
+        {"id": "clear", "method": "clear_context"},
+        {"id": "stop", "method": "shutdown"},
+    ]
+    monkeypatch.setattr(runtime_worker.sys, "stdin", io.StringIO("\n".join(json.dumps(item) for item in requests)))
+    outputs = []
+    monkeypatch.setattr(runtime_worker, "_emit", outputs.append)
+    assert runtime_worker.main(["--context-id", "mixed-runtime"]) == 0
+    assert outputs[1]["ok"] is False
+    assert "configured runtime" in outputs[1]["error"]["message"]
+    assert called == ["rd.core.shutdown", "shutdown"]
+
+
 def test_worker_keeps_loop_and_native_thread_across_requests_and_shutdown(monkeypatch):
     import asyncio
     import threading

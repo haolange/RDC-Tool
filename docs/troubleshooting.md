@@ -39,6 +39,12 @@ DXIL/DXBC disassembly is read-only by default. If `edit_plan.captured_source_edi
 
 ## Texture Export
 
+### Store 与 Don’t Care 图案
+
+管线显示的原始捕获 load/store 动作、回放归一化后的动作和实际纹理内容需要分别核对。`Store` 说明 pass 结束时保留结果，并不保证开始时已有有效内容；`DONT_CARE` load、undefined layout transition 或单独的深度／模板弃置，可以在未被后续绘制覆盖的区域留下 RenderDoc 的诊断图案。图案本身可能已是纹理像素，而非界面文字叠加。
+
+先固定事件、附件、aspect、子资源和坐标，再用结构化捕获记录、管线状态、`rd.texture.get_pixel_value` 和显式纹理导出对照。原始记录与临时回放 pass 不应混用；不能通过禁用图案或强制 clear 来掩盖内容来源。对未定义区域不设固定像素正确值。
+
 `rd.export.texture` accepts `file_format`. The removed `format` parameter is rejected. Explicit HDR/EXR/DDS requests fail closed when the runtime cannot produce that format; PNG is display-mapped output and should not be treated as HDR data evidence.
 
 Texture statistics, histograms, and numeric differences read data in memory. An unsupported packed/compressed layout, byte-count mismatch, invalid subresource, non-finite input, invalid histogram range, or backend read failure returns a structured failure. Empty or zero output is not used as a substitute for failed acquisition. Use `rd.texture.get_data` or an export operation only when a persistent artifact is required.
@@ -106,6 +112,17 @@ Android 安装前只读查询 `dumpsys package installs` 的 active sessions。�
 
 未决状态的唯一结构化标志为 `error.details.device_action`：`kind=android_install`、`state=unconfirmed`，附设备、目标包／APK hash、必要 sessions 和 `observation=pending|unreadable`。安装超时为 `android_apk_install_timeout`；已确认的 `installation.installed_apk`／`uninstalled_existing` 事实仍保留，取消回执亦不得抹去未决状态。包当前不存在、host 进程退出或 abandon 应答成功均不能替代设备端终态证明。
 
+安装客户端已退出但缺少明确的 `Success` 或 PackageManager `Failure` 回执时，返回 `remote_install_unconfirmed` 和 `device_action.observation=unreadable`；退出码为零、空 stdout/stderr 也属于未确认。相互矛盾的成功／失败回执或非零退出码伴随 `Success` 也不能证明成功。明确的 PackageManager 安装失败继续返回 `android_apk_install_failed`，签名与降级修复仍须原有身份确认。工具不会自动再次安装或用附加查询掩盖原回执；消费者先保留未决状态，经 `rd.remote.inspect_installation` 核验后再决定下一步，不能把“未确认”显示成“确定未安装”。
+
 `rd.remote.connect.timeout_policy` 从 `timeout_policy.py` 单源生成，声明 `argument`、`default_timeout_ms`、`worker_grace_ms`、`transport_grace_ms` 和 `process_grace_ms`。调用方显式传入本机 native budget；worker 在该 budget 后保留 85 秒用于 join／清理，CLI transport 再保留 5 秒，宿主进程再保留 5 秒用于接收最终回执。原有 90 秒 transport 余量在 worker／transport 间拆分，不更改用户设置；调用方不得读取描述猜测或在缺失 policy 时默认放行。
 
 应用内解除未决安装使用唯一只读操作 `rd.remote.inspect_installation`，参数仅 `device_serial`，必须经非 default owning context。该操作复用连接前的设备校验、同安装 APK 包名／SHA256 和 PackageManager active-session 检查；不安装、卸载、启动 helper、建立连接或 abandon。结果 `installation_state=clear|pending|unknown` 与 `observation=verified|pending|unreadable` 分别表示可核实的状态和观察范围。`clear` 只证明没有相关未决安装，不证明 helper 已安装、兼容或已连接；应用确认冻结 CLI/catalog 与原目标 APK 身份一致后，才能继续用户本次明确请求的正常准备。pending／unknown 保留原未决事实和设备占用。
+
+
+`rd.remote.list_targets` 的空数组只表示本次成功扫描没有发现 target socket。Android 查询 owning connection 选定 serial 的 `/proc/net/unix`，区分 target-control sockets（38920–38927）与 replay-server socket（39920）；读取失败、空输出或缺失表头是错误，不能据此断言没有应用。TCP target discovery/control 使用 host-only，replay server 的 host:port 不可传给这两个原生接口。
+
+Android target control 对每个实际 target 临时建立带 `--no-rebind` 的自有 forward；公开 `target_id` 保留设备逻辑 ident，不使用主机临时端口。每次操作成功或异常均先 `Shutdown` control，再核对 serial/local spec/remote socket 后回收自有 forward；不停止应用，也不移除外部映射。busy target 不 force-connect，抓帧、复制和删除拒绝占用。清理失败保留 ownership 并返回失败；先重试 `rd.remote.disconnect`，不要手工删除 ownership 或把失败当作已释放。
+
+ADB forward 清理只以 ADB server 的 `host:list-forward` 协议应答为列表真源，不再读取 CLI `forward --list`；CLI 即使返回换行或退出码零，也不能证明列表 payload 完整。一次查询共用 10 秒 deadline，完整读取 `OKAY`、4 位十六进制长度及对应 payload；完整零长度帧才是合法空列表。`FAIL`、EOF、超时、无效长度／UTF-8／行格式均为 `ADB forward cleanup unconfirmed`，保留 lease。
+
+查询遵循 ADB 的 endpoint 环境优先级：`ADB_SERVER_SOCKET` 优先，否则使用 `ANDROID_ADB_SERVER_ADDRESS`／`ANDROID_ADB_SERVER_PORT`，默认 `localhost:5037`。支持 TCP 端点；无法支持的端点明确未确认，不回落到默认 server。同次清理固定 endpoint，bundled ADB 的删除命令通过显式 `-H`／`-P` 绑定该 server；删除后仅一次同协议查询确认 local spec 已无映射。映射仍在、查询失败或外部重绑均不能退役 ownership，也不会追加删除、自动重试或改用其他查询路径。公开错误继续使用既有 disconnect/context cleanup 错误及 `cleanup_errors`。`context clear` 的成功回执不能替代独立的 forward、helper 和宿主进程终态证据。

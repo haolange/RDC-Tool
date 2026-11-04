@@ -35,6 +35,28 @@ def ensure_within_root(root: Path, path: Path, *, label: str) -> Path:
     return resolved
 
 
+def task_directory(root: Path, raw: str, *, label: str, new: bool) -> Path:
+    """Resolve an explicit build directory without traversing reparse points."""
+    candidate = root / raw
+    try:
+        relative = candidate.relative_to(root)
+    except ValueError as exc:
+        raise ValueError(f"{label} escapes tools root") from exc
+    if len(relative.parts) < 2 or relative.parts[0] not in {"intermediate", "dist"} or ".." in relative.parts:
+        raise ValueError(f"{label} must be a task directory under intermediate/ or dist/")
+    for path in (candidate, *candidate.parents):
+        if path.is_symlink() or path.is_junction():
+            raise ValueError(f"{label} must not traverse a link: {path}")
+        if path == root:
+            break
+    resolved = ensure_within_root(root, candidate, label=label)
+    if new and resolved.exists():
+        raise FileExistsError(f"Refusing to overwrite {label}: {resolved}")
+    if not new and not resolved.is_dir():
+        raise ValueError(f"{label} is not an existing directory: {resolved}")
+    return resolved
+
+
 def write_text(path: Path, text: str, *, encoding: str = "utf-8") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding=encoding)

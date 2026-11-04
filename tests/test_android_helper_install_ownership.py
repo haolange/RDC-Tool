@@ -87,20 +87,46 @@ def test_package_probe_stderr_cannot_be_treated_as_absent(monkeypatch):
 @pytest.mark.parametrize("fresh_install", [False, True])
 def test_starting_process_does_not_acquire_existing_installation_config(monkeypatch, fresh_install):
     value = result()
+    value.apk_sha256 = "a" * 64
     config_writes = []
     shell_commands = []
+    forward_commands = []
     def ensure(item, options):
         item.installed_apk = fresh_install
+    def shell(adb, serial, *args, **kwargs):
+        assert (adb, serial) == (value.adb_path, value.device_serial)
+        shell_commands.append(args)
+        if args[:2] == ("am", "start"):
+            output = "Starting: Intent"
+        elif args == ("pm", "path", value.package_name):
+            output = "package:/data/app/helper/base.apk\n"
+        elif args == ("sha256sum", "/data/app/helper/base.apk"):
+            output = "b" * 64 + "  /data/app/helper/base.apk\n"
+        else:
+            pytest.fail(f"Unexpected helper shell command: {args!r}")
+        return SimpleNamespace(returncode=0, stdout=output, stderr="")
+    def forward(cmd, **kwargs):
+        forward_commands.append(cmd)
+        assert cmd == ["adb", "-s", "device", "forward", "--no-rebind", "tcp:1", "localabstract:renderdoc_2"]
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
     monkeypatch.setattr(rb, "_ensure_android_helper_installed", ensure)
     monkeypatch.setattr(rb, "_ensure_renderdoc_conf", lambda item: config_writes.append(item.package_name))
     monkeypatch.setattr(rb, "_list_renderdoc_socket_ports", lambda *args: [2])
     monkeypatch.setattr(rb, "_package_pids", lambda *args: [91])
     monkeypatch.setattr(rb, "_is_package_running", lambda *args: True)
-    monkeypatch.setattr(rb, "_adb_shell", lambda *args, **kwargs: shell_commands.append(args[2:]))
-    monkeypatch.setattr(rb, "_run_subprocess", lambda *args, **kwargs: SimpleNamespace(stdout=""))
+    monkeypatch.setattr(rb, "_adb_shell", shell)
+    monkeypatch.setattr(rb, "_run_subprocess", forward)
     observed = rb._prepare_android_service_steps(value, rb.AndroidBootstrapOptions(), False, "helper/.Loader")
     assert observed.started_activity is True
     assert observed.owned_pids == [91]
     assert observed.created_forward is True
     assert bool(config_writes) is fresh_install
-    assert any(command[:2] == ("am", "start") for command in shell_commands)
+    assert len(shell_commands) == 3
+    assert shell_commands[0][:2] == ("am", "start")
+    assert len(forward_commands) == 1
+    assert observed.installed_apk is fresh_install
+    assert observed.uninstalled_existing is False
+    assert observed.cleanup_actions == ["activity-started", "adb-forward"]
+    assert observed.apk_sha256 == "a" * 64
+    assert observed.installed_apk_sha256 == "b" * 64
+    assert observed.apk_identity_status == "different"

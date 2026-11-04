@@ -20,6 +20,7 @@ import logging
 import math
 from typing import Any, Dict, List, Optional, Tuple
 
+from rdc_tool.core.errors import CoreError
 from rdc_tool.models import PerfResult, CounterSample, CounterSummary
 
 logger = logging.getLogger("rdc_tool.core.perf_service")
@@ -31,10 +32,34 @@ async def measure_frame_gpu(controller: Any, rd: Any, *, samples: int, warmup: i
         raise ValueError("Frame measurement requires 1..16 samples and 0..4 warmup runs")
     counter = getattr(rd.GPUCounter, "FrameGPUDuration", None)
     if counter is None:
-        raise RuntimeError("Native runtime lacks the whole-replay GPU counter; update the matching runtime")
+        raise CoreError(
+            code="frame_timing_unavailable",
+            message="Native runtime does not expose the FrameGPUDuration counter",
+            category="capability",
+            details={
+                "capability": "whole_replay_gpu_timestamp",
+                "reason": "counter_missing_from_runtime_enum",
+                "source": "renderdoc_runtime",
+                "counter": "FrameGPUDuration",
+                "scope": "single_queue_complete_replay",
+                "recovery_hint": "Use a matching RenderDoc runtime that exposes FrameGPUDuration; no event-duration or CPU-time fallback is available.",
+            },
+        )
     available = await asyncio.to_thread(controller.EnumerateCounters)
     if counter not in available:
-        raise RuntimeError("Whole-replay GPU timestamps unavailable for this backend or queue configuration")
+        raise CoreError(
+            code="frame_timing_unavailable",
+            message="FrameGPUDuration is not available for the current replay configuration",
+            category="capability",
+            details={
+                "capability": "whole_replay_gpu_timestamp",
+                "reason": "counter_not_enumerated",
+                "source": "renderdoc_runtime",
+                "counter": "FrameGPUDuration",
+                "scope": "single_queue_complete_replay",
+                "recovery_hint": "Use a replay configuration that enumerates FrameGPUDuration; no event-duration or CPU-time fallback is available.",
+            },
+        )
     desc = await asyncio.to_thread(controller.DescribeCounter, counter)
     if int(desc.unit) != _COUNTER_UNIT_SECONDS or int(desc.resultType) != _COMP_TYPE_FLOAT or int(desc.resultByteWidth) != 8:
         raise ValueError("Whole-replay counter has an invalid unit or result format")
@@ -48,9 +73,36 @@ async def measure_frame_gpu(controller: Any, rd: Any, *, samples: int, warmup: i
         raise ValueError("Capture has no replay event range")
     values = []
     for index in range(samples + warmup):
-        rows = list(await asyncio.to_thread(controller.FetchCounters, [counter]))
+        try:
+            rows = list(await asyncio.to_thread(controller.FetchCounters, [counter]))
+        except Exception as exc:
+            raise CoreError(
+                code="frame_timing_sample_failed",
+                message="Native FrameGPUDuration counter fetch failed",
+                category="runtime",
+                details={
+                    "capability": "whole_replay_gpu_timestamp",
+                    "reason": "counter_fetch_failed",
+                    "source": "renderdoc_runtime",
+                    "counter": "FrameGPUDuration",
+                    "scope": "single_queue_complete_replay",
+                    "recovery_hint": "Use a replay where the native whole-replay timestamp query returns a complete sample; no timing fallback is available.",
+                },
+            ) from exc
         if len(rows) != 1 or rows[0].counter != counter or int(rows[0].eventId) != 0:
-            raise RuntimeError("Whole-replay GPU timestamp query failed or returned an incomplete sample")
+            raise CoreError(
+                code="frame_timing_sample_failed",
+                message="Native FrameGPUDuration query returned an incomplete sample",
+                category="runtime",
+                details={
+                    "capability": "whole_replay_gpu_timestamp",
+                    "reason": "incomplete_counter_sample",
+                    "source": "renderdoc_runtime",
+                    "counter": "FrameGPUDuration",
+                    "scope": "single_queue_complete_replay",
+                    "recovery_hint": "Use a replay where the native whole-replay timestamp query returns a complete sample; no timing fallback is available.",
+                },
+            )
         value = _extract_counter_value(rows[0], desc)
         if value <= 0:
             raise ValueError("Whole-replay GPU duration must be positive")

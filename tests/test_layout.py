@@ -9,10 +9,24 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_event_shader_inspection_uses_one_canonical_stage_vocabulary() -> None:
+def test_pipeline_stage_schema_defers_names_to_structured_runtime_validation() -> None:
     from rdc_tool.runtime_catalog import describe_operation, validate_operation_arguments
 
-    for operation in ("rd.pipeline.get_shader", "rd.shader.get_disassembly"):
+    for action in ("get_shader", "get_stage_state", "get_constant_buffers", "get_resource_bindings"):
+        operation = f"rd.pipeline.{action}"
+        stage = describe_operation(operation)["input_schema"]["properties"]["stage"]
+        assert stage["type"] == "string"
+        assert "enum" not in stage
+        for value in ("PS", "ps", "RT", "rt", "not-a-stage"):
+            validate_operation_arguments(operation, {"session_id": "sess_demo", "stage": value, "event_id": 1248})
+        with pytest.raises(ValueError, match="must have type string"):
+            validate_operation_arguments(operation, {"session_id": "sess_demo", "stage": 1})
+
+
+def test_shader_disassembly_keeps_canonical_stage_vocabulary() -> None:
+    from rdc_tool.runtime_catalog import describe_operation, validate_operation_arguments
+
+    for operation in ("rd.shader.get_disassembly",):
         stage = describe_operation(operation)["input_schema"]["properties"]["stage"]
         assert stage["enum"] == ["vs", "hs", "ds", "gs", "ps", "cs", "ms", "as"]
         validate_operation_arguments(operation, {"session_id": "sess_demo", "stage": "ps", "event_id": 1248})

@@ -1789,6 +1789,104 @@ def test_patch_engine_hlsl_full_replacement_builds_and_replaces_without_editing_
     assert build_args[1] == "HLSL"
     assert b"float4 main" in build_args[2]
     assert result.messages[0] == "Applied full source replacement input."
+    assert result.original_shader_hash == ""
+    assert result.source_before_text == ""
+    assert result.applied_to_shader_hash == hashlib.sha256(build_args[2]).hexdigest()
+    assert result.edit_plan["input_kind"] == "user_full_source"
+    assert result.edit_plan["can_build"] is True
+    assert result.edit_plan["can_replace"] is True
+    assert any("original_shader_hash is unknown" in message for message in result.messages)
+
+
+@pytest.mark.parametrize("entry_source, expected_hash, accepted", [
+    ("float4 main() : SV_Target { return 0; }", "", True),
+    ("float4 main() : SV_Target { return 0; }", "original", True),
+    ("float4 main() : SV_Target { return 0; }", "replacement", False),
+    ("float4 main() : SV_Target { return 0; }", "mismatch", False),
+    ("", "", True),
+    ("", "original", False),
+    (None, "", True),
+    (None, "original", False),
+])
+def test_catalog_full_source_replacement_keeps_source_provenance_and_runtime_plan(
+    monkeypatch: pytest.MonkeyPatch, entry_source: str | None, expected_hash: str, accepted: bool,
+) -> None:
+    from rdc_tool.core.engine import CoreEngine
+    from rdc_tool.tool_router import build_operation_registry
+
+    original_source = "float4 main() : SV_Target { return 0; }"
+    replacement_source = "float4 main() : SV_Target { return 1; }"
+    original_hash = hashlib.sha256(original_source.encode()).hexdigest()
+    replacement_hash = hashlib.sha256(replacement_source.encode()).hexdigest()
+    include_source = "not the entry shader source"
+    fake_rd = SimpleNamespace(ResourceId=lambda: "ResourceId::0",
+                              ShaderCompileFlags=_FakeShaderCompileFlags, ShaderCompileFlag=_FakeShaderCompileFlag)
+    monkeypatch.setattr(patch_engine_mod, "_get_rd", lambda: fake_rd)
+    monkeypatch.setattr(patch_engine_mod, "_to_rd_stage", lambda stage: "ps")
+
+    class Pipe(_PatchEnginePipe):
+        def GetShader(self, stage: object) -> str:
+            return "ResourceId::77" if stage == "ps" else "ResourceId::0"
+
+        def GetShaderReflection(self, stage: object) -> SimpleNamespace:
+            refl = super().GetShaderReflection(stage)
+            if entry_source is not None:
+                refl.debugInfo.files = [SimpleNamespace(filename="entry.hlsl", contents=entry_source),
+                                        SimpleNamespace(filename="include.hlsl", contents=include_source)]
+            return refl
+
+    class Controller(_PatchEngineController):
+        def GetTargetShaderEncodings(self) -> list[str]:
+            return ["HLSL"]
+
+        def GetPipelineState(self) -> Pipe:
+            return Pipe()
+
+        def DisassembleShader(self, *args):
+            pytest.fail("Full-source original provenance must not be guessed from disassembly")
+
+    controller = Controller()
+    engine = patch_engine_mod.PatchEngine()
+    _install_shader_replace_env(monkeypatch, controller)
+    server.server_runtime._patch_engine = engine
+    server.server_runtime._session_manager = _PatchEngineSessionManager(controller)
+    args = {"session_id": "sess_demo", "event_id": 314, "stage": "ps", "shader_id": "ResourceId::77",
+            "source_text": replacement_source, "source_encoding": "hlsl", "entry": "main", "target": "ps_6_6"}
+    if expected_hash:
+        args["expected_source_hash"] = {"original": original_hash, "replacement": replacement_hash,
+                                        "mismatch": "f" * 64}[expected_hash]
+    router = CoreEngine(registry=build_operation_registry())
+    result = asyncio.run(router.execute("rd.shader.edit_and_replace", args))
+    assert result["ok"] is accepted
+    if not accepted:
+        assert result["error"]["code"] == "shader_source_mismatch"
+        details = result["error"]["details"]
+        assert details["actual_source_hash"] == (original_hash if entry_source else "")
+        assert details["failure_reason"] == ("source_hash_mismatch" if entry_source else "source_hash_unavailable")
+        assert details["replacement_attempted"] is False
+        assert controller.build_calls == controller.replace_calls == []
+        assert engine.list_patches("sess_demo") == []
+        return
+    data = result["data"]
+    assert data["status"] == "applied"
+    replacement = data["replacement"]
+    assert replacement["original_shader_hash"] == (original_hash if entry_source else "")
+    assert replacement["applied_to_shader_hash"] == replacement_hash
+    assert replacement["original_shader_hash"] != hashlib.sha256(include_source.encode()).hexdigest()
+    assert replacement["compile"]["build_input"]["sha256"] == replacement_hash
+    assert replacement["compile"]["build_input"]["target_shader_id"] == "ResourceId::99"
+    assert data["edit_plan"] == replacement["edit_plan"]
+    assert data["edit_plan"]["input_kind"] == "user_full_source"
+    assert data["edit_plan"]["can_build"] is data["edit_plan"]["can_replace"] is True
+    assert data["edit_plan"]["runtime_full_replace_supported"] is True
+    assert server._runtime.shader_replacements["sess_demo"][0]["edit_plan"] == data["edit_plan"]
+    assert controller.build_calls[0][2] == replacement_source.encode()
+    restored = asyncio.run(router.execute("rd.shader.revert_replacement", {
+        "session_id": "sess_demo", "event_id": 314, "replacement_id": data["replacement_id"]}))
+    assert restored["ok"] is True
+    assert restored["data"]["reverted"] is True
+    assert controller.remove_calls == ["ResourceId::77"]
+    assert controller.free_calls == ["ResourceId::99"]
 
 
 def test_patch_engine_hlsl_compile_failure_does_not_replace(monkeypatch: pytest.MonkeyPatch) -> None:

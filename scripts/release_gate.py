@@ -20,6 +20,7 @@ if str(SCRIPT_ROOT) not in sys.path:
 
 from rdc_tool.python_runtime import validate_bundled_python_layout
 from rdc_tool.runtime_catalog import catalog_payload
+from rdc_tool.runtime_identity import native_manifest_status
 from scripts import package_release as release_packager
 from scripts._shared import run_subprocess, tools_root, write_text
 from scripts.generate_tool_reference import generate_tool_reference
@@ -288,6 +289,11 @@ def _check_bundled_host_tools() -> tuple[bool, str]:
     from rdc_tool.host_tools import validate_bundled_host_tools
     ok, failures = validate_bundled_host_tools()
     return ok, "; ".join(failures) if failures else "bundled ADB and SPIR-V tools verified"
+
+
+def _check_paired_native(root: Path) -> tuple[bool, str]:
+    status = native_manifest_status(root)
+    return status["status"] == "verified", json.dumps(status, ensure_ascii=False)
 
 
 def _check_bundled_python() -> tuple[bool, str]:
@@ -579,6 +585,7 @@ def _run_gate(argv: list[str] | None = None) -> tuple[list[tuple[str, bool, str]
 
     ok_manifest, msg_manifest = _check_manifest(root)
     results.append(("manifest:integrity", ok_manifest, msg_manifest))
+    results.append(("manifest:paired-native", *_check_paired_native(root)))
     results.append(("manifest:bundled-host-tools", *_check_bundled_host_tools()))
     ok_bundled_python, bundled_python_detail = _check_bundled_python()
     results.append(("manifest:bundled-python", ok_bundled_python, bundled_python_detail))

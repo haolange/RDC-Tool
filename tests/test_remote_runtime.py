@@ -1000,7 +1000,7 @@ def test_borrowed_disconnect_never_shuts_down_remote_service(monkeypatch):
     runtime = server.server_runtime
     remote = DummyRemoteServer()
     remote.ShutdownServerAndConnection = lambda: pytest.fail('must never stop borrowed server')
-    handle = SimpleNamespace(remote_server=remote, transport='adb_android', bootstrap_result=None)
+    handle = SimpleNamespace(remote_server=remote, transport='adb_android', bootstrap_result=None, target_control_leases=[])
     assert runtime._disconnect_remote_handle_sync(handle) == []
     assert remote.shutdown_called
 
@@ -1192,34 +1192,141 @@ def test_native_copy_failure_does_not_attempt_fallback_or_open(monkeypatch):
 
 @pytest.mark.parametrize("existing,verified,success", [(True, True, True), (False, True, True), (False, False, False)])
 def test_android_transfer_verifies_content_and_owns_only_new_paths(monkeypatch, tmp_path, existing, verified, success):
-    import hashlib
-    import rdc_tool.core.session_manager as module
-    capture=tmp_path / "tiny.rdc"
-    capture.write_bytes(b"capture")
-    digest=hashlib.sha256(b"capture").hexdigest()
-    commands=[]
-    owned=[]
-    probes=0
-    def run(argv, **kwargs):
-        nonlocal probes
-        commands.append(argv)
-        if "sha256sum" in argv:
-            probes += 1
-            found=existing or (probes > 1 and verified)
-            return SimpleNamespace(returncode=0 if found else 1, stdout=digest+" file" if found else "", stderr="" if found else "No such file or directory")
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
-    monkeypatch.setattr(module.subprocess,"run",run)
-    state=SessionState(session_id="copy",backend_type=BackendType.REMOTE,
-        remote_server=SimpleNamespace(TakeOwnershipCapture=owned.append),
-        remote_device_serial="device",remote_bootstrap={"adb_path":"adb", "package_name":"org.renderdoc.renderdoccmd.arm64"})
+    device = _AndroidCaptureDevice(monkeypatch, tmp_path, existing=existing, verified=verified)
     if success:
-        assert SessionManager()._copy_android_capture_with_adb(state,str(capture)).endswith(digest+".rdc")
+        assert device.transfer() == device.destination
     else:
-        with pytest.raises(RuntimeError,match="SHA256"):
-            SessionManager()._copy_android_capture_with_adb(state,str(capture))
-    assert bool(owned) is (not existing)
-    assert sum("push" in cmd for cmd in commands) == (0 if existing else 1)
-    assert any("rm" in cmd for cmd in commands) is (not success)
+        with pytest.raises(RuntimeError, match="SHA256"):
+            device.transfer()
+    assert device.owned == ([device.destination] if success and not existing else [])
+    assert sum(cmd[3] == "push" for cmd in device.commands) == (0 if existing else 1)
+    assert device.files.get(device.destination) == (device.content if success else None)
+    assert device.shell_source not in device.files and not device.shell_directories
+
+
+class _AndroidCaptureDevice:
+    package = "org.renderdoc.renderdoccmd.arm64"
+    private_root = "/data/user/0/" + package
+    nonce = "1234567890abcdef1234567890abcdef"
+
+    def __init__(self, monkeypatch, tmp_path, *, existing=False, verified=True):
+        import hashlib
+        import rdc_tool.core.session_manager as module
+        self.capture = tmp_path / "binary capture.rdc"
+        self.content = b"capture\x00\xff\xfe\r\n\x80"
+        self.capture.write_bytes(self.content)
+        self.digest = hashlib.sha256(self.content).hexdigest()
+        self.destination = f"{self.private_root}/files/rdc_tool_captures/{self.digest}.rdc"
+        self.shell_dir = f"/data/local/tmp/rdc-tool-transfer-{self.nonce}"
+        self.shell_source = self.shell_dir + "/source.rdc"
+        self.shell_directories = set()
+        self.files = {self.destination: self.content} if existing else {}
+        self.commands = []
+        self.owned = []
+        self.verified = verified
+        self.writer_mode = "complete"
+        self.sync_mode = "complete"
+        self.racing_content = None
+        self.racing_directory = False
+        self.new_file_created = False
+        self.cleanup_error = False
+        self.shell_cleanup_error = False
+        self.state = SessionState(session_id="copy", backend_type=BackendType.REMOTE,
+            remote_server=SimpleNamespace(TakeOwnershipCapture=self.owned.append),
+            remote_device_serial="device", remote_bootstrap={"adb_path": "adb", "package_name": self.package,
+                "config_remote_path": "/sdcard/Android/media/other/files/renderdoc.conf"})
+        monkeypatch.setattr(module.uuid, "uuid4", lambda: SimpleNamespace(hex=self.nonce))
+        monkeypatch.setattr(module.subprocess, "run", self.run)
+
+    def transfer(self):
+        return SessionManager()._copy_android_capture_with_adb(self.state, str(self.capture))
+
+    def run(self, argv, **kwargs):
+        import hashlib
+        import shlex
+        import subprocess
+        self.commands.append(argv)
+        assert argv[:3] == ["adb", "-s", "device"]
+        assert kwargs["stdin"] == subprocess.DEVNULL and "input" not in kwargs
+        assert kwargs["text"] is True  # Only diagnostics travel through host stdio.
+        result = lambda code=0, stdout="", stderr="": SimpleNamespace(returncode=code, stdout=stdout, stderr=stderr)
+        if argv[3] == "push":
+            assert argv[4:] == [str(self.capture), self.shell_source] and kwargs["timeout"] == 240
+            data = self.capture.read_bytes()
+            if self.sync_mode in {"timeout", "failed"}:
+                self.files[self.shell_source] = data[:1]
+                if self.sync_mode == "timeout":
+                    raise subprocess.TimeoutExpired(argv, 240)
+                return result(1, stderr="device offline")
+            self.files[self.shell_source] = data
+            return result(stdout="" if self.sync_mode == "empty_output" else "1 file pushed")
+        assert argv[3] == "shell"
+        assert all("/sdcard" not in arg for arg in argv)
+        if argv[4] == "sha256sum":
+            assert argv[5] == self.shell_source
+            if self.sync_mode == "unreadable":
+                return result(1, stderr="Permission denied")
+            if self.sync_mode == "missing":
+                return result(1, stderr=f"sha256sum: {self.shell_source}: No such file or directory")
+            data = b"corrupt" if self.sync_mode == "mismatch" else self.files[self.shell_source]
+            return result(stdout=hashlib.sha256(data).hexdigest() + "  " + self.shell_source + "\n")
+        if len(argv) == 5:
+            script = argv[4]
+            if script.startswith("umask"):
+                assert f"umask 077; mkdir -m 700 {self.shell_dir}" in script
+                self.shell_directories.add(self.shell_dir)
+                if self.sync_mode == "dir_collision":
+                    self.files[self.shell_dir + "/protected"] = b"keep"
+                    return result(1, stderr="File exists")
+                return result(stdout=f"{self.nonce}:SHELL_CREATED\n")
+            tokens = shlex.split(script)
+            if tokens[0] == "cat":
+                assert tokens[:7] == ["cat", self.shell_source, "|", "run-as", self.package, "sh", "-c"]
+                assert "set -C; exec 3> " + self.destination in tokens[7]
+                assert kwargs["timeout"] == 60
+                if self.racing_directory:
+                    return result(1, stderr="Is a directory")
+                if self.racing_content is not None:
+                    self.files[self.destination] = self.racing_content
+                    return result(1, stderr="File exists")
+                self.files[self.destination] = self.files[self.shell_source]
+                self.new_file_created = True
+                if self.writer_mode == "timeout":
+                    raise subprocess.TimeoutExpired(argv, 60, output=f"{self.nonce}:CREATED\n")
+                if self.writer_mode == "empty":
+                    return result()
+                if self.writer_mode == "wrong_nonce":
+                    return result(stdout="other:CREATED\nother:DONE:0\n")
+                if self.writer_mode == "failed":
+                    return result(1, stdout=f"{self.nonce}:CREATED\n{self.nonce}:DONE:1\n", stderr="write failed")
+                return result(stdout=f"{self.nonce}:CREATED\n{self.nonce}:DONE:0\n")
+            assert tokens[:6] == ["rm", "-f", self.shell_source, "&&", "rmdir", self.shell_dir]
+            if self.shell_cleanup_error:
+                return result(1, stderr="source cleanup denied")
+            del self.files[self.shell_source]
+            self.shell_directories.remove(self.shell_dir)
+            return result(stdout=f"{self.nonce}:SHELL_REMOVED\n")
+        assert argv[4:6] == ["run-as", self.package]
+        operation = argv[6:]
+        if operation == ["pwd"]:
+            return result(stdout=self.private_root + "\n")
+        if operation[0] == "sha256sum":
+            path = operation[1]
+            if path not in self.files:
+                return result(1, stderr=f"sha256sum: {path}: No such file or directory")
+            data = self.files[path] if path != self.destination or self.verified or not self.new_file_created else b"corrupt"
+            return result(stdout=hashlib.sha256(data).hexdigest() + "  " + path + "\n")
+        if operation[0] == "mkdir":
+            assert operation == ["mkdir", "-p", self.private_root + "/files/rdc_tool_captures"]
+            return result()
+        assert operation[:2] == ["sh", "-c"]
+        script = shlex.split(operation[2])[0]
+        tokens = shlex.split(script)
+        assert tokens[:2] == ["rm", "-f"]
+        if self.cleanup_error:
+            return result(1, stderr="cleanup denied")
+        del self.files[tokens[2]]
+        return result(stdout=f"{self.nonce}:REMOVED\n")
 
 
 @pytest.mark.parametrize("error", ["device offline", "Permission denied", ""])
@@ -1230,6 +1337,8 @@ def test_android_transfer_refuses_unverifiable_existing_path(monkeypatch, tmp_pa
     commands = []
     def run(argv, **kwargs):
         commands.append(argv)
+        if argv[-1] == "pwd":
+            return SimpleNamespace(returncode=0, stdout="/data/user/0/org.renderdoc.renderdoccmd.arm64\n", stderr="")
         return SimpleNamespace(returncode=1, stdout="", stderr=error)
     monkeypatch.setattr(module.subprocess, "run", run)
     state = SessionState(session_id="copy", backend_type=BackendType.REMOTE,
@@ -1237,7 +1346,138 @@ def test_android_transfer_refuses_unverifiable_existing_path(monkeypatch, tmp_pa
         remote_device_serial="device", remote_bootstrap={"adb_path": "adb", "package_name": "org.renderdoc.renderdoccmd.arm64"})
     with pytest.raises(RuntimeError, match="Cannot verify"):
         SessionManager()._copy_android_capture_with_adb(state, str(capture))
-    assert len(commands) == 1 and "sha256sum" in commands[0]
+    assert len(commands) == 2 and "sha256sum" in commands[1]
+    assert all(cmd[3:6] == ["shell", "run-as", "org.renderdoc.renderdoccmd.arm64"] for cmd in commands)
+
+
+@pytest.mark.parametrize("same_content", [False, True])
+def test_android_capture_create_race_never_replaces_claims_or_reuses_existing(monkeypatch, tmp_path, same_content):
+    device = _AndroidCaptureDevice(monkeypatch, tmp_path)
+    device.racing_content = device.content if same_content else b"another capture"
+    with pytest.raises(RuntimeError, match="device writer completion is unknown"):
+        device.transfer()
+    assert not device.owned
+    assert device.files[device.destination] == device.racing_content
+    assert device.files[device.shell_source] == device.content
+    assert device.shell_directories == {device.shell_dir}
+    assert len(device.commands) == 7
+
+
+def test_android_capture_racing_directory_is_never_written_or_claimed(monkeypatch, tmp_path):
+    device = _AndroidCaptureDevice(monkeypatch, tmp_path)
+    device.racing_directory = True
+    with pytest.raises(RuntimeError, match="device writer completion is unknown"):
+        device.transfer()
+    assert not device.owned and device.files == {device.shell_source: device.content}
+    assert device.shell_directories == {device.shell_dir} and len(device.commands) == 7
+
+
+@pytest.mark.parametrize("mode", ["timeout", "empty", "wrong_nonce"])
+def test_android_capture_unknown_writer_retains_asset_without_claim_or_cleanup(monkeypatch, tmp_path, mode):
+    device = _AndroidCaptureDevice(monkeypatch, tmp_path)
+    device.writer_mode = mode
+    with pytest.raises(RuntimeError, match="outcome unconfirmed; device writer completion is unknown") as error:
+        device.transfer()
+    assert device.destination in str(error.value)
+    assert device.shell_dir in str(error.value)
+    assert device.files == {device.destination: device.content, device.shell_source: device.content}
+    assert device.shell_directories == {device.shell_dir}
+    assert not device.owned
+    assert len(device.commands) == 7  # Ends at the one device-local writer; no follow-up native action.
+    if mode == "timeout":
+        assert isinstance(error.value.__cause__, __import__("subprocess").TimeoutExpired)
+
+
+def test_android_capture_empty_input_uses_sync_and_device_local_copy(monkeypatch, tmp_path):
+    import hashlib
+    device = _AndroidCaptureDevice(monkeypatch, tmp_path)
+    device.content = b""
+    device.capture.write_bytes(device.content)
+    device.digest = hashlib.sha256(device.content).hexdigest()
+    device.destination = f"{device.private_root}/files/rdc_tool_captures/{device.digest}.rdc"
+    assert device.transfer() == device.destination
+    assert device.files == {device.destination: b""} and not device.shell_directories
+
+
+def test_android_capture_binary_bytes_never_use_host_shell_stdio(monkeypatch, tmp_path):
+    device = _AndroidCaptureDevice(monkeypatch, tmp_path)
+    device.sync_mode = "empty_output"
+    assert device.transfer() == device.destination
+    assert b"\r\n" in device.content and device.files[device.destination] == device.content
+    assert device.files == {device.destination: device.content} and not device.shell_directories
+    assert sum(cmd[3] == "push" for cmd in device.commands) == 1
+
+
+def test_android_capture_existing_partial_cache_is_not_overwritten_or_claimed(monkeypatch, tmp_path):
+    device = _AndroidCaptureDevice(monkeypatch, tmp_path)
+    device.files[device.destination] = b"partial previous capture"
+    with pytest.raises(RuntimeError, match="does not match its digest; refusing overwrite"):
+        device.transfer()
+    assert device.files == {device.destination: b"partial previous capture"}
+    assert not device.owned and not device.shell_directories and len(device.commands) == 2
+
+
+@pytest.mark.parametrize("mode", ["timeout", "failed"])
+def test_android_capture_unknown_sync_retains_source_without_copy_or_cleanup(monkeypatch, tmp_path, mode):
+    device = _AndroidCaptureDevice(monkeypatch, tmp_path)
+    device.sync_mode = mode
+    with pytest.raises(RuntimeError, match="sync outcome unconfirmed") as error:
+        device.transfer()
+    assert device.shell_dir in str(error.value)
+    assert device.files == {device.shell_source: device.content[:1]}
+    assert device.shell_directories == {device.shell_dir} and not device.owned
+    assert len(device.commands) == 5 and device.commands[-1][3] == "push"
+    if mode == "timeout":
+        assert isinstance(error.value.__cause__, __import__("subprocess").TimeoutExpired)
+
+
+@pytest.mark.parametrize("mode", ["unreadable", "missing", "mismatch"])
+def test_android_capture_unverified_sync_source_never_starts_app_copy_or_cleans(monkeypatch, tmp_path, mode):
+    device = _AndroidCaptureDevice(monkeypatch, tmp_path)
+    device.sync_mode = mode
+    with pytest.raises(RuntimeError, match="sync verification unconfirmed") as error:
+        device.transfer()
+    assert device.shell_dir in str(error.value)
+    assert device.files == {device.shell_source: device.content}
+    assert device.shell_directories == {device.shell_dir} and not device.owned
+    assert len(device.commands) == 6 and device.commands[-1][4] == "sha256sum"
+
+
+def test_android_capture_sync_directory_race_never_pushes_or_removes_other_assets(monkeypatch, tmp_path):
+    device = _AndroidCaptureDevice(monkeypatch, tmp_path)
+    device.sync_mode = "dir_collision"
+    with pytest.raises(RuntimeError, match="sync directory creation unconfirmed"):
+        device.transfer()
+    assert device.files == {device.shell_dir + "/protected": b"keep"}
+    assert device.shell_directories == {device.shell_dir} and not device.owned
+    assert len(device.commands) == 4
+
+
+def test_android_capture_terminal_copy_failure_cleans_both_owned_stages(monkeypatch, tmp_path):
+    device = _AndroidCaptureDevice(monkeypatch, tmp_path)
+    device.writer_mode = "failed"
+    with pytest.raises(RuntimeError, match="Android capture writer failed: write failed"):
+        device.transfer()
+    assert not device.files and not device.shell_directories and not device.owned
+
+
+def test_android_capture_source_cleanup_failure_is_reported_without_retry(monkeypatch, tmp_path):
+    device = _AndroidCaptureDevice(monkeypatch, tmp_path)
+    device.shell_cleanup_error = True
+    with pytest.raises(RuntimeError, match="Owned capture cleanup failed:.*source cleanup denied"):
+        device.transfer()
+    assert device.owned == [device.destination]
+    assert device.files == {device.destination: device.content, device.shell_source: device.content}
+    assert device.shell_directories == {device.shell_dir}
+    assert sum("SHELL_REMOVED" in cmd[-1] for cmd in device.commands) == 1
+
+
+def test_android_capture_private_root_failure_prevents_transfer(monkeypatch, tmp_path):
+    device = _AndroidCaptureDevice(monkeypatch, tmp_path)
+    device.private_root = "/data/user/0/another.package"
+    with pytest.raises(RuntimeError, match="private directory is unavailable"):
+        device.transfer()
+    assert len(device.commands) == 1 and not device.owned and not device.files
 
 
 def test_texture_save_keeps_native_readback_failure_message(monkeypatch):
@@ -1251,21 +1491,15 @@ def test_texture_save_keeps_native_readback_failure_message(monkeypatch):
 
 
 def test_android_failed_transfer_preserves_cleanup_failure(monkeypatch, tmp_path):
-    import rdc_tool.core.session_manager as module
-    capture = tmp_path / "tiny.rdc"
-    capture.write_bytes(b"capture")
-    def run(argv, **kwargs):
-        if "sha256sum" in argv:
-            return SimpleNamespace(returncode=1, stdout="", stderr="No such file or directory")
-        if "push" in argv:
-            raise RuntimeError("transfer disconnected")
-        return SimpleNamespace(returncode=1 if "rm" in argv else 0, stdout="", stderr="cleanup denied")
-    monkeypatch.setattr(module.subprocess, "run", run)
-    state = SessionState(session_id="copy", backend_type=BackendType.REMOTE,
-        remote_server=SimpleNamespace(TakeOwnershipCapture=lambda p: None),
-        remote_device_serial="device", remote_bootstrap={"adb_path": "adb", "package_name": "org.renderdoc.renderdoccmd.arm64"})
-    with pytest.raises(RuntimeError, match="transfer disconnected; owned capture cleanup failed: cleanup denied"):
-        SessionManager()._copy_android_capture_with_adb(state, str(capture))
+    device = _AndroidCaptureDevice(monkeypatch, tmp_path, verified=False)
+    device.cleanup_error = True
+    with pytest.raises(RuntimeError, match="SHA256 verification failed; owned capture cleanup failed:.*cleanup denied"):
+        device.transfer()
+    assert device.files == {device.destination: device.content}
+    assert not device.owned
+    assert sum(f"{device.nonce}:REMOVED" in cmd[-1] for cmd in device.commands) == 1
+    assert sum("SHELL_REMOVED" in cmd[-1] for cmd in device.commands) == 1
+    assert not device.shell_directories
 
 
 @pytest.mark.parametrize("detail", ["summary", "full"])

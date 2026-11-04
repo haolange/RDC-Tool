@@ -4,8 +4,11 @@ import asyncio
 import functools
 import hashlib
 import logging
+import re
+import shlex
 import subprocess
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -469,60 +472,142 @@ class SessionManager:
             or ""
         ).strip()
         package_name = str(getattr(bootstrap_result, "package_name", "") or bootstrap.get("package_name") or "").strip()
-        config_remote_path = str(
-            getattr(bootstrap_result, "config_remote_path", "") or bootstrap.get("config_remote_path") or ""
-        ).strip()
-        if not adb_path or not device_serial:
+        if not adb_path or not device_serial or not package_name:
             return ""
-        if config_remote_path and "/" in config_remote_path:
-            remote_root = config_remote_path.rsplit("/", 1)[0]
-        elif package_name:
-            remote_root = f"/sdcard/Android/data/{package_name}/files"
-        else:
-            return ""
-        remote_dir = f"{remote_root.rstrip('/')}/rdc_tool_captures"
+        if not re.fullmatch(r"org\.renderdoc\.renderdoccmd\.(?:arm32|arm64)", package_name):
+            raise RuntimeError("Cannot verify Android capture path: unknown helper package")
+        base_cmd = [adb_path, "-s", device_serial]
+
+        def app_command(*args: str) -> list[str]:
+            return base_cmd + ["shell", "run-as", package_name, *args]
+
+        def run(command: list[str]) -> Any:
+            return subprocess.run(command, check=False, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30)
+
+        private_root = run(app_command("pwd"))
+        remote_root = str(private_root.stdout or "").strip()
+        if (private_root.returncode or str(private_root.stderr or "").strip()
+                or not re.fullmatch(rf"/data/(?:user/\d+|data)/{re.escape(package_name)}", remote_root)):
+            raise RuntimeError("Cannot verify Android capture path: helper private directory is unavailable")
+        remote_dir = f"{remote_root}/files/rdc_tool_captures"
         with Path(rdc_path).open("rb") as source:
             digest = hashlib.file_digest(source, "sha256").hexdigest()
-        remote_name = f"{digest}.rdc"
-        remote_path = f"{remote_dir}/{remote_name}".replace("\\", "/")
-        base_cmd = [adb_path]
-        if device_serial:
-            base_cmd.extend(["-s", device_serial])
-        def remote_digest() -> str:
-            result = subprocess.run(base_cmd + ["shell", "sha256sum", remote_path],
-                                    check=False, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30)
-            if result.returncode == 0 and result.stdout.split():
-                return result.stdout.split()[0]
+        remote_path = f"{remote_dir}/{digest}.rdc"
+
+        def checked_digest(result: Any, path: str) -> str:
+            match = re.fullmatch(r"([0-9a-fA-F]{64})\s+(.+)", str(result.stdout or "").strip())
+            if not result.returncode and not str(result.stderr or "").strip() and match and match[2] == path:
+                return match[1].lower()
             # Only an explicit missing-file response permits creating a path.
-            # An ADB failure or unreadable existing file must never mean absent.
-            if "No such file or directory" in result.stderr:
+            if (result.returncode and not str(result.stdout or "").strip()
+                    and path in str(result.stderr or "")
+                    and str(result.stderr or "").strip().endswith("No such file or directory")):
                 return ""
             raise RuntimeError(f"Cannot verify Android capture path: {result.stderr.strip() or 'empty SHA256 response'}")
 
-        existing = remote_digest()
+        def remote_digest(path: str) -> str:
+            return checked_digest(run(app_command("sha256sum", path)), path)
+
+        existing = remote_digest(remote_path)
         if existing:
             if existing != digest:
                 raise RuntimeError("Remote capture cache content does not match its digest; refusing overwrite")
             return remote_path
-        subprocess.run(base_cmd + ["shell", "mkdir", "-p", remote_dir],
-                       check=True, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30)
-        # Register only a path created by this connection. RenderDoc deletes it
-        # when the owning connection closes, including failed/cancelled opens.
-        state.remote_server.TakeOwnershipCapture(remote_path)
+
+        created = run(app_command("mkdir", "-p", remote_dir))
+        if created.returncode:
+            raise RuntimeError(f"Android capture directory creation failed: {created.stderr.strip()}")
+        nonce = uuid.uuid4().hex
+        shell_dir = f"/data/local/tmp/rdc-tool-transfer-{nonce}"
+        shell_source = f"{shell_dir}/source.rdc"
+        script = (f"umask 077; mkdir -m 700 {shlex.quote(shell_dir)} "
+                  f"&& printf '{nonce}:SHELL_CREATED\\n'")
         try:
-            subprocess.run(base_cmd + ["push", str(rdc_path), remote_path],
-                           check=True, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=240)
-            if remote_digest() != digest:
-                raise RuntimeError("Android capture transfer SHA256 verification failed")
-        except BaseException as original:
+            shell_created = run(base_cmd + ["shell", script])
+        except BaseException as error:
+            raise RuntimeError(f"Android capture sync directory creation unconfirmed; retain {shell_dir}: {error}") from error
+        if shell_created.returncode or str(shell_created.stdout or "").strip() != f"{nonce}:SHELL_CREATED":
+            raise RuntimeError(f"Android capture sync directory creation unconfirmed; retain {shell_dir}: "
+                               f"{shell_created.stderr.strip()}")
+        # ADB sync transfers file bytes without sending them through shell stdin,
+        # whose Windows transport can normalize CRLF even without a PTY.
+        try:
+            pushed = subprocess.run(base_cmd + ["push", str(rdc_path), shell_source], check=False,
+                                    stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=240)
+        except BaseException as error:
+            raise RuntimeError(f"Android capture sync outcome unconfirmed; retain {shell_dir}: {error}") from error
+        if pushed.returncode:
+            raise RuntimeError(f"Android capture sync outcome unconfirmed; retain {shell_dir}: {pushed.stderr.strip()}")
+        try:
+            if checked_digest(run(base_cmd + ["shell", "sha256sum", shell_source]), shell_source) != digest:
+                raise RuntimeError("Android capture sync SHA256 verification failed")
+        except BaseException as error:
+            # A missing/unreadable digest is not a device-side write exit receipt.
+            raise RuntimeError(f"Android capture sync verification unconfirmed; retain {shell_dir}: {error}") from error
+        # noclobber makes this exact cache path exclusive. Native replay must not
+        # open or own it until this nonce's writer and its bytes are verified.
+        script = (f"set -C; exec 3> {shlex.quote(remote_path)} || exit; "
+                  f"printf '{nonce}:CREATED\\n'; cat >&3; result=$?; "
+                  f"printf '{nonce}:DONE:%s\\n' \"$result\"; exit \"$result\"")
+        # The binary pipe is entirely on the device: only shell may read the
+        # restricted sync source, while run-as creates the destination as its UID.
+        command = base_cmd + ["shell", f"cat {shlex.quote(shell_source)} | "
+                              f"run-as {package_name} sh -c {shlex.quote(script)}"]
+        try:
+            transferred = subprocess.run(command, check=False, stdin=subprocess.DEVNULL,
+                                         capture_output=True, text=True, timeout=60)
+        except BaseException as error:
+            # Killing/joining an ADB client is not a device-writer exit receipt.
+            # Retain the exact recovery asset rather than unlinking a live file.
+            raise RuntimeError(f"Android capture transfer outcome unconfirmed; device writer completion is unknown; "
+                               f"retain {shell_dir} and {remote_path}: {error}") from error
+        lines = str(transferred.stdout or "").splitlines()
+        terminal = re.fullmatch(rf"{nonce}:DONE:(\d+)", lines[-1]) if lines else None
+        if not (len(lines) == 2 and lines[0] == f"{nonce}:CREATED" and terminal):
+            raise RuntimeError(f"Android capture transfer outcome unconfirmed; device writer completion is unknown; "
+                               f"retain {shell_dir} and {remote_path}: "
+                               f"{transferred.stderr.strip() or 'missing matching device writer receipt'}")
+        owned_paths = [remote_path]
+
+        def remove_owned(path: str) -> None:
+            script = f"rm -f {shlex.quote(path)} && printf '{nonce}:REMOVED\\n'"
+            removed = run(app_command("sh", "-c", shlex.quote(script)))
+            if removed.returncode or str(removed.stdout or "").strip() != f"{nonce}:REMOVED":
+                raise RuntimeError(f"ADB removal unconfirmed for {path}: {removed.stderr.strip()}")
+
+        def cleanup_owned() -> list[str]:
+            errors = []
+            for path in owned_paths:
+                try:
+                    remove_owned(path)
+                except Exception as error:
+                    errors.append(str(error))
+            # Never recursively remove a directory or another application's data.
+            script = (f"rm -f {shlex.quote(shell_source)} && rmdir {shlex.quote(shell_dir)} "
+                      f"&& printf '{nonce}:SHELL_REMOVED\\n'")
             try:
-                cleanup = subprocess.run(base_cmd + ["shell", "rm", "-f", remote_path],
-                                         check=False, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30)
-                if cleanup.returncode:
-                    raise RuntimeError(cleanup.stderr.strip() or "ADB removal failed")
-            except Exception as cleanup_error:
-                raise RuntimeError(f"{original}; owned capture cleanup failed: {cleanup_error}") from original
+                removed = run(base_cmd + ["shell", script])
+                if removed.returncode or str(removed.stdout or "").strip() != f"{nonce}:SHELL_REMOVED":
+                    raise RuntimeError(f"ADB sync cleanup unconfirmed for {shell_dir}: {removed.stderr.strip()}")
+            except Exception as error:
+                errors.append(str(error))
+            return errors
+
+        try:
+            if transferred.returncode or int(terminal[1]) or str(transferred.stderr or "").strip():
+                raise RuntimeError(f"Android capture writer failed: {transferred.stderr.strip()}")
+            if remote_digest(remote_path) != digest:
+                raise RuntimeError("Android capture transfer SHA256 verification failed")
+            state.remote_server.TakeOwnershipCapture(remote_path)
+            owned_paths.remove(remote_path)
+        except BaseException as original:
+            errors = cleanup_owned()
+            if errors:
+                raise RuntimeError(f"{original}; owned capture cleanup failed: {'; '.join(errors)}") from original
             raise
+        errors = cleanup_owned()
+        if errors:
+            raise RuntimeError(f"Owned capture cleanup failed: {'; '.join(errors)}")
         return remote_path
 
     async def _create_headless_output(self, state: SessionState, controller: Any) -> None:

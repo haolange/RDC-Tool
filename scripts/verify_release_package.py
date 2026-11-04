@@ -23,6 +23,7 @@ if str(SCRIPT_ROOT) not in sys.path:
 from scripts._shared import extract_json_payload
 from scripts.release_runtime import isolated_release_runtime
 from rdc_tool import __version__ as TOOL_VERSION
+from rdc_tool.runtime_identity import native_manifest_status
 
 
 PUBLIC_COMMAND = "rdc-tool"
@@ -128,8 +129,8 @@ def _find_package_root(extract_dir: Path) -> Path:
     return candidates[0]
 
 
-def _verify_release_manifest(root: Path) -> None:
-    manifest_path = root / "RELEASE_MANIFEST.json"
+def _verify_release_manifest(root: Path, *, manifest_name: str = "RELEASE_MANIFEST.json") -> None:
+    manifest_path = root / manifest_name
     if not manifest_path.is_file():
         raise RuntimeError(f"missing release manifest: {manifest_path}")
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -156,10 +157,11 @@ def _verify_release_manifest(root: Path) -> None:
         raise RuntimeError(f"release manifest exposes .rdc fixtures: {leaked_rdc[:5]}")
 
 
-def _verify_release_identity(root: Path, source: Path = SCRIPT_ROOT) -> None:
+def _verify_release_identity(root: Path, source: Path = SCRIPT_ROOT,
+                             *, manifest_name: str = "RELEASE_MANIFEST.json") -> None:
     if (root / "LICENSE").read_bytes() != (source / "LICENSE").read_bytes():
         raise RuntimeError("LICENSE bytes do not match release source")
-    for name in ("RELEASE_MANIFEST.json", "SBOM.json"):
+    for name in (manifest_name, "SBOM.json"):
         payload = json.loads((root / name).read_text(encoding="utf-8"))
         if payload.get("version") != TOOL_VERSION:
             raise RuntimeError(f"{name} version does not match release source")
@@ -179,7 +181,7 @@ def _verify_release_identity(root: Path, source: Path = SCRIPT_ROOT) -> None:
         raise RuntimeError("SBOM component version does not match release source")
     if f"## {TOOL_VERSION}" not in (root / "CHANGELOG.md").read_text(encoding="utf-8-sig"):
         raise RuntimeError("CHANGELOG missing release version")
-    manifest = json.loads((root / "RELEASE_MANIFEST.json").read_text(encoding="utf-8"))
+    manifest = json.loads((root / manifest_name).read_text(encoding="utf-8"))
     revision = manifest.get('source_revision', '')
     if not isinstance(revision, str) or not re.fullmatch(r'[0-9a-f]{40}', revision):
         raise RuntimeError('release source_revision must be a complete Git commit')
@@ -191,6 +193,23 @@ def _verify_release_identity(root: Path, source: Path = SCRIPT_ROOT) -> None:
             raise RuntimeError("manifest path is missing or outside package")
         if file.stat().st_size != item["size"] or _sha256(file) != item["sha256"]:
             raise RuntimeError(f"package bytes do not match manifest: {item['path']}")
+    if manifest_name == "CANDIDATE_MANIFEST.json":
+        from scripts.package_release import source_file_digest
+        snapshot = manifest.get("source_snapshot")
+        if manifest.get("kind") != "local_validation_candidate" or sbom.get("kind") != manifest["kind"]:
+            raise RuntimeError("Local candidate must not claim release identity")
+        if not isinstance(snapshot, dict) or snapshot != sbom.get("source_snapshot") or snapshot.get("base_revision") != revision:
+            raise RuntimeError("Candidate source snapshot does not match its base/SBOM")
+        for key in ("working_diff_sha256", "shipped_source_sha256"):
+            if not re.fullmatch(r"[0-9a-f]{64}", str(snapshot.get(key) or "")):
+                raise RuntimeError(f"Candidate source snapshot is missing {key}")
+        if source_file_digest(manifest["files"]) != snapshot["shipped_source_sha256"]:
+            raise RuntimeError("Candidate source file digest does not match its manifest")
+        if (root / "RELEASE_MANIFEST.json").exists():
+            raise RuntimeError("Local candidate contains a release manifest")
+    native = native_manifest_status(root)
+    if native["status"] != "verified":
+        raise RuntimeError(f"Package paired native runtime is not verified: {native}")
 
 
 def _sha256(file: Path) -> str:
@@ -245,6 +264,36 @@ def _verify_physical_launcher_file(root: Path) -> None:
         raise RuntimeError(f"windows launcher file doctor failed: exit={code}\n{output}")
     if payload.get("result_kind") != "rdc_tool.doctor":
         raise RuntimeError(f"windows launcher file returned wrong result_kind: {json.dumps(payload)[:500]}")
+
+
+def _verify_native_loader(root: Path) -> None:
+    python = root / "binaries/windows/x64/python/python.exe"
+    code = (
+        "import sys,json;from pathlib import Path;sys.path.insert(0,str(Path.cwd()));"
+        "from rdc_tool.runtime_bootstrap import bootstrap_renderdoc_runtime;"
+        "report=bootstrap_renderdoc_runtime(probe_import=True);"
+        "print(json.dumps({'import_ok':report.import_ok,'error':report.import_error,"
+        "'loaded':report.loaded_runtime}))"
+    )
+    env = _public_env(root)
+    native_root = root / "binaries/windows/x64"
+    env["RDC_TOOL_RUNTIME_DLL_DIR"] = str(native_root)
+    env["RDC_TOOL_RENDERDOC_PATH"] = str(native_root / "pymodules")
+    env["PATH"] = str(Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32")
+    for key in list(env):
+        if key.upper().startswith(("PYTHON", "ANDROID_")) or key.upper() == "JAVA_HOME":
+            del env[key]
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    rc, output = _run([str(python), "-B", "-c", code], root, env=env)
+    payload = extract_json_payload(output)
+    loaded = (payload or {}).get("loaded") or {}
+    expected = {"python": python, "native": native_root / "renderdoc.dll",
+                "binding": native_root / "pymodules/renderdoc.pyd"}
+    paths_match = all(Path(str((loaded.get(key) or {}).get("path", ""))).resolve() == path.resolve()
+                      for key, path in expected.items())
+    if (rc != 0 or (payload or {}).get("import_ok") is not True
+            or loaded.get("configured_paths_match") is not True or not paths_match):
+        raise RuntimeError(f"Bundled native loader failed: exit={rc}\n{output}")
 
 
 def _verify_version_payload(root: Path) -> None:
@@ -356,8 +405,31 @@ def _verify_no_public_mcp_surface(zip_path: Path) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Verify an rdc-tool release package")
-    parser.add_argument("--zip", dest="zip_path", required=True, help="Release zip path")
+    inputs = parser.add_mutually_exclusive_group(required=True)
+    inputs.add_argument("--zip", dest="zip_path", help="Release zip path")
+    inputs.add_argument("--candidate-dir", help="Non-release local candidate directory")
+    parser.add_argument("--metadata-only", action="store_true", help="Check package bytes and identities without starting CLI processes")
     args = parser.parse_args(argv)
+
+    if args.candidate_dir:
+        root = Path(args.candidate_dir).resolve()
+        try:
+            _verify_release_manifest(root, manifest_name="CANDIDATE_MANIFEST.json")
+            _verify_license_inventory(root)
+            _verify_release_identity(root, manifest_name="CANDIDATE_MANIFEST.json")
+            if not args.metadata_only:
+                with isolated_release_runtime(root):
+                    _verify_native_loader(root)
+                    _verify_doctor(root)
+                    _verify_physical_launcher_file(root)
+                    _verify_version_payload(root)
+                    _verify_tools_catalog(root)
+                    _verify_cli_contract(root)
+        except Exception as exc:
+            print(f"[verify] {exc}")
+            return 1
+        print(f"[verify] PASS local candidate: {root}")
+        return 0
 
     zip_path = Path(args.zip_path).resolve()
     if not zip_path.is_file():
@@ -375,12 +447,14 @@ def main(argv: list[str] | None = None) -> int:
         _verify_release_manifest(root)
         _verify_license_inventory(root)
         _verify_release_identity(root)
-        with isolated_release_runtime(root):
-            _verify_doctor(root)
-            _verify_physical_launcher_file(root)
-            _verify_version_payload(root)
-            _verify_tools_catalog(root)
-            _verify_cli_contract(root)
+        if not args.metadata_only:
+            with isolated_release_runtime(root):
+                _verify_native_loader(root)
+                _verify_doctor(root)
+                _verify_physical_launcher_file(root)
+                _verify_version_payload(root)
+                _verify_tools_catalog(root)
+                _verify_cli_contract(root)
     except Exception as exc:  # noqa: BLE001
         print(f"[verify] {exc}")
         return 1

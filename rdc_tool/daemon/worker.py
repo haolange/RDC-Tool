@@ -18,6 +18,7 @@ from rdc_tool.io_utils import safe_json_text
 from rdc_tool.progress import ProgressEvent, ProgressSink
 from rdc_tool.runtime_paths import binaries_root, pymodules_dir
 from rdc_tool.runtime_worker_state import clear_worker_state, save_worker_state
+from rdc_tool.runtime_identity import native_manifest_status
 
 
 READY_TIMEOUT_S = 10.0
@@ -48,7 +49,7 @@ class RuntimeWorkerProcess:
         self._queue: "queue.Queue[Dict[str, Any]]" = queue.Queue()
         self._io_lock = threading.Lock()
         self._request_seq = 0
-        self._runtime: Optional[Dict[str, str]] = None
+        self._runtime: Optional[Dict[str, Any]] = None
 
     def is_running(self) -> bool:
         return self._proc is not None and self._proc.poll() is None
@@ -61,6 +62,7 @@ class RuntimeWorkerProcess:
             "binaries_dir": runtime.get("binaries_dir", "") if runtime else "",
             "pymodules_dir": runtime.get("pymodules_dir", "") if runtime else "",
             "source_manifest": runtime.get("source_manifest", "") if runtime else "",
+            "loaded_runtime": runtime.get("loaded_runtime", {"status": "unavailable", "reason": "worker_has_not_reported_loaded_runtime"}) if runtime else {"status": "not_loaded"},
         }
 
     def _save_state(self) -> None:
@@ -88,6 +90,9 @@ class RuntimeWorkerProcess:
     def _spawn(self) -> None:
         bin_dir = binaries_root().resolve()
         pymod_dir = pymodules_dir().resolve()
+        native = native_manifest_status(bin_dir.parents[2])
+        if native["status"] == "invalid":
+            raise RuntimeError(f"Native runtime integrity failed before worker startup: {native['reason']}")
         manifest_path = (bin_dir / "manifest.runtime.json").resolve()
         runtime = {
             "binaries_dir": str(bin_dir),
@@ -153,6 +158,8 @@ class RuntimeWorkerProcess:
                 continue
             kind = str(payload.get("kind") or "")
             if kind == "ready":
+                if self._runtime is not None and isinstance(payload.get("loaded_runtime"), dict):
+                    self._runtime["loaded_runtime"] = payload["loaded_runtime"]
                 return
             if kind == "eof":
                 break
@@ -207,6 +214,8 @@ class RuntimeWorkerProcess:
                     continue
                 if payload.get("kind") is not None:
                     raise RuntimeError("Unexpected worker response type")
+                if self._runtime is not None and isinstance(payload.get("loaded_runtime"), dict):
+                    self._runtime["loaded_runtime"] = payload["loaded_runtime"]
                 self._save_state()
                 return payload
             raise TimeoutError(f"worker request timed out: {method}")

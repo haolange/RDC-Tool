@@ -4,6 +4,51 @@
 - Windows x64 独立包 `rdc-tool-1.0.2-windows-x64.zip` 已通过包校验及完整 `release_gate.py`（overall PASS，3130 个文件）；GitHub Release [v1.0.2](https://github.com/haolange/RDC-Tool/releases/tag/v1.0.2) 两项资产 digest 与本地一致：ZIP `a7480ad08080e41c8133c2e9021bee1b5c8be260a70f57e9656bb0156680b1ae`，`SHA256SUMS` `4cf27faed3dd0396fbfa87950af1d2d736a0814e20470668caf48ded237d6f48`。
 - 本地仅保留当前正式候选 ZIP 与 checksum；已清理本轮旧候选和之前 timeout 调查的过期 1.0.1 候选。`.qoder` 中现存用户修改保持原样。
 
+## 2026-11-04 原生回放交付与上传
+
+本轮交付：修复原生 Pixel History 多 subpass 回放，查清已定位的 Store/Don't Care 现象；同步维护源码、仓库默认运行环境、Tools/Agent 契约与正式打包门禁。用户追加授权清理和提交推送：Tools/Agent 上传 main，RenderDoc 上传现有 v1.x；不创建/切换分支、不强推、不创建 tag 或 GitHub Release。原 capture、用户数据、Agent .cursor、在用依赖与服务保持受保护。
+
+| 任务 | 依赖 | 状态 | 交付及验收 |
+|---|---|---|---|
+| T0 固定旧基线 | — | 通过 | 三库、设备、旧产物及 capture 身份固定；不重复触发旧 PH 崩溃 |
+| T1 同步维护源码 | T0 | 通过 | v1.x/f6aff93bc 合入官方282b28b3，保留维护功能，29冲突按行为解决且无unmerged |
+| T2 修复多 subpass | T1 | 通过 | 完整拓扑与逻辑/物理推进协调，处理附件、resolve、descriptor/layout/barrier及恢复；原生与Android数值/恢复通过 |
+| T3 Store 异常收敛 | T0,T2 | 通过 | 2229/pass2220/颜色804479原始load=DONT_CARE、store=STORE；图案来自load，2237结束后像素为正常场景。保留原始rpinfo再归一化并区分Begin load/End store，无清零或隐藏诊断 |
+| T4 同源运行环境 | T2,T3 | 通过 | Python、DLL/PYD、双ABI APK、ADB/shader工具整套匹配；实际CLI/Agent加载、APK签名/so BuildID及受限环境启动分别核验 |
+| T5 Tools 全操作 | T4 | 通过 | canonical129项/980d49d7…a90f，120项有实际运行证据，9项N/A；最终1172 tests/2subtests、完整source gate及整包验证通过 |
+| T6 Agent 消费 | T4,T5 | 通过 | 同安装绑定、busy保护、真实画面、事件恢复、Close/Cancel/显式重连/断连通过；3440 tests/4既有opt-in默认跳过，受影响测试、coverage-ratchet/type/lint/gates/build通过 |
+| T7 文档与资源清理 | T5,T6 | 通过 | 自有native/debugger/QA/forward已退出；设备备份与调试器、QA/测试树已清理，桌面启动权交还；既有ADB保留 |
+| T8 仓库默认环境同步 | T4–T7 | 通过 | 根binaries的3009文件与候选逐项hash匹配，原CMD入口实加载1.48；修复原生JSON生成token带CR、严格JSON内容门禁及Git字节保护 |
+| T9 发布规则与强制门禁 | T8 | 通过 | AGENTS写硬规则、release-baseline写机制；正式打包要求clean commit、source/native/整包验证，同包实际导入及精确路径核对，源码/产物漂移拒绝、发布三件失败回滚；CI全测/严格doctor通过才上传验收包，不自动Github发布 |
+| T10 精简交付与推送 | T0–T9 | 执行中 | 清理本轮缓存/过渡证据，保留实际依赖和最小验收集；整理三库结构化提交信息，普通推送至origin/main、origin/main、origin/v1.x并核对远端；Native dde88226a已上传，Tools/Agent收口中 |
+
+### 根因与实际修复
+
+PH原先中断多subpass后恢复为单subpass pass，随后继续原始NextSubpass而崩溃；修复完整恢复与推进机制，不禁用PH、不返回假空或自动重试。Tools同时修复安装空终态、捕获传输/只读缓存、daemon归属与退出、Android target transport、CaptureOptions、VFS/stage/shader及GPU计时分类；ADB清理收敛到完整带长度协议authority，失败保留lease。Agent同步错误主因、owning lease及恢复消费。
+
+### 验证范围
+
+- Native：74 cases/21763302 assertions、官方PH全case、Load_Store_None/Dynamic_Rendering 2/2、Release数值/恢复和合法fixture实际Khronos1.4.341零消息/VUID。
+- BlackHair/Adreno：1691/2236/1684三组PH分别27/80/60行，末值与独立前后像素读回精确一致，事件/replacement恢复；最终拓扑4087条，877成功Create、1092对Begin/End、96 Next，无新增未归因提前End或越界Next。
+- 该capture原始RP3123定义7 subpass，但chunk4410 Begin后紧接4411 End、无Next/draw。用户批准保留语义；最终观察到的15次提前End均归于这处原始缺陷，不能宣称BlackHair全部调用合法。观察仅覆盖最近Begin→Next/End拓扑，不等价Reset/同步/全VUID认证。
+- Agent实际main→同包CLI→RMX3551：2653→2236→2229 LOAD DONTCARE→2237准确无可用画面→2236恢复；真实手机screencap与前台归属分别取证。占用不抢占、关闭/取消等待终态、显式恢复及断连均以helper退出、完整空forward帧和进程回执核验。
+- Android单事件GPU时间71.406248us；此队列无FrameGPUDuration，准确返回capability/frame_timing_unavailable并恢复事件，未冒充整帧时间。
+
+### 身份与交付入口
+
+- 原始BlackHair：232496214字节，SHA256 a1d2a989f5f54badbe4a0b676863a9804a814327614a90b1bc4dbd0261b5960a，原件与受保护设备缓存保持不变。
+- Native执行产物来自冻结源树0a0fd1db…028cb（f6aff93bc+官方282b28b3+维护修复）；随后只修复_jsonProcess的版本token Trim并单列metadata生成回执，没有假称重新编译DLL/PYD/APK。
+- DLL 3ce77ff7…a904，PYD 1e4c7341…fe25；arm64 APK36df7cff…5f66，实际so BuildID f248e2630f709b10。完整值与编译配置以根binaries/windows/x64/manifest.runtime.json为准。
+- 默认使用仓库bin/rdc-tool.cmd。唯一完整本地候选为intermediate/native-replay/candidate-delivery/rdc-tool，清单74254e3c8f02e2199d6d1713101a5f9acfdee3804684078d2fb156b2887c5262；它是local_validation_candidate，不是正式Release。当前native字节和129项契约未变，实际UI/设备证明保留36669阶段身份，新门禁与候选另验，不给旧证据换标签。
+
+### 清理、证据与边界
+
+已按明确路径、Git归属、无活动进程及无链接越界清理本轮Native开发输出、对象/链接/Android缓存和旧运行时副本，逻辑文件约7.60 GiB。磁盘实际剩余空间另行测量，不用逻辑体积冒充释放量。保留当前最终产物/符号、唯一完整候选、Python构建/测试依赖、合法fixture及最小验收证据；不删除原capture、用户SDK/NDK、Agent node_modules/out、原.cursor及旧调查材料。
+
+证据根：intermediate/native-replay；主要索引catalog-verification.json、source-delivery-identity.json、release-chain-delivery.json、publication-cleanup.json及native-trace。Agent正式消费见其acceptance-ledger。远端CI与GitHub Release是独立事实；上传后仅记录实际状态，不以本地绿色冒称云端通过。
+
+未验证：其他GPU/API/设备、arm32实机、未覆盖depth/stencil resolve、secondary/multiview组合、模型质量及Windows独立preview物理视觉。构建、原生数值、UI与手机呈现各有独立证据，不互相替代。
+
 # Tool convergence execution ledger
 
 Current release update: RDC-Tool 1.0.2 session worker/transport timeout alignment, coordinated with RDC-Agent timeout defaults and tracked in the adjacent RDC-Agent release readiness and acceptance ledger. Earlier C/R/H/T tables and receipts are historical snapshots; current contracts are [public-contract.md](public-contract.md) and [install.md](install.md). Generated .qoder wiki content is not SSOT.

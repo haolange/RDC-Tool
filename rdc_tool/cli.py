@@ -43,6 +43,7 @@ from rdc_tool.runtime_paths import (
     tools_root,
 )
 from rdc_tool.runtime_requirements import missing_dependencies
+from rdc_tool.runtime_identity import loaded_runtime_identity, native_manifest_status
 from rdc_tool.timeout_policy import daemon_exec_timeout_s
 
 EXIT_OK = 0
@@ -459,6 +460,8 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     host_tools_ok, host_tool_failures = validate_bundled_host_tools()
     spirv_as = host_tools["spirv_as"]["path"]
     spirv_dis = host_tools["spirv_dis"]["path"]
+    native_build = native_manifest_status(root)
+    loaded_runtime = loaded_runtime_identity(binaries_root(), pymodules_dir())
     details = {
         "product": "rdc-tool",
         "tools_root": str(root),
@@ -475,6 +478,8 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
             "auth_required": False,
         },
         "renderdoc": {
+            "native_build": native_build,
+            "loaded_runtime": loaded_runtime,
             "layout_ok": not renderdoc_failures,
             "failures": renderdoc_failures,
             "renderdoc_dll": str(renderdoc_dll),
@@ -526,6 +531,8 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         and host_tools_ok
         and all(item["available"] for item in host_tools.values())
         and not renderdoc_failures
+        and native_build["status"] != "invalid"
+        and loaded_runtime["status"] != "mismatch"
         and not catalog_error
         and (root / "bin/rdc-tool.cmd").is_file()
         and (root / "bin" / "rdc-tool").is_file()

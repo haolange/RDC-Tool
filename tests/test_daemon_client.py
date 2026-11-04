@@ -104,6 +104,62 @@ def test_cleanup_stale_daemon_state_removes_dead_pid(monkeypatch, tmp_path: Path
     assert not daemon_client.session_state_path("dead").exists()
 
 
+@pytest.mark.parametrize("worker_alive", [True, False])
+def test_dead_daemon_replacement_waits_for_recorded_worker_exit(monkeypatch, tmp_path: Path, worker_alive: bool) -> None:
+    _configure_runtime_dir(monkeypatch, tmp_path)
+    _configure_context_artifact_paths(monkeypatch, tmp_path)
+    context = "dead-daemon-worker"
+    daemon_client.save_daemon_state({
+        "pid": 100, "pipe_name": "isolated", "token": "test",
+        "worker": {"pid": 200, "running": True},
+    }, context)
+    daemon_client.save_session_state({"session_id": "owned-session"}, context)
+    state_path = daemon_client._daemon_state_path(context)
+    session_path = daemon_client.session_state_path(context)
+    state_bytes = state_path.read_bytes()
+    session_bytes = session_path.read_bytes()
+    monkeypatch.setattr(daemon_client, "_is_process_running", lambda pid: worker_alive and pid == 200)
+    monkeypatch.setattr(daemon_client, "_kill_process", lambda pid: False)
+    monkeypatch.setattr(daemon_client, "_wait_for_pid_exit", lambda *args: False)
+    monkeypatch.setattr(daemon_client, "owner_is_busy", lambda *args: False)
+    def spawn(*args, **kwargs):
+        if worker_alive:
+            pytest.fail("replacement must not spawn while the old worker is live")
+        raise RuntimeError("replacement_spawn_permitted")
+    monkeypatch.setattr(daemon_client.subprocess, "Popen", spawn)
+    if worker_alive:
+        with pytest.raises(daemon_client.DaemonOwnerUnavailable) as exc:
+            daemon_client.ensure_daemon(context=context)
+        assert exc.value.code == "daemon_owner_unavailable"
+        assert exc.value.details["reason"] == "worker_exit_unconfirmed"
+        assert state_path.read_bytes() == state_bytes
+        assert session_path.read_bytes() == session_bytes
+    else:
+        # A nonzero PID in the receipt does not block replacement once that
+        # process is confirmed gone. This intercepts spawning before execution.
+        with pytest.raises(RuntimeError, match="replacement_spawn_permitted"):
+            daemon_client.ensure_daemon(context=context)
+        assert not state_path.exists()
+
+
+def test_dead_daemon_replacement_preserves_state_retained_by_cleanup(monkeypatch, tmp_path: Path) -> None:
+    _configure_runtime_dir(monkeypatch, tmp_path)
+    context = "retained-owner"
+    daemon_client.save_daemon_state({"pid": 100, "pipe_name": "isolated", "token": "test"}, context)
+    daemon_client.save_session_state({"session_id": "owned-session"}, context)
+    state_path = daemon_client._daemon_state_path(context)
+    session_path = daemon_client.session_state_path(context)
+    state_bytes, session_bytes = state_path.read_bytes(), session_path.read_bytes()
+    monkeypatch.setattr(daemon_client, "_is_process_running", lambda pid: False)
+    monkeypatch.setattr(daemon_client, "owner_is_busy", lambda *args: False)
+    monkeypatch.setattr(daemon_client, "cleanup_stale_daemon_states", lambda context=None: {})
+    monkeypatch.setattr(daemon_client.subprocess, "Popen", lambda *a, **kw: pytest.fail("retained owner must not be replaced"))
+    with pytest.raises(daemon_client.DaemonOwnerUnavailable, match="owner_exit_unconfirmed"):
+        daemon_client.ensure_daemon(context=context)
+    assert state_path.read_bytes() == state_bytes
+    assert session_path.read_bytes() == session_bytes
+
+
 def test_clear_context_without_daemon_clears_session(monkeypatch, tmp_path: Path) -> None:
     _configure_runtime_dir(monkeypatch, tmp_path)
 
@@ -161,7 +217,7 @@ def test_dead_daemon_preserves_unreleased_replay_and_refuses_false_clear(monkeyp
     state_dir = _configure_context_artifact_paths(monkeypatch, tmp_path)
     context = "owned"
     daemon_path = state_dir / "daemon_state_owned.json"
-    daemon_path.write_text(json.dumps({"context_id": context, "pid": 99999}), encoding="utf-8")
+    daemon_path.write_text(json.dumps({"context_id": context, "pid": 99999, "pipe_name": "dead-owned", "token": "test-nonce"}), encoding="utf-8")
     runtime_path = state_dir / "runtime_state_owned.json"
     runtime_path.write_text(json.dumps({"sessions": {"sess-owned": {"session_id": "sess-owned"}}}), encoding="utf-8")
     snapshot_path = state_dir / "context_snapshot_owned.json"
@@ -229,9 +285,9 @@ def test_stop_daemon_uses_loaded_state_before_cleanup(monkeypatch, tmp_path: Pat
 
     monkeypatch.setattr(daemon_client, "load_daemon_state", lambda context="default": dict(state) if context == "ctx-live" else {})
     monkeypatch.setattr(daemon_client, "cleanup_stale_daemon_states", lambda context=None: (_ for _ in ()).throw(AssertionError("cleanup should not run before stop uses loaded state")))
-    monkeypatch.setattr(daemon_client, "_shutdown_stateful_daemon", lambda pid, loaded, context: calls.append((pid, context)))
+    monkeypatch.setattr(daemon_client, "_shutdown_stateful_daemon", lambda pid, loaded, context: calls.append((pid, context)) or True)
     monkeypatch.setattr(daemon_client, "_is_process_running", lambda pid: False)
-    monkeypatch.setattr(daemon_client, "clear_daemon_state", lambda context="default": cleared.append(f"daemon:{context}"))
+    monkeypatch.setattr(daemon_client, "clear_daemon_state", lambda context="default", **kwargs: cleared.append(f"daemon:{context}"))
     monkeypatch.setattr(daemon_client, "clear_session_state", lambda context="default": cleared.append(f"session:{context}"))
 
     ok, message = daemon_client.stop_daemon("ctx-live")
@@ -292,7 +348,7 @@ def test_attach_client_forwards_owner_pid(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
         daemon_client,
         "daemon_request",
-        lambda *args, **kwargs: {"ok": True, "result": {"state": {"owner_pid": 4321}}},
+        lambda *args, **kwargs: {"ok": True, "result": {"state": {**kwargs['state'], "owner_pid": 4321}}},
     )
     ok, _message, _state = daemon_client.attach_client(
         context="ctx-a",
@@ -318,11 +374,11 @@ def test_stop_daemon_kills_recorded_worker_for_same_context(monkeypatch, tmp_pat
     }
     monkeypatch.setattr(daemon_client, "load_daemon_state", lambda context="default": dict(state) if context == "ctx-live" else {})
     monkeypatch.setattr(daemon_client, "cleanup_stale_daemon_states", lambda context=None: {})
-    monkeypatch.setattr(daemon_client, "_shutdown_stateful_daemon", lambda *args, **kwargs: None)
+    monkeypatch.setattr(daemon_client, "_shutdown_stateful_daemon", lambda *args, **kwargs: True)
     monkeypatch.setattr(daemon_client, "_is_process_running", lambda pid: pid == 22)
     monkeypatch.setattr(daemon_client, "_kill_process", lambda pid: killed.append(pid) or True)
     monkeypatch.setattr(daemon_client, "_wait_for_pid_exit", lambda pid, timeout: True)
-    monkeypatch.setattr(daemon_client, "clear_daemon_state", lambda context="default": None)
+    monkeypatch.setattr(daemon_client, "clear_daemon_state", lambda context="default", **kwargs: None)
     monkeypatch.setattr(daemon_client, "clear_session_state", lambda context="default": None)
     monkeypatch.setattr(daemon_client, "clear_worker_state", lambda context="default": None)
 
@@ -364,11 +420,11 @@ def test_stop_daemon_does_not_kill_other_context_worker(monkeypatch, tmp_path: P
     }
     monkeypatch.setattr(daemon_client, "load_daemon_state", lambda context="default": dict(states.get(context, {})))
     monkeypatch.setattr(daemon_client, "cleanup_stale_daemon_states", lambda context=None: {})
-    monkeypatch.setattr(daemon_client, "_shutdown_stateful_daemon", lambda *args, **kwargs: None)
+    monkeypatch.setattr(daemon_client, "_shutdown_stateful_daemon", lambda *args, **kwargs: True)
     monkeypatch.setattr(daemon_client, "_is_process_running", lambda pid: pid in {22, 44})
     monkeypatch.setattr(daemon_client, "_kill_process", lambda pid: killed.append(pid) or True)
     monkeypatch.setattr(daemon_client, "_wait_for_pid_exit", lambda pid, timeout: True)
-    monkeypatch.setattr(daemon_client, "clear_daemon_state", lambda context="default": None)
+    monkeypatch.setattr(daemon_client, "clear_daemon_state", lambda context="default", **kwargs: None)
     monkeypatch.setattr(daemon_client, "clear_session_state", lambda context="default": None)
     monkeypatch.setattr(daemon_client, "clear_worker_state", lambda context="default": None)
 
@@ -395,7 +451,7 @@ def test_ensure_daemon_forwards_owner_pid_to_existing_zero_owner(monkeypatch, tm
         raise AssertionError(method)
 
     monkeypatch.setattr(daemon_client, "daemon_request", _request)
-    monkeypatch.setattr(daemon_client, "_update_saved_state_from_response", lambda response, context: (response.get("result") or {}).get("state") or {})
+    monkeypatch.setattr(daemon_client, "_update_saved_state_from_response", lambda response, context, **kwargs: (response.get("result") or {}).get("state") or {})
     ok, message, state = daemon_client.ensure_daemon(context="ctx-a", owner_pid=4321)
     assert ok is True
     assert "already running" in message
@@ -580,6 +636,8 @@ def test_concurrent_ensure_daemon_publishes_one_owner(monkeypatch, tmp_path: Pat
 
     def ready(state):
         assert release_start.wait(3)
+        # Readiness is published by the daemon, never by a client RPC response.
+        daemon_client.save_daemon_state(state, context='same-context')
         return True
 
     monkeypatch.setattr(daemon_client.subprocess, 'Popen', spawn)

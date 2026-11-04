@@ -1052,7 +1052,40 @@ class PatchEngine:
                 "recommended_next_tool": "rd.shader.edit_and_replace" if encoding is not None else "rd.shader.compile",
             }
         )
-        original_hash = hashlib.sha256(source.encode("utf-8")).hexdigest()
+        # Match rd.shader.get_source: RenderDoc guarantees that files[0] is the
+        # captured entry source. Filenames are never read from the host, and an
+        # empty entry file must not be replaced by an arbitrary nonempty include.
+        original_source = ""
+        source_unavailable_reason = "Captured entry source is unavailable."
+        try:
+            debug_info = getattr(refl, "debugInfo", None)
+            files = getattr(debug_info, "files", None)
+            if files:
+                contents = getattr(files[0], "contents", None)
+                if isinstance(contents, str) and contents.strip():
+                    original_source = contents
+        except Exception as exc:
+            source_unavailable_reason = f"Captured entry source could not be read ({type(exc).__name__})."
+        original_hash = hashlib.sha256(original_source.encode("utf-8")).hexdigest() if original_source else ""
+        if patch_spec.expected_source_hash and patch_spec.expected_source_hash != original_hash:
+            return PatchResult(
+                patch_id=patch_spec.patch_id,
+                original_shader_hash=original_hash,
+                success=False,
+                error_message=("Current shader source hash does not match expected_source_hash" if original_source
+                               else "Cannot verify expected_source_hash: " + source_unavailable_reason),
+                error_code="shader_source_mismatch",
+                error_category="validation",
+                error_details={
+                    "event_id": int(event_id), "stage": stage.value.upper(), "session_id": str(session_id),
+                    "shader_id": _shader_id_str(shader_id), "expected_source_hash": str(patch_spec.expected_source_hash),
+                    "actual_source_hash": original_hash, "failure_stage": "validate_source",
+                    "failure_reason": "source_hash_mismatch" if original_source else "source_hash_unavailable",
+                    "replacement_attempted": False, "context_preserved": True,
+                },
+                source_before_text=original_source, source_after_text=source,
+                edit_plan=edit_plan, encoding=encoding_name,
+            )
         entry_point = str(patch_spec.entry or getattr(refl, "entryPoint", "") or "main")
         if encoding is None:
             return PatchResult(
@@ -1085,6 +1118,8 @@ class PatchEngine:
         compile_flags = self._build_compile_flags(refl)
         compile_flag_payload = self._compile_flag_payload(compile_flags)
         messages = ["Applied full source replacement input."]
+        if not original_source:
+            messages.append(source_unavailable_reason + " original_shader_hash is unknown (empty string).")
         source_bytes = source.encode("utf-8")
         try:
             new_id, errors = controller.BuildTargetShader(
@@ -1289,8 +1324,9 @@ class PatchEngine:
             original_shader_hash=original_hash,
             success=True,
             messages=messages,
-            source_before_text="",
+            source_before_text=original_source,
             source_after_text=source,
+            edit_plan=edit_plan,
             disassembly_target=str(patch_spec.target or encoding_name.upper()),
             encoding=encoding_name,
             entry_point=entry_point,

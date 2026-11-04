@@ -2,7 +2,9 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
+  workflow_dispatch:
 permissions:
   contents: read
 concurrency:
@@ -21,7 +23,7 @@ jobs:
       - run: python -m pip install -e ".[dev]"
       - run: python spec/validate_catalog.py
       - run: python scripts/generate_tool_reference.py --check
-      - run: python -m pytest tests -q -m "unit or contract" --basetemp=intermediate/ci-tests
+      - run: python -m pytest tests -q --basetemp=intermediate/ci-tests
       - run: python scripts/check_markdown_health.py
       - run: python scripts/check_identity.py
   doctor-no-capture:
@@ -40,5 +42,36 @@ jobs:
           $result
           $payload = $result | ConvertFrom-Json
           if ($payload.result_kind -ne 'rdc_tool.doctor') { throw 'Unexpected doctor response' }
-          if ($exitCode -notin @(0, 2)) { throw "Unexpected doctor exit: $exitCode" }
+          if ($exitCode -ne 0 -or $payload.ok -ne $true) { throw "Doctor failed: $exitCode" }
           exit 0
+  release-package:
+    needs: [contract, doctor-no-capture]
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - run: python -m pip install -e ".[dev]"
+      - name: Check release tag identity
+        shell: python
+        run: |
+          import os
+          from rdc_tool import __version__
+          if os.environ['GITHUB_REF_TYPE'] == 'tag':
+              assert os.environ['GITHUB_REF_NAME'] == 'v' + __version__, 'Tag must match package version'
+      - name: Qualify and package the complete committed checkout
+        run: python scripts/package_release.py
+      - name: Retain only verified release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdc-tool-verified-windows-x64
+          path: |
+            dist/rdc-tool-*-windows-x64.zip
+            dist/SHA256SUMS
+            dist/release_report.md
+            intermediate/logs/release_package_source_gate.md
+          if-no-files-found: error

@@ -92,6 +92,12 @@ def main(argv: list[str] | None = None) -> int:
 
     watcher = threading.Thread(target=_watch_parent_daemon, name="rdc-tool-worker-parent-watch", daemon=True)
     watcher.start()
+    from rdc_tool.runtime_identity import loaded_runtime_identity
+    from rdc_tool.runtime_paths import binaries_root, pymodules_dir
+
+    def loaded_runtime() -> dict[str, Any]:
+        return loaded_runtime_identity(binaries_root(), pymodules_dir())
+
     _emit(
         {
             "kind": "ready",
@@ -100,6 +106,7 @@ def main(argv: list[str] | None = None) -> int:
             "binaries_dir": str(os.environ.get("RDC_TOOL_RUNTIME_DLL_DIR") or ""),
             "pymodules_dir": str(os.environ.get("RDC_TOOL_RENDERDOC_PATH") or ""),
             "source_manifest": str(os.environ.get("RDC_TOOL_WORKER_SOURCE_MANIFEST") or ""),
+            "loaded_runtime": loaded_runtime(),
         }
     )
 
@@ -124,9 +131,13 @@ def main(argv: list[str] | None = None) -> int:
                 params = request.get("params") if isinstance(request.get("params"), dict) else {}
                 try:
                     if method == "exec":
+                        operation = str(params.get("operation") or "")
+                        cleanup = operation in {"rd.core.shutdown", "rd.capture.close_replay", "rd.remote.disconnect"}
+                        if not cleanup and loaded_runtime()["status"] == "mismatch":
+                            raise RuntimeError("Loaded RenderDoc paths differ from the configured runtime")
                         result = runner.run(
                             server.dispatch_operation(
-                                str(params.get("operation") or ""),
+                                operation,
                                 dict(params.get("args") or {}),
                                 transport=str(params.get("transport") or "daemon"),
                                 remote=bool(params.get("remote", False)),
@@ -134,7 +145,10 @@ def main(argv: list[str] | None = None) -> int:
                                 progress_sink=_WorkerProgressSink(req_id),
                             )
                         )
-                        _emit({"id": req_id, "ok": True, "result": result})
+                        observed = loaded_runtime()
+                        if not cleanup and observed["status"] == "mismatch":
+                            raise RuntimeError("Loaded RenderDoc paths differ from the configured runtime")
+                        _emit({"id": req_id, "ok": True, "result": result, "loaded_runtime": observed})
                         continue
                     if method == "clear_context":
                         result = runner.run(
@@ -159,6 +173,7 @@ def main(argv: list[str] | None = None) -> int:
                                     "binaries_dir": str(os.environ.get("RDC_TOOL_RUNTIME_DLL_DIR") or ""),
                                     "pymodules_dir": str(os.environ.get("RDC_TOOL_RENDERDOC_PATH") or ""),
                                     "source_manifest": str(os.environ.get("RDC_TOOL_WORKER_SOURCE_MANIFEST") or ""),
+                                    "loaded_runtime": loaded_runtime(),
                                 },
                             }
                         )

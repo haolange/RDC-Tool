@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, List
 
 from rdc_tool.runtime_paths import binaries_root, pymodules_dir
+from rdc_tool.runtime_identity import loaded_runtime_identity
 
 _DLL_DIR_HANDLES: List[Any] = []
 _REGISTERED_DLL_DIRS: set[str] = set()
@@ -26,6 +27,7 @@ class RuntimeBootstrapResult:
     import_ok: bool = False
     import_module_path: str = ""
     import_error: str = ""
+    loaded_runtime: dict[str, Any] = field(default_factory=dict)
 
 
 def _normalize_path(raw: str) -> Path:
@@ -97,6 +99,9 @@ def _probe_renderdoc_import(report: RuntimeBootstrapResult) -> None:
 
         report.import_ok = True
         report.import_module_path = str(getattr(rd, "__file__", ""))
+        report.loaded_runtime = loaded_runtime_identity(report.binaries_dir, report.pymodules_dir)
+        if report.loaded_runtime.get("status") == "mismatch":
+            raise ImportError("Loaded RenderDoc paths differ from the configured runtime")
     except Exception as exc:  # noqa: BLE001
         report.import_ok = False
         report.import_error = f"{exc.__class__.__name__}: {exc}"

@@ -44,6 +44,9 @@ def test_package_release_builds_self_contained_zip(tmp_path: Path, monkeypatch) 
 
     monkeypatch.setattr(package_release, "_tools_root", lambda: root)
     monkeypatch.setattr(package_release, '_source_revision', lambda root: 'a' * 40)
+    # Archive layout is isolated here; mandatory qualification has separate tests.
+    monkeypatch.setattr(package_release, '_qualify_source', lambda root: None)
+    monkeypatch.setattr(package_release, '_qualify_package', lambda path: None)
 
     rc = package_release.main(["--out-dir", "dist"])
 

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import ctypes
 import logging
 import os
 import signal
@@ -19,9 +18,11 @@ from rdc_tool.daemon.client import (
     DEFAULT_IDLE_TIMEOUT_S,
     DEFAULT_LEASE_TIMEOUT_S,
     _context_has_unreleased_resources,
+    _is_process_running,
     owner_lost_should_stop,
     save_daemon_state,
 )
+from rdc_tool.daemon.ownership import OwnerLease
 from rdc_tool.daemon.worker import RuntimeWorkerProcess
 from rdc_tool.progress import ProgressEvent, ProgressSink
 from rdc_tool.runtime_paths import cli_runtime_dir
@@ -30,6 +31,9 @@ from rdc_tool.runtime_worker_state import load_worker_state
 from rdc_tool.timeout_policy import worker_exec_timeout_s
 
 logger = logging.getLogger("rdc_tool.daemon")
+# Do not release an owner's kernel lock while this process is still alive,
+# including listener/worker teardown and interpreter shutdown.
+_PROCESS_OWNER_LEASES: list[OwnerLease] = []
 
 
 def _now_ms() -> int:
@@ -81,23 +85,6 @@ def _daemon_state_path(context: str) -> Path:
         return state_dir / "daemon_state.json"
     safe_ctx = "".join(ch if ch.isalnum() or ch in ("-", "_", ".") else "_" for ch in ctx)
     return state_dir / f"daemon_state_{safe_ctx}.json"
-
-
-def _is_process_running(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    if os.name != "nt":
-        return True
-    handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, int(pid))
-    if not handle:
-        return False
-    try:
-        code = ctypes.c_ulong()
-        if not ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
-            return True
-        return bool(code.value == 259)
-    finally:
-        ctypes.windll.kernel32.CloseHandle(handle)
 
 
 class DaemonRuntime(ProgressSink):
@@ -163,6 +150,7 @@ class DaemonRuntime(ProgressSink):
         self._state_lock = threading.Lock()
         self._exec_lock = threading.Lock()
         self._worker: RuntimeWorkerProcess | None = None
+        self._owner_lease: OwnerLease | None = None
 
     def _auth(self, request: Dict[str, Any]) -> tuple[bool, Dict[str, Any]]:
         if str(request.get("token", "")) != self.token:
@@ -173,7 +161,9 @@ class DaemonRuntime(ProgressSink):
         with self._state_lock:
             payload = dict(self.state)
             payload["attached_clients"] = [dict(item) for item in payload.get("attached_clients", [])]
-        save_daemon_state(payload, context=self.daemon_context)
+        if self._owner_lease is None:
+            raise RuntimeError("Daemon has not acquired its context owner lock")
+        save_daemon_state(payload, context=self.daemon_context, lease=self._owner_lease)
 
     def _touch_activity(self) -> None:
         with self._state_lock:
@@ -231,6 +221,7 @@ class DaemonRuntime(ProgressSink):
                 self._worker.stop()
             except Exception:
                 logger.exception("daemon context=%s worker stop failed", self.daemon_context)
+                return
         self.running = False
         self._stop_event.set()
         if self._listener is not None:
@@ -239,10 +230,8 @@ class DaemonRuntime(ProgressSink):
             except Exception:
                 pass
         if self._serve_started:
-            try:
-                _daemon_state_path(self.daemon_context).unlink(missing_ok=True)
-            except Exception:
-                pass
+            # Retain the identity receipt until an external observer confirms
+            # exit. The OS releases the owner lock only as this process dies.
             os._exit(0)
 
     def _clear_context_snapshot_locked(self) -> None:
@@ -682,6 +671,8 @@ class DaemonRuntime(ProgressSink):
             conn.close()
 
     def serve_forever(self) -> int:
+        self._owner_lease = OwnerLease(_daemon_state_path(self.daemon_context), self.daemon_context)
+        _PROCESS_OWNER_LEASES.append(self._owner_lease)
         self._listener = Listener(address=self.address, family="AF_PIPE")
         self._serve_started = True
         logger.info("daemon listening on %s", self.address)
@@ -709,11 +700,7 @@ class DaemonRuntime(ProgressSink):
                     self._listener.close()
                 except Exception:
                     pass
-            state_path = _daemon_state_path(self.daemon_context)
-            try:
-                state_path.unlink(missing_ok=True)
-            except Exception:
-                pass
+            self._stop()
         return 0
 
 

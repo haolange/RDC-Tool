@@ -1879,9 +1879,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'input_schema': {'type': 'object',
                    'properties': {'session_id': {'description': 'session_id (str)',
                                                  'type': 'string'},
-                                  'stage': {'description': 'Use canonical shader stage: vs, hs, ds, gs, ps, cs, ms, or as. Pixel shader is ps.',
-                                            'type': 'string',
-                                            'enum': ['vs', 'hs', 'ds', 'gs', 'ps', 'cs', 'ms', 'as']},
+                                  'stage': {'description': 'Case-insensitive VS/HS/DS/GS/PS/CS/MS/AS. Pixel shader is PS. RT is recognized but unsupported; stage names are validated before replay access with structured errors.',
+                                            'type': 'string'},
                                   'event_id': {'type': 'integer',
                                                'minimum': 0,
                                                'description': 'Replay event; omitted uses the '
@@ -1894,13 +1893,13 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'path_inputs': []},
  {'name': 'rd.pipeline.get_stage_state',
   'group': '3.4，管线状态查询 (Pipeline State Inspection)',
-  'description': '获取指定 Shader Stage 的 Pipeline 子状态。',
+  'description': '获取指定 Shader Stage 的 Pipeline 子状态；RT 明确返回不支持，不映射为 Pixel Stage。',
   'parameter_raw': 'session_id (string): session_id (str)<br>stage (string): stage (str): '
-                   "'VS'|'HS'|'DS'|'GS'|'PS'|'CS'|'AS'|'MS'|'RT'<br>event_id (integer, optional): "
+                   "'VS'|'HS'|'DS'|'GS'|'PS'|'CS'|'AS'|'MS' (case-insensitive); RT is recognized but unsupported<br>event_id (integer, optional): "
                    'Replay event; omitted uses the owning session current event.<br>max_bytes '
                    '(integer, optional): See input_schema for constraints.',
   'returns_raw': 'ok (bool)<br>data (dict): {stage_state}<br>artifacts (list)<br>error '
-                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
+                 '(dict|null): unknown stages return validation/invalid_shader_stage; RT or a missing native stage enum returns capability/shader_stage_unsupported. Stage rejection precedes replay access and includes effects_attempted=false, context_preserved=true, failure_stage=validate_stage.<br>meta (dict)<br>projections (dict, 可选)',
   'param_names': ['session_id', 'stage', 'event_id', 'max_bytes'],
   'prerequisites': [{'requires': 'session_id',
                      'via_tools': ['rd.capture.open_file', 'rd.capture.open_replay'],
@@ -1909,8 +1908,7 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'input_schema': {'type': 'object',
                    'properties': {'session_id': {'description': 'session_id (str)',
                                                  'type': 'string'},
-                                  'stage': {'description': 'stage (str): '
-                                                           "'VS'|'HS'|'DS'|'GS'|'PS'|'CS'|'AS'|'MS'|'RT'",
+                                  'stage': {'description': 'Case-insensitive VS/HS/DS/GS/PS/CS/AS/MS. RT is recognized but unsupported; unknown names are rejected before replay access.',
                                             'type': 'string'},
                                   'event_id': {'type': 'integer',
                                                'minimum': 0,
@@ -2027,9 +2025,21 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'returns_raw': 'ok (bool)<br>data: {context_id, remote_id, server_info}; success requires native '
                  'handshake and Ping. Android bootstrap includes ownership, install_mode '
                  '(existing|install|update|force_replace), installed_apk, uninstalled_existing, '
-                 'expected_version and apk_sha256. Only owned process/forward resources are '
+                 'expected_version and apk_sha256 (local target APK hash). installed_apk_path '
+                 'and installed_apk_sha256 observe the selected device package through pm path '
+                 'and sha256sum; apk_identity_status is matched|different|unavailable with '
+                 'apk_identity_reason. Missing, split or unreadable package/hash is unavailable, '
+                 'never assumed matched. These read-only diagnostics do not decide compatibility '
+                 'or authorize repair; cancellation/deadline retain the shared connection budget. '
+                 'Only owned process/forward resources are '
                  'cleaned; installed packages are not rolled back on cancellation.<br>error: typed '
-                 'remote/Android code; details.remote {stage, code, device_serial, '
+                 'remote/Android code. An install returns remote_install_unconfirmed with '
+                 'details.device_action {kind: android_install, '
+                 'state: unconfirmed, device_serial, package_name, apk_sha256, sessions, '
+                 'observation: unreadable} when an install returns no unambiguous terminal receipt, '
+                 'including exit zero with empty output; explicit PackageManager Failure remains '
+                 'android_apk_install_failed. No automatic retry or follow-up install is performed. '
+                 'details.remote {stage, code, device_serial, '
                  'expected_version?, actual_version?, repair?}; repair contains fingerprint, '
                  'actions, package_name, device_serial, apk_sha256, installed_identity and '
                  'service_identity. Resubmit only the fingerprint with repair_policy=confirmed '
@@ -2214,7 +2224,7 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'path_inputs': []},
  {'name': 'rd.remote.list_targets',
   'group': '3.12，远程连接与自动化抓帧 (Remote Capture & Target Control)',
-  'description': '列出远程可连接的 targets（已注入/已运行应用、可抓帧进程等）。',
+  'description': '列出远程已注入应用的实时 targets；Android 按所选设备的 target sockets 发现，保留逻辑 target_id，排除 replay server。读取失败不返回空列表；busy target 仅报告、不抢占。',
   'parameter_raw': 'remote_id (string): remote_id (str)',
   'returns_raw': 'ok (bool)<br>data (dict): {targets}<br>artifacts (list)<br>error '
                  '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
@@ -4195,7 +4205,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'parameter_raw': 'path (string): path (str): VFS 路径<br>session_id (string, optional): session_id '
                    '(str, 可选): 当 path 指向 replay 相关域时用于解析当前 session',
   'returns_raw': 'ok (bool)<br>data (dict): {path, node}<br>artifacts (list)<br>error '
-                 '(dict|null)<br>meta (dict)',
+                 '(dict|null)<br>meta (dict) /draws node.pagination preserves the canonical '
+                 'action-tree pagination unchanged; its truncated flag qualifies node.data and entries.',
   'param_names': ['path', 'session_id'],
   'prerequisites': [],
   'namespace': 'vfs',
@@ -4220,7 +4231,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'returns_raw': 'ok (bool)<br>data (dict): {path, node, entries}<br>projections.tabular (dict, '
                  '可选): {format_version, columns, rows, row_count, tsv_text?} as a tabular summary '
                  'for scan/readability only, not semantic ranking<br>artifacts (list)<br>error '
-                 '(dict|null)<br>meta (dict)',
+                 '(dict|null)<br>meta (dict) /draws node.pagination preserves the canonical '
+                 'action-tree pagination unchanged; its truncated flag qualifies node.data, entries and tabular rows.',
   'param_names': ['path', 'session_id', 'projection'],
   'prerequisites': [],
   'supports_projection': {'tabular': True},
@@ -4250,7 +4262,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'parameter_raw': 'path (string): path (str): VFS 路径<br>session_id (string, optional): session_id '
                    '(str, 可选): 当 path 指向 replay 相关域时用于解析当前 session',
   'returns_raw': 'ok (bool)<br>data (dict): {path, node}<br>artifacts (list)<br>error '
-                 '(dict|null)<br>meta (dict)',
+                 '(dict|null)<br>meta (dict) /draws node.pagination preserves the canonical '
+                 'action-tree pagination unchanged; its truncated flag qualifies node.data and entries.',
   'param_names': ['path', 'session_id'],
   'prerequisites': [],
   'namespace': 'vfs',
@@ -4279,7 +4292,12 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                  'instead of embedding full action subtrees. Broad resource domains are bounded '
                  "and truncated with truncation_reason='max_nodes_exceeded'. Use rd.vfs.ls or "
                  'targeted rd.vfs.cat for large /resources, /textures, and /buffers '
-                 'exploration.<br>artifacts (list)<br>error (dict|null)<br>meta (dict)',
+                 'exploration. /draws nodes retain canonical action-tree pagination unchanged. '
+                 'Tree truncated includes upstream pagination truncation even at depth=0, with '
+                 "truncation_reason='upstream_pagination_truncated' unless the VFS node budget "
+                 "also truncates, when the existing 'max_nodes_exceeded' reason takes precedence. "
+                 'Source pagination remains visible in either case; requested VFS depth alone '
+                 'does not mark truncation.<br>artifacts (list)<br>error (dict|null)<br>meta (dict)',
   'param_names': ['path', 'session_id', 'depth', 'max_nodes'],
   'prerequisites': [],
   'namespace': 'vfs',
@@ -4433,8 +4451,13 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'returns_raw': 'data: frame_timing method, unit, range, scope, sampling conditions and '
                  'individual positive samples; restored_event_id and replay_state_restored. '
                  'Excludes initial-content restoration, includes replay scheduling gaps, never '
-                 'original application time. Unsupported backend, incomplete queues and failed '
-                 'timestamps are errors, not zero samples.',
+                 'original application time. When FrameGPUDuration is missing from the runtime '
+                 'enum or is not enumerated for the active replay, fail with '
+                 'frame_timing_unavailable/category=capability and details identifying the '
+                 'counter and reason. Failed or incomplete native samples use '
+                 'frame_timing_sample_failed/category=runtime. Unsupported capability and failed '
+                 'timestamps are errors, not zero samples; no event-duration or CPU-time fallback '
+                 'is used.',
   'param_names': ['session_id', 'samples', 'warmup'],
   'prerequisites': [{'requires': 'session_id',
                      'via_tools': ['rd.capture.open_replay'],

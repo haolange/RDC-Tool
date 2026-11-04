@@ -31,6 +31,10 @@ _PACKAGE_MAP = {
 }
 _REMOTE_SOCKET_TEMPLATE = "renderdoc_{port}"
 _REMOTE_SOCKET_RE = re.compile(r"@renderdoc_(\d+)")
+# RenderDoc globalconfig.h: RenderDoc_FirstTargetControlPort and
+# RenderDoc_LastTargetControlPort; Android maps these to renderdoc_<port>
+# abstract sockets (android_process.cpp). The replay-server socket is separate.
+_ANDROID_TARGET_CONTROL_PORTS = range(38920, 38928)
 
 
 class AndroidRemoteBootstrapError(RuntimeError):
@@ -125,6 +129,10 @@ class AndroidBootstrapResult:
     stage: str = "checking"
     expected_version: str = ""
     apk_sha256: str = ""
+    installed_apk_path: str = ""
+    installed_apk_sha256: str = ""
+    apk_identity_status: str = "unavailable"
+    apk_identity_reason: str = "not_observed"
     installed_identity: str = ""
     service_identity: list[str] = field(default_factory=list)
 
@@ -317,8 +325,18 @@ def _install_android_helper(result: AndroidBootstrapResult, opts: AndroidBootstr
                 "device_action": _device_install_action(result, [], "unreadable")}) from error
     finally:
         _connection_budget.reset(token)
-    if proc.returncode != 0 or not re.search(r"(?m)^Success\s*$", str(proc.stdout or "")):
-        diagnostic = str(proc.stderr or proc.stdout or "").strip()
+    stdout, stderr = str(proc.stdout or ""), str(proc.stderr or "")
+    diagnostic = "\n".join(part.strip() for part in (stderr, stdout) if part.strip())
+    succeeded = bool(re.search(r"(?m)^Success\s*$", stdout))
+    failed = bool(re.search(r"\b(?:INSTALL_FAILED_|INSTALL_PARSE_FAILED_)[A-Z0-9_]+\b|^\s*Failure\s*\[[^\r\n]+\]", diagnostic, re.MULTILINE))
+    if (not succeeded and not failed) or (succeeded and (failed or proc.returncode != 0)):
+        # ADB exit alone cannot prove the PackageManager outcome. In particular,
+        # a joined client may return zero without the device's terminal receipt.
+        raise AndroidRemoteBootstrapError("remote_install_unconfirmed",
+            "Android helper installation returned no unambiguous terminal receipt; device completion is unconfirmed",
+            details={"returncode": proc.returncode, "stdout": stdout[:4096], "stderr": stderr[:4096],
+                "device_action": _device_install_action(result, [], "unreadable")})
+    if failed:
         if "INSTALL_FAILED_UPDATE_INCOMPATIBLE" in diagnostic and update:
             _require_repair_confirmation(result, opts, ["reinstall_helper"])
             # Confirmation for a different action cannot authorize uninstall.
@@ -341,7 +359,7 @@ def _install_android_helper(result: AndroidBootstrapResult, opts: AndroidBootstr
             _require_repair_confirmation(result, opts, ["downgrade_helper"])
             _install_android_helper(result, opts, update=True, downgrade=True)
             return
-        raise AndroidRemoteBootstrapError("android_apk_install_failed", f"Failed to install Android helper: {diagnostic or 'command failed'}", details={"returncode": proc.returncode})
+        raise AndroidRemoteBootstrapError("android_apk_install_failed", f"Failed to install Android helper: {diagnostic}", details={"returncode": proc.returncode})
     result.installed_apk = True
     result.install_mode = "update" if update else "install"
     result.install_reason = "incompatible_helper" if update else "missing_helper"
@@ -564,6 +582,61 @@ def _adb_shell(adb_path: str, device_serial: str, *args: str, timeout_s: float, 
     return _run_subprocess(cmd, timeout_s=timeout_s, error_code=error_code, error_message=error_message)
 
 
+def _observe_installed_apk(result: AndroidBootstrapResult) -> None:
+    """Read the selected package's bytes without changing preparation policy."""
+    result.installed_apk_path = result.installed_apk_sha256 = ""
+    result.apk_identity_status, result.apk_identity_reason = "unavailable", "not_observed"
+    try:
+        probe = _adb_shell(result.adb_path, result.device_serial, "pm", "path", result.package_name,
+            timeout_s=_remaining(5.0), error_code="android_package_probe_failed",
+            error_message="Failed to observe installed helper APK path")
+        _remaining(1.0)
+        lines = [line.strip() for line in str(probe.stdout or "").splitlines() if line.strip()]
+        if str(probe.stderr or "").strip():
+            result.apk_identity_reason = "installed_apk_path_unreadable"
+            return
+        if len(lines) != 1:
+            result.apk_identity_reason = "installed_apk_missing" if not lines else "installed_apk_split_or_ambiguous"
+            return
+        match = re.fullmatch(r"package:(/[^\s\x00]+/base\.apk)", lines[0])
+        if not match:
+            result.apk_identity_reason = "installed_apk_path_invalid"
+            return
+        result.installed_apk_path = match.group(1)
+        digest = _adb_shell(result.adb_path, result.device_serial, "sha256sum", shlex.quote(result.installed_apk_path),
+            timeout_s=_remaining(5.0), error_code="android_package_probe_failed",
+            error_message="Failed to observe installed helper APK hash")
+        _remaining(1.0)
+        match = re.fullmatch(r"([0-9a-fA-F]{64})[ \t]+\*?(/[^\r\n\x00]+)", str(digest.stdout or "").strip())
+        if str(digest.stderr or "").strip() or not match or match.group(2) != result.installed_apk_path:
+            result.apk_identity_reason = "installed_apk_hash_unreadable"
+            return
+        result.installed_apk_sha256 = match.group(1).lower()
+        if not result.apk_sha256:
+            # Borrowing a running helper still does not require a local APK.
+            # Read the optional same-install target only for this comparison.
+            arch = next((arch for arch, package in _PACKAGE_MAP.items() if package == result.package_name), "")
+            target_path = Path(result.apk_path) if result.apk_path else android_binaries_root() / arch / f"{result.package_name}.apk"
+            target = read_apk_identity(str(target_path))
+            _remaining(1.0)
+            if target["package_name"] == result.package_name:
+                result.apk_sha256 = str(target["apk_sha256"])
+        if not re.fullmatch(r"[0-9a-fA-F]{64}", result.apk_sha256):
+            result.apk_identity_reason = "target_apk_identity_unavailable"
+            return
+        matched = result.installed_apk_sha256 == result.apk_sha256.lower()
+        result.apk_identity_status = "matched" if matched else "different"
+        result.apk_identity_reason = "installed_apk_matches_target" if matched else "installed_apk_differs_from_target"
+    except AndroidRemoteBootstrapError as exc:
+        if exc.code in {"remote_connect_cancelled", "remote_connect_timeout"}:
+            raise
+        _remaining(1.0)
+        result.apk_identity_reason = "installed_apk_probe_failed"
+    except (OSError, ValueError, KeyError, IndexError, zipfile.BadZipFile, struct.error):
+        _remaining(1.0)
+        result.apk_identity_reason = "target_apk_identity_unavailable"
+
+
 def detect_device_arch(adb_path: str, device_serial: str) -> tuple[str, str]:
     for prop in ("ro.product.cpu.abilist64", "ro.product.cpu.abilist", "ro.product.cpu.abi"):
         proc = _adb_shell(
@@ -627,9 +700,20 @@ def _list_renderdoc_socket_ports(adb_path: str, device_serial: str) -> list[int]
         )
     except AndroidRemoteBootstrapError:
         raise
+    lines = str(proc.stdout or "").splitlines()
+    if (proc.returncode != 0 or str(proc.stderr or "").strip() or not lines
+            or lines[0].split() != ["Num", "RefCount", "Protocol", "Flags", "Type", "St", "Inode", "Path"]):
+        raise AndroidRemoteBootstrapError(
+            "android_socket_probe_failed", "Android unix socket listing is unreadable or malformed"
+        )
     ports: list[int] = []
-    for line in str(proc.stdout or "").splitlines():
-        match = _REMOTE_SOCKET_RE.search(line)
+    for line in lines[1:]:
+        if not line.strip():
+            continue
+        fields = line.split()
+        if len(fields) < 7 or not re.fullmatch(r"[0-9a-fA-F]+:", fields[0]):
+            raise AndroidRemoteBootstrapError("android_socket_probe_failed", "Malformed Android unix socket row")
+        match = _REMOTE_SOCKET_RE.fullmatch(fields[7]) if len(fields) == 8 else None
         if not match:
             continue
         try:
@@ -637,6 +721,30 @@ def _list_renderdoc_socket_ports(adb_path: str, device_serial: str) -> list[int]
         except Exception:
             continue
     return sorted(set(ports))
+
+
+def list_android_target_idents(adb_path: str, device_serial: str) -> list[int]:
+    return [port for port in _list_renderdoc_socket_ports(adb_path, device_serial)
+            if port in _ANDROID_TARGET_CONTROL_PORTS]
+
+
+def forward_android_target(adb_path: str, device_serial: str, ident: int) -> AndroidBootstrapResult:
+    if int(ident) not in _ANDROID_TARGET_CONTROL_PORTS:
+        raise AndroidRemoteBootstrapError("android_target_invalid", "Invalid Android target control ident")
+    local_port = allocate_local_port()
+    result = AndroidBootstrapResult(
+        adb_path=adb_path, device_serial=device_serial, package_name="", activity_name="", abi="",
+        host="127.0.0.1", port=local_port, remote_port=int(ident), apk_path="",
+        forward_spec=f"tcp:{local_port}",
+    )
+    _run_subprocess(
+        _adb_base_cmd(adb_path, device_serial)
+        + ["forward", "--no-rebind", result.forward_spec, f"localabstract:renderdoc_{ident}"],
+        timeout_s=10.0, error_code="adb_forward_failed",
+        error_message="Failed to establish Android target control forward",
+    )
+    result.created_forward = True
+    return result
 
 
 def _select_remote_socket_port(requested_port: int, before_ports: list[int], after_ports: list[int]) -> int:
@@ -890,17 +998,110 @@ def _prepare_android_service_steps(result: AndroidBootstrapResult, opts: Android
         _connection_budget.reset(token)
     _remaining(1.0)
     result.cleanup_actions.append("adb-forward")
+    _observe_installed_apk(result)
     return result
+
+
+def _adb_server_endpoint() -> tuple[str, int]:
+    """Resolve the server exactly as an adb client without explicit -H/-P/-L."""
+    spec = os.environ.get("ADB_SERVER_SOCKET")
+    if spec is None:
+        address = os.environ.get("ANDROID_ADB_SERVER_ADDRESS")
+        port = os.environ.get("ANDROID_ADB_SERVER_PORT") or "5037"
+        if not re.fullmatch(r"[+]?[0-9]+", port) or not 1 <= int(port) <= 65535:
+            raise AndroidRemoteBootstrapError("adb_forward_cleanup_unconfirmed",
+                "ADB forward cleanup unconfirmed: invalid ANDROID_ADB_SERVER_PORT")
+        spec = f"tcp:{address}:{port}" if address is not None else f"tcp:{port}"
+    try:
+        if not spec.startswith("tcp:"):
+            raise ValueError("only TCP ADB server endpoints are supported")
+        address = spec[4:]
+        if re.fullmatch(r"[+-]?\d+", address):
+            host, port = "localhost", int(address)
+        elif address.startswith("["):
+            match = re.fullmatch(r"\[([^\[\]]+)\]:(\d+)", address)
+            if match is None:
+                raise ValueError("invalid bracketed TCP server endpoint")
+            host, port = match[1], int(match[2])
+            socket.inet_pton(socket.AF_INET6, host)
+        elif address.count(":") >= 2:
+            # ADB ParseNetAddress treats an unbracketed IPv6 address as a host
+            # with the default local-transport port, not a host:port pair.
+            socket.inet_pton(socket.AF_INET6, address)
+            host, port = address, 5555
+        elif ":" in address:
+            host, value = address.split(":")
+            if not value.isdecimal():
+                raise ValueError("invalid TCP server port")
+            port = int(value)
+        else:
+            host, port = address, 5555
+        if not host or re.search(r"[\s/\x00\[\]]", host) or not 1 <= port <= 65535:
+            raise ValueError("invalid TCP server endpoint")
+        return host, port
+    except (ValueError, OSError) as exc:
+        raise AndroidRemoteBootstrapError("adb_forward_cleanup_unconfirmed",
+            f"ADB forward cleanup unconfirmed: {exc}") from exc
+
+
+def _list_adb_forwards_for_cleanup(endpoint: tuple[str, int]) -> list[list[str]]:
+    # The CLI can return an incomplete list even with a terminal newline. The
+    # server's OKAY/length/payload frame is the sole forward-list authority.
+    deadline = time.monotonic() + 10.0
+
+    def remaining() -> float:
+        value = deadline - time.monotonic()
+        if value <= 0:
+            raise TimeoutError("ADB forward query deadline exceeded")
+        return value
+
+    try:
+        with socket.create_connection(endpoint, timeout=remaining()) as connection:
+            def read_exact(length: int) -> bytes:
+                data = bytearray()
+                while len(data) < length:
+                    connection.settimeout(remaining())
+                    part = connection.recv(length - len(data))
+                    if not part:
+                        raise OSError("ADB forward query ended before its complete frame")
+                    data.extend(part)
+                remaining()
+                return bytes(data)
+
+            def read_payload() -> bytes:
+                header = read_exact(4)
+                if re.fullmatch(rb"[0-9a-fA-F]{4}", header) is None:
+                    raise ValueError("invalid ADB forward payload length")
+                # Four hexadecimal digits bound the payload to 65535 bytes.
+                return read_exact(int(header, 16))
+
+            connection.settimeout(remaining())
+            connection.sendall(b"0011host:list-forward")
+            status = read_exact(4)
+            if status == b"FAIL":
+                reason = read_payload().decode("utf-8")
+                raise OSError(f"ADB server rejected forward query: {reason}")
+            if status != b"OKAY":
+                raise ValueError("invalid ADB forward query status")
+            payload = read_payload().decode("utf-8")
+        if payload and not payload.endswith("\n"):
+            raise ValueError("unterminated ADB forward row")
+        rows = [line.split() for line in payload.splitlines()]
+        if any(len(row) != 3 for row in rows):
+            raise ValueError("malformed ADB forward listing")
+        return rows
+    except (OSError, ValueError) as exc:
+        raise AndroidRemoteBootstrapError("adb_forward_cleanup_unconfirmed",
+            f"ADB forward cleanup unconfirmed: {exc}") from exc
 
 
 def cleanup_android_remote(result: AndroidBootstrapResult) -> list[str]:
     errors: list[str] = []
     if result.created_forward:
         try:
-            proc = _run_subprocess([result.adb_path, "forward", "--list"], timeout_s=10.0,
-                                   error_code="adb_forward_query_failed", error_message="Failed to verify adb forward ownership")
-            rows = [line.split() for line in proc.stdout.splitlines()]
-            matches = [row for row in rows if len(row) == 3 and row[1] == result.forward_spec]
+            endpoint = _adb_server_endpoint()
+            rows = _list_adb_forwards_for_cleanup(endpoint)
+            matches = [row for row in rows if row[1] == result.forward_spec]
             expected = [result.device_serial, result.forward_spec, f"localabstract:renderdoc_{result.remote_port}"]
             if matches and matches != [expected]:
                 raise AndroidRemoteBootstrapError("adb_forward_ownership_changed", "ADB forward identity changed; refusing to remove it")
@@ -908,11 +1109,20 @@ def cleanup_android_remote(result: AndroidBootstrapResult) -> list[str]:
                 result.created_forward = False
             else:
                 _run_subprocess(
-                _adb_base_cmd(result.adb_path, result.device_serial) + ["forward", "--remove", result.forward_spec],
+                [result.adb_path, "-H", f"[{endpoint[0]}]" if ":" in endpoint[0] else endpoint[0],
+                 "-P", str(endpoint[1]), "-s", result.device_serial, "forward", "--remove", result.forward_spec],
                 timeout_s=10.0,
                 error_code="adb_forward_remove_failed",
                 error_message="Failed to remove adb forward",
                 )
+                remaining = [row for row in _list_adb_forwards_for_cleanup(endpoint)
+                             if row[1] == result.forward_spec]
+                if remaining and remaining != [expected]:
+                    raise AndroidRemoteBootstrapError("adb_forward_ownership_changed",
+                        "ADB forward identity changed; refusing to remove it")
+                if remaining:
+                    raise AndroidRemoteBootstrapError("adb_forward_cleanup_unconfirmed",
+                        "ADB forward cleanup unconfirmed: owned mapping remains after removal")
                 result.created_forward = False
         except AndroidRemoteBootstrapError as exc:
             errors.append(exc.message)
@@ -988,6 +1198,10 @@ def describe_android_remote(result: AndroidBootstrapResult) -> dict[str, object]
         "cleanup_actions": list(result.cleanup_actions),
         "expected_version": result.expected_version,
         "apk_sha256": result.apk_sha256,
+        "installed_apk_path": result.installed_apk_path,
+        "installed_apk_sha256": result.installed_apk_sha256,
+        "apk_identity_status": result.apk_identity_status,
+        "apk_identity_reason": result.apk_identity_reason,
     }
 
 

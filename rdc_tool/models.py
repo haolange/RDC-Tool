@@ -352,6 +352,7 @@ class PatchSpec(BaseModel):
 
 class PatchResult(BaseModel):
     patch_id: str
+    edit_plan: Dict[str, Any] = Field(default_factory=dict)
     build_input: Dict[str, Any] = Field(default_factory=lambda: {
         "status": "unavailable", "reason": "No successful shader build and replacement observed."
     })

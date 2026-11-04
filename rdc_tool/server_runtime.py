@@ -28,7 +28,7 @@ import time
 import textwrap
 import zipfile
 from collections import deque
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -87,6 +87,8 @@ from rdc_tool.remote_bootstrap import (
     inspect_android_installation,
     repair_incompatible_android_helper,
     _prepare_android_service,
+    list_android_target_idents,
+    forward_android_target,
 )
 from rdc_tool.runtime_bootstrap import bootstrap_renderdoc_runtime
 from rdc_tool.runtime_paths import artifacts_dir, ensure_runtime_dirs, runtime_root
@@ -169,6 +171,7 @@ class RemoteHandle:
     known_targets: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     known_captures: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     last_target_scan_ms: int = 0
+    target_control_leases: List[Any] = field(default_factory=list)
 
 
 @dataclass
@@ -3495,9 +3498,15 @@ async def _connect_remote_endpoint(host: str, port: int, transport: str, options
 
 def _disconnect_remote_handle_sync(handle: RemoteHandle) -> List[str]:
     errors: List[str] = []
+    for lease in list(handle.target_control_leases):
+        errors.extend(_close_target_control_sync(handle, lease))
+    if errors:
+        return errors
     if handle.remote_server is not None:
         try:
             handle.remote_server.ShutdownConnection()
+            handle.remote_server = None
+            handle.connected = False
         except Exception as exc:
             errors.append(f"remote shutdown failed: {exc}")
     if handle.transport == "adb_android" and handle.bootstrap_result is not None:
@@ -3545,7 +3554,7 @@ def _capture_options_payload(options: Any) -> Dict[str, Any]:
 
 def _capture_options_from_dict(values: Dict[str, Any]) -> Tuple[Any, Dict[str, Any]]:
     rd = _get_rd()
-    options = rd.GetDefaultCaptureOptions()
+    options = rd.CaptureOptions()
     applied: Dict[str, Any] = {}
     for raw_key, raw_value in dict(values or {}).items():
         key = str(raw_key or "").strip()
@@ -3595,14 +3604,102 @@ def _remote_target_ident(target_id: Any) -> int:
         return 0
 
 
-def _create_target_control_sync(handle: RemoteHandle, ident: int, *, force_connection: bool = False) -> Any:
-    rd = _get_rd()
-    return rd.CreateTargetControl(
-        _remote_url(handle.host, handle.port),
-        int(ident),
-        _remote_target_control_client_name(handle),
-        bool(force_connection),
-    )
+def _close_target_control_sync(handle: RemoteHandle, lease: Dict[str, Any]) -> List[str]:
+    control = lease.get("control")
+    if control is not None:
+        try:
+            control.Shutdown()
+        except Exception as exc:
+            return [f"target control shutdown failed: {exc}"]
+        lease["control"] = None
+    bridge = lease.get("bridge")
+    if bridge is not None:
+        errors = cleanup_android_remote(bridge)
+        if errors:
+            return errors
+    handle.target_control_leases[:] = [item for item in handle.target_control_leases if item is not lease]
+    return []
+
+
+@contextmanager
+def _target_control_scope_sync(handle: RemoteHandle, ident: int):
+    if handle.target_control_leases:
+        raise RuntimeToolError("Unreleased target control resources require remote disconnect cleanup")
+    lease: Dict[str, Any] = {"control": None, "bridge": None}
+    handle.target_control_leases.append(lease)
+    try:
+        host, native_ident = _target_control_host(handle.host), int(ident)
+        if handle.transport == "adb_android":
+            serial = str(handle.device_serial or getattr(handle.bootstrap_result, "device_serial", "") or "").strip()
+            if not serial:
+                raise RuntimeToolError("Android target control requires the connected device serial")
+            bridge = forward_android_target(resolve_adb_path(), serial, int(ident))
+            lease["bridge"] = bridge
+            host, native_ident = bridge.host, bridge.port
+        # Target-control APIs take a hostname and a separate ident/port. Unlike
+        # the replay-server API, host:port is not a supported endpoint here.
+        control = _get_rd().CreateTargetControl(
+            host, native_ident, _remote_target_control_client_name(handle), False,
+        )
+        lease["control"] = control
+        if control is None:
+            raise RuntimeToolError("Native target control connection returned no handle")
+        yield control
+    finally:
+        errors = _close_target_control_sync(handle, lease)
+        if errors:
+            raise RuntimeToolError("Target control cleanup failed", details={"cleanup_errors": errors})
+
+
+def _target_control_host(host: str) -> str:
+    host = str(host or "").strip()
+    if not host or ":" in host or "/" in host:
+        raise RuntimeToolError("Native target discovery requires a supported hostname without a port or protocol")
+    return host
+
+
+def _require_available_target_control(control: Any) -> None:
+    busy_client = str(control.GetBusyClient() or "")
+    if busy_client:
+        raise RuntimeToolError("Remote target is busy", details={"busy_client": busy_client})
+    if not control.Connected():
+        raise RuntimeToolError("Remote target control is disconnected")
+
+
+async def _offload_target_operation(fn: Any, *args: Any, **kwargs: Any) -> Any:
+    future = asyncio.create_task(_offload(fn, *args, **kwargs))
+    try:
+        return await asyncio.shield(future)
+    except asyncio.CancelledError:
+        # The worker owns the control and any temporary forward until the
+        # complete synchronous operation, including Shutdown, has settled.
+        try:
+            await asyncio.shield(future)
+        finally:
+            raise
+
+
+def _copy_remote_capture_sync(handle: RemoteHandle, ident: int, capture_id: int, local_path: Path) -> None:
+    with _target_control_scope_sync(handle, ident) as control:
+        _require_available_target_control(control)
+        control.CopyCapture(capture_id, str(local_path))
+        deadline = time.perf_counter() + 30.0
+        while time.perf_counter() < deadline:
+            events = _drain_target_control_messages_sync(
+                handle, control, target_id=str(ident), max_messages=6, deadline_s=0.2,
+            )
+            if any(event.get("type") == "CaptureCopied"
+                   and str((event.get("capture") or {}).get("capture_id")) == str(capture_id)
+                   for event in events) and local_path.is_file():
+                return
+            time.sleep(0.1)
+        raise RuntimeToolError("Remote capture copy did not confirm completion before timeout")
+
+
+def _delete_remote_capture_sync(handle: RemoteHandle, ident: int, capture_id: int) -> None:
+    with _target_control_scope_sync(handle, ident) as control:
+        _require_available_target_control(control)
+        control.DeleteCapture(capture_id)
 
 
 def _target_summary_from_control(handle: RemoteHandle, ident: int, control: Any) -> Dict[str, Any]:
@@ -3618,6 +3715,7 @@ def _target_summary_from_control(handle: RemoteHandle, ident: int, control: Any)
             "connected": bool(control.Connected()) if hasattr(control, "Connected") else True,
         }
     )
+    target.pop("busy_client", None)
     busy_client = str(control.GetBusyClient() or "") if hasattr(control, "GetBusyClient") else ""
     if busy_client:
         target["busy_client"] = busy_client
@@ -3633,8 +3731,8 @@ def _update_remote_capture_registry_from_message(
     message: Any,
 ) -> Optional[Dict[str, Any]]:
     capture = getattr(message, "newCapture", None)
-    capture_id = int(getattr(capture, "captureId", 0) or 0)
-    if capture_id <= 0:
+    capture_id = getattr(capture, "captureId", None)
+    if not isinstance(capture_id, int) or isinstance(capture_id, bool) or capture_id < 0:
         return None
     capture_key = str(capture_id)
     record = dict(handle.known_captures.get(capture_key) or {})
@@ -3737,37 +3835,43 @@ def _drain_target_control_messages_sync(
 
 
 def _remote_list_targets_sync(handle: RemoteHandle) -> List[Dict[str, Any]]:
-    rd = _get_rd()
-    url = _remote_url(handle.host, handle.port)
-    next_ident = 0
-    seen: set[int] = set()
+    if handle.transport == "adb_android":
+        serial = str(handle.device_serial or getattr(handle.bootstrap_result, "device_serial", "") or "").strip()
+        if not serial:
+            raise RuntimeToolError("Android target discovery requires the connected device serial")
+        idents = list_android_target_idents(resolve_adb_path(), serial)
+    else:
+        host = _target_control_host(handle.host)
+        idents = []
+        next_ident = 0
+        for _ in range(64):
+            ident = int(_get_rd().EnumerateRemoteTargets(host, next_ident) or 0)
+            if ident == 0:
+                break
+            if ident < 0 or ident in idents:
+                raise RuntimeToolError("Native target enumeration returned an invalid or repeated ident")
+            idents.append(ident)
+            next_ident = ident
+        else:
+            raise RuntimeToolError("Native target enumeration exceeded the scan limit")
     discovered: List[Dict[str, Any]] = []
-    for _ in range(64):
-        ident = int(rd.EnumerateRemoteTargets(url, int(next_ident)) or 0)
-        if ident <= 0 or ident in seen:
-            break
-        seen.add(ident)
+    for ident in idents:
         target_id = str(ident)
         try:
-            control = _create_target_control_sync(handle, ident)
-            summary = _target_summary_from_control(handle, ident, control)
-            _drain_target_control_messages_sync(handle, control, target_id=target_id, max_messages=4, deadline_s=0.0)
-            discovered.append(dict(handle.known_targets.get(target_id) or summary))
+            with _target_control_scope_sync(handle, ident) as control:
+                summary = _target_summary_from_control(handle, ident, control)
+                if not summary.get("busy_client") and summary.get("connected"):
+                    _drain_target_control_messages_sync(handle, control, target_id=target_id, max_messages=4, deadline_s=0.0)
+                discovered.append(dict(handle.known_targets.get(target_id) or summary))
         except Exception as exc:
-            errored = {
-                "target_id": target_id,
-                "ident": ident,
-                "connected": False,
-                "error": str(exc),
-            }
+            if handle.target_control_leases:
+                raise
+            errored = {"target_id": target_id, "ident": ident, "connected": False, "error": str(exc)}
             handle.known_targets[target_id] = errored
             discovered.append(errored)
-        next_ident = ident
+    handle.known_targets = {str(item["target_id"]): item for item in discovered}
     handle.last_target_scan_ms = _now_ms()
-    if discovered:
-        return sorted(discovered, key=lambda item: int(item.get("ident") or 0))
-    cached = [dict(item) for item in handle.known_targets.values()]
-    return sorted(cached, key=lambda item: int(item.get("ident") or 0))
+    return sorted(discovered, key=lambda item: int(item.get("ident") or 0))
 
 
 def _resolve_remote_target_ident_sync(handle: RemoteHandle, target_id: str = "") -> Tuple[int, Dict[str, Any]]:
@@ -3823,14 +3927,12 @@ def _poll_captures_for_target_sync(
     ident = _remote_target_ident(target_id)
     if ident <= 0:
         return []
-    control = _create_target_control_sync(handle, ident)
-    _drain_target_control_messages_sync(
-        handle,
-        control,
-        target_id=str(target_id or ""),
-        max_messages=max_messages,
-        deadline_s=deadline_s,
-    )
+    with _target_control_scope_sync(handle, ident) as control:
+        _require_available_target_control(control)
+        _drain_target_control_messages_sync(
+            handle, control, target_id=str(target_id or ""),
+            max_messages=max_messages, deadline_s=deadline_s,
+        )
     return _capture_records_for_target(handle, target_id=str(target_id or ""))
 
 
@@ -3893,10 +3995,11 @@ def _launch_remote_app_sync(
                 },
             },
         )
-    control = _create_target_control_sync(handle, ident, force_connection=False)
-    target = _target_summary_from_control(handle, ident, control)
-    _drain_target_control_messages_sync(handle, control, target_id=str(ident), max_messages=8, deadline_s=0.5)
-    target = dict(handle.known_targets.get(str(ident)) or target)
+    with _target_control_scope_sync(handle, ident) as control:
+        target = _target_summary_from_control(handle, ident, control)
+        _require_available_target_control(control)
+        _drain_target_control_messages_sync(handle, control, target_id=str(ident), max_messages=8, deadline_s=0.5)
+        target = dict(handle.known_targets.get(str(ident)) or target)
     target["capture_options"] = applied_capture_options
     return target
 
@@ -3910,19 +4013,19 @@ def _trigger_remote_capture_sync(
     queued: bool = False,
 ) -> Dict[str, Any]:
     ident, target = _resolve_remote_target_ident_sync(handle, target_id)
-    control = _create_target_control_sync(handle, ident, force_connection=False)
-    if capture_delay_ms > 0:
-        time.sleep(max(0.0, float(capture_delay_ms) / 1000.0))
-    if queued:
-        control.QueueCapture(0, max(1, int(num_frames or 1)))
-    else:
-        control.TriggerCapture(max(1, int(num_frames or 1)))
-    captures = _poll_captures_for_target_sync(
-        handle,
-        target_id=str(ident),
-        deadline_s=5.0 if not queued else 2.0,
-        max_messages=32,
-    )
+    with _target_control_scope_sync(handle, ident) as control:
+        _require_available_target_control(control)
+        if capture_delay_ms > 0:
+            time.sleep(max(0.0, float(capture_delay_ms) / 1000.0))
+        if queued:
+            control.QueueCapture(0, max(1, int(num_frames or 1)))
+        else:
+            control.TriggerCapture(max(1, int(num_frames or 1)))
+        _drain_target_control_messages_sync(
+            handle, control, target_id=str(ident),
+            deadline_s=5.0 if not queued else 2.0, max_messages=32,
+        )
+        captures = _capture_records_for_target(handle, target_id=str(ident))
     return {
         "target": dict(handle.known_targets.get(str(ident)) or target),
         "captures": captures,
@@ -4896,24 +4999,30 @@ def _sanitize_dict(data: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _parse_stage(stage: Optional[str]) -> str:
-    if not stage:
+    if stage is None:
         return "ps"
     return str(stage).strip().lower()
 
 
 def _rd_stage(stage: str) -> Any:
-    rd = _get_rd()
+    name = str(stage).strip().lower()
+    details = {"requested_stage": stage, "allowed_stages": _stage_candidates(),
+               "failure_stage": "validate_stage"}
+    if name == "rt":
+        raise CoreError(code="shader_stage_unsupported", category="capability",
+                        message="Ray-tracing stage inspection is not supported", details=details)
+    if name not in _stage_candidates():
+        raise CoreError(code="invalid_shader_stage", category="validation",
+                        message=f"Invalid shader stage: {stage}", details=details)
     mapping = {
-        "vs": rd.ShaderStage.Vertex,
-        "hs": rd.ShaderStage.Hull,
-        "ds": rd.ShaderStage.Domain,
-        "gs": rd.ShaderStage.Geometry,
-        "ps": rd.ShaderStage.Pixel,
-        "cs": rd.ShaderStage.Compute,
-        "ms": getattr(rd.ShaderStage, "Mesh", rd.ShaderStage.Compute),
-        "as": getattr(rd.ShaderStage, "Amplification", rd.ShaderStage.Compute),
+        "vs": "Vertex", "hs": "Hull", "ds": "Domain", "gs": "Geometry",
+        "ps": "Pixel", "cs": "Compute", "ms": "Mesh", "as": "Amplification",
     }
-    return mapping.get(stage.lower(), rd.ShaderStage.Pixel)
+    native_stage = getattr(_get_rd().ShaderStage, mapping[name], None)
+    if native_stage is None:
+        raise CoreError(code="shader_stage_unsupported", category="capability",
+                        message=f"Native runtime does not expose shader stage: {stage}", details=details)
+    return native_stage
 
 
 def _stage_candidates() -> List[str]:
@@ -7814,6 +7923,12 @@ async def _dispatch_pipeline(action: str, args: Dict[str, Any]) -> str:
     _require(args, "session_id")
     session_id = str(args["session_id"])
     stage = _parse_stage(args.get("stage"))
+    if action in {"get_stage_state", "get_shader", "get_resource_bindings", "get_constant_buffers"}:
+        try:
+            _rd_stage(stage)
+        except CoreError as exc:
+            return _err(str(exc), code=exc.code, category=exc.category,
+                        details={**exc.details, "effects_attempted": False, "context_preserved": True})
     resolved_event_id = await _ensure_event(session_id, _as_int(args["event_id"]) if args.get("event_id") is not None else None)
     assert _pipeline_service is not None
     snapshot_dict: Dict[str, Any] = {}
@@ -11070,7 +11185,7 @@ async def _dispatch_shader(action: str, args: Dict[str, Any]) -> str:
                 preserve_outputs=preserve_outputs,
             ),
         }
-        edit_plan = _shader_edit_plan(
+        edit_plan = dict(patch_result.edit_plan) or _shader_edit_plan(
             source_encoding=str(patch_result.encoding or ""),
             disassembly_target=str(patch_result.disassembly_target or ""),
             source=str(patch_result.source_before_text or ""),
@@ -12639,7 +12754,7 @@ async def _vfs_root_node() -> Dict[str, Any]:
 async def _vfs_draws_node(parts: List[str], path: str, args: Dict[str, Any]) -> Dict[str, Any]:
     session_id = _vfs_require_session_id(path, args)
     if len(parts) == 1:
-        payload = await _vfs_call("rd.event.get_action_tree", {"session_id": session_id, "max_depth": args.get("max_depth") or 2, "max_nodes": args.get("max_nodes") or 2000})
+        payload = await _vfs_call("rd.event.get_action_tree", {"session_id": session_id, "max_depth": args.get("max_depth") or 2, "max_nodes": max(1, _as_int(args.get("max_nodes"), 2000))})
         root = payload.get("root", {})
         children = list(root.get("children") or []) if isinstance(root, dict) else []
         entries = [
@@ -12654,7 +12769,9 @@ async def _vfs_draws_node(parts: List[str], path: str, args: Dict[str, Any]) -> 
             for child in children
             if child.get("event_id") is not None
         ]
-        return _vfs_node("/draws", kind="directory", title="Action tree roots", requires_session=True, canonical_tools=["rd.event.get_action_tree"], data=root, entries=entries)
+        node = _vfs_node("/draws", kind="directory", title="Action tree roots", requires_session=True, canonical_tools=["rd.event.get_action_tree"], data=root, entries=entries)
+        node["pagination"] = dict(payload.get("pagination") or {})
+        return node
 
     event_id = _as_int(parts[1])
     if len(parts) == 2:
@@ -12984,6 +13101,8 @@ async def _vfs_build_tree(path: str, args: Dict[str, Any], depth: int, budget: O
     budget["emitted_nodes"] = int(budget.get("emitted_nodes") or 0) + 1
     resolve_args = {**dict(args), "_vfs_tree_mode": True}
     node = await _vfs_resolve_node(path, resolve_args)
+    if node.get("pagination", {}).get("truncated"):
+        budget["upstream_truncated"] = True
     if depth <= 0:
         return node
     entries = list(node.get("entries") or []) if isinstance(node, dict) else []
@@ -13037,7 +13156,8 @@ async def _dispatch_vfs(action: str, args: Dict[str, Any]) -> str:
         depth = max(0, _as_int(args.get("depth"), 2))
         budget = {"max_nodes": max(1, _as_int(args.get("max_nodes"), 2000)), "emitted_nodes": 0, "truncated": False}
         tree = await _vfs_build_tree(path, args, depth, budget)
-        return _ok(path=path, tree=tree, max_nodes=budget["max_nodes"], emitted_nodes=budget["emitted_nodes"], truncated=bool(budget.get("truncated")), truncation_reason="max_nodes_exceeded" if budget.get("truncated") else "")
+        truncation_reason = "max_nodes_exceeded" if budget.get("truncated") else "upstream_pagination_truncated" if budget.get("upstream_truncated") else ""
+        return _ok(path=path, tree=tree, max_nodes=budget["max_nodes"], emitted_nodes=budget["emitted_nodes"], truncated=bool(truncation_reason), truncation_reason=truncation_reason)
     return _err(f"Unsupported vfs action: {action}")
 
 
@@ -13202,13 +13322,12 @@ async def _dispatch_remote(action: str, args: Dict[str, Any]) -> str:
                     "active_session_ids": active_session_ids,
                 },
             )
-        handle = _runtime.remotes.pop(remote_id, None)
-        if handle is None:
-            return _err(f"Unknown remote_id: {remote_id}", code="remote_not_found", category="runtime")
-        _clear_context_remote_live(remote_id)
-        errors = await _offload(_disconnect_remote_handle_sync, handle)
+        errors = await _offload_target_operation(_disconnect_remote_handle_sync, handle)
         if errors:
-            return _ok(detail={"connected": False, "cleanup_errors": errors})
+            return _err("Remote disconnect cleanup failed", code="remote_disconnect_failed", category="runtime",
+                        details={"remote_id": remote_id, "cleanup_errors": errors})
+        _runtime.remotes.pop(remote_id, None)
+        _clear_context_remote_live(remote_id)
         return _ok(detail={"connected": False})
 
     if action == "ping":
@@ -13315,7 +13434,7 @@ async def _dispatch_remote(action: str, args: Dict[str, Any]) -> str:
             )
         if action == "list_targets":
             try:
-                targets = await _offload(_remote_list_targets_sync, handle)
+                targets = await _offload_target_operation(_remote_list_targets_sync, handle)
             except Exception as exc:
                 return _err(
                     f"Failed to enumerate remote targets: {exc}",
@@ -13327,7 +13446,7 @@ async def _dispatch_remote(action: str, args: Dict[str, Any]) -> str:
         if action == "launch_app":
             _require(args, "exe_path")
             try:
-                target = await _offload(
+                target = await _offload_target_operation(
                     _launch_remote_app_sync,
                     handle,
                     exe_path=str(args.get("exe_path") or ""),
@@ -13355,7 +13474,7 @@ async def _dispatch_remote(action: str, args: Dict[str, Any]) -> str:
             return _ok(applied=applied_options, default_capture_options=dict(handle.default_capture_options))
         if action in {"trigger_capture", "queue_capture"}:
             try:
-                result = await _offload(
+                result = await _offload_target_operation(
                     _trigger_remote_capture_sync,
                     handle,
                     target_id=str(args.get("target_id") or ""),
@@ -13377,15 +13496,15 @@ async def _dispatch_remote(action: str, args: Dict[str, Any]) -> str:
             try:
                 target_id = str(args.get("target_id") or "")
                 if target_id:
-                    captures = await _offload(_poll_captures_for_target_sync, handle, target_id=target_id, deadline_s=1.0, max_messages=12)
+                    captures = await _offload_target_operation(_poll_captures_for_target_sync, handle, target_id=target_id, deadline_s=1.0, max_messages=12)
                 else:
-                    targets = await _offload(_remote_list_targets_sync, handle)
+                    targets = await _offload_target_operation(_remote_list_targets_sync, handle)
                     captures = _capture_records_for_target(handle)
                     for item in targets:
                         tid = str(item.get("target_id") or "")
                         if not tid:
                             continue
-                        captures = await _offload(_poll_captures_for_target_sync, handle, target_id=tid, deadline_s=0.5, max_messages=8)
+                        captures = await _offload_target_operation(_poll_captures_for_target_sync, handle, target_id=tid, deadline_s=0.5, max_messages=8)
                     captures = _capture_records_for_target(handle)
             except Exception as exc:
                 return _err(
@@ -13401,7 +13520,7 @@ async def _dispatch_remote(action: str, args: Dict[str, Any]) -> str:
             record = dict(handle.known_captures.get(capture_id) or {})
             target_id = str(record.get("target_id") or "")
             if not target_id:
-                targets = await _offload(_remote_list_targets_sync, handle)
+                targets = await _offload_target_operation(_remote_list_targets_sync, handle)
                 if len(targets) == 1:
                     target_id = str(targets[0].get("target_id") or "")
             ident = _remote_target_ident(target_id)
@@ -13415,21 +13534,7 @@ async def _dispatch_remote(action: str, args: Dict[str, Any]) -> str:
             local_path = Path(str(args.get("local_path") or "")).resolve()
             local_path.parent.mkdir(parents=True, exist_ok=True)
             try:
-                control = await _offload(_create_target_control_sync, handle, ident, force_connection=False)
-                await _offload(control.CopyCapture, _as_int(capture_id, 0), str(local_path))
-                deadline = time.perf_counter() + 30.0
-                while time.perf_counter() < deadline:
-                    if local_path.is_file():
-                        break
-                    await _offload(
-                        _drain_target_control_messages_sync,
-                        handle,
-                        control,
-                        target_id=str(ident),
-                        max_messages=6,
-                        deadline_s=0.2,
-                    )
-                    await asyncio.sleep(0.1)
+                await _offload_target_operation(_copy_remote_capture_sync, handle, ident, _as_int(capture_id, 0), local_path)
             except Exception as exc:
                 return _err(
                     f"Failed to copy remote capture: {exc}",
@@ -13444,7 +13549,7 @@ async def _dispatch_remote(action: str, args: Dict[str, Any]) -> str:
             record = dict(handle.known_captures.get(capture_id) or {})
             target_id = str(record.get("target_id") or "")
             if not target_id:
-                targets = await _offload(_remote_list_targets_sync, handle)
+                targets = await _offload_target_operation(_remote_list_targets_sync, handle)
                 if len(targets) == 1:
                     target_id = str(targets[0].get("target_id") or "")
             ident = _remote_target_ident(target_id)
@@ -13456,8 +13561,7 @@ async def _dispatch_remote(action: str, args: Dict[str, Any]) -> str:
                     details={"remote_id": remote_id, "capture_id": capture_id},
                 )
             try:
-                control = await _offload(_create_target_control_sync, handle, ident, force_connection=False)
-                await _offload(control.DeleteCapture, _as_int(capture_id, 0))
+                await _offload_target_operation(_delete_remote_capture_sync, handle, ident, _as_int(capture_id, 0))
             except Exception as exc:
                 return _err(
                     f"Failed to delete remote capture: {exc}",

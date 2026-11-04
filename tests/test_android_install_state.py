@@ -118,6 +118,60 @@ def test_confirmed_reinstall_rechecks_pending_state_before_uninstall(monkeypatch
     assert len(installs) == 1 and not current.uninstalled_existing
 
 
+@pytest.mark.parametrize("returncode,stdout,stderr", [
+    (0, "", ""),
+    (1, "", "device offline"),
+    (0, "Performing Streamed Install\n", ""),
+    (1, "Success\n", "transport lost"),
+    (0, "Success\n", "Failure [INSTALL_FAILED_INTERNAL_ERROR]"),
+])
+def test_ambiguous_install_receipt_retains_device_action_without_retry(monkeypatch, tmp_path, returncode, stdout, stderr):
+    current = result(tmp_path)
+    current.uninstalled_existing = True
+    monkeypatch.setattr(rb, "read_apk_identity", lambda path: {"package_name": PACKAGE, "apk_sha256": "a" * 64})
+    queries = []
+    def shell(adb, serial, *args, **kwargs):
+        queries.append(args)
+        assert args == ("dumpsys", "package", "installs"), "an ambiguous receipt cannot trigger repair or another probe"
+        return SimpleNamespace(stdout=output(), stderr="")
+    monkeypatch.setattr(rb, "_adb_shell", shell)
+    installs = []
+    def install(command, **kwargs):
+        installs.append(command)
+        return SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr)
+    monkeypatch.setattr(rb, "_run_process", install)
+    with pytest.raises(rb.AndroidRemoteBootstrapError) as error:
+        rb._install_android_helper(current, rb.AndroidBootstrapOptions(repair_policy="confirmed"), update=True)
+    assert error.value.code == "remote_install_unconfirmed"
+    assert error.value.details == {"returncode": returncode, "stdout": stdout, "stderr": stderr,
+        "device_action": {"kind": "android_install", "state": "unconfirmed", "device_serial": "serial",
+            "package_name": PACKAGE, "apk_sha256": "a" * 64, "sessions": [], "observation": "unreadable"}}
+    assert len(installs) == 1
+    assert queries == [("dumpsys", "package", "installs")]
+    assert current.uninstalled_existing and not current.installed_apk
+    assert current.cleanup_actions == []
+
+
+@pytest.mark.parametrize("returncode,stdout,stderr", [
+    (0, "Failure [INSTALL_FAILED_INVALID_APK]\n", ""),
+    (1, "", "INSTALL_PARSE_FAILED_MANIFEST_MALFORMED"),
+    (1, "", "Failure [vendor-specific rejection]"),
+])
+def test_explicit_install_failure_stays_definitive_without_device_action(monkeypatch, tmp_path, returncode, stdout, stderr):
+    current = result(tmp_path)
+    monkeypatch.setattr(rb, "read_apk_identity", lambda path: {"package_name": PACKAGE, "apk_sha256": "a" * 64})
+    monkeypatch.setattr(rb, "_adb_shell", lambda *args, **kwargs: SimpleNamespace(stdout=output(), stderr=""))
+    installs = []
+    monkeypatch.setattr(rb, "_run_process", lambda command, **kwargs: installs.append(command) or SimpleNamespace(
+        returncode=returncode, stdout=stdout, stderr=stderr))
+    with pytest.raises(rb.AndroidRemoteBootstrapError) as error:
+        rb._install_android_helper(current, rb.AndroidBootstrapOptions())
+    assert error.value.code == "android_apk_install_failed"
+    assert error.value.details == {"returncode": returncode}
+    assert (stderr or stdout).strip() in error.value.message
+    assert len(installs) == 1 and not current.installed_apk
+
+
 @pytest.mark.parametrize("body,state,observation", [(output(), "clear", "verified"),
     (output(session()), "pending", "pending"), ("unrecognized vendor state", "unknown", "unreadable")])
 def test_readonly_inspection_reuses_device_apk_and_pending_checks_without_mutation(monkeypatch, tmp_path, body, state, observation):

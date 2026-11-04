@@ -478,6 +478,106 @@ def test_get_action_tree_supports_targeted_subtree(monkeypatch: pytest.MonkeyPat
     assert payload["pagination"]["total_root_count"] == 1
 
 
+@pytest.mark.parametrize("shape,max_nodes,depth,reason,emitted,source_truncated", [
+    ("nested", 3, 1, "upstream_pagination_truncated", 3, True),
+    ("flat", 3, 1, "max_nodes_exceeded", 3, False),
+    ("flat", 8, 1, "", 4, False),
+    ("nested", 3, 0, "upstream_pagination_truncated", 1, True),
+    ("flat", 8, 0, "", 1, False),
+    ("flat", 2, 1, "max_nodes_exceeded", 2, True),
+    ("flat", 0, 0, "upstream_pagination_truncated", 1, True),
+])
+def test_catalog_routed_vfs_draws_preserves_action_tree_pagination(
+    monkeypatch, shape, max_nodes, depth, reason, emitted, source_truncated,
+):
+    from rdc_tool.core.engine import CoreEngine
+    from rdc_tool.tool_router import build_operation_registry
+
+    roots = [_FakeAction(event_id, children=[_FakeAction(event_id + 1)] if shape == "nested" else [])
+             for event_id in (101, 201, 301)]
+    controller = _FakeController(roots=roots)
+    _install_common_env(monkeypatch, controller)
+    _seed_capture()
+    _seed_session(101)
+    engine = CoreEngine(registry=build_operation_registry())
+    calls = []
+
+    async def routed_dispatch(operation, args, **kwargs):
+        calls.append((operation, dict(args)))
+        return await engine.execute(operation, args)
+
+    # Only replace the process/context wrapper: both outer VFS and its nested
+    # canonical action-tree query execute through the real catalog router.
+    monkeypatch.setattr(server, "dispatch_operation", routed_dispatch)
+    source = asyncio.run(engine.execute("rd.event.get_action_tree", {
+        "session_id": "sess_demo", "max_depth": 2, "max_nodes": max(1, max_nodes),
+    }))
+    result = asyncio.run(engine.execute("rd.vfs.tree", {
+        "session_id": "sess_demo", "path": "/draws", "depth": depth, "max_nodes": max_nodes,
+    }))
+    assert source["ok"] is True
+    assert result["ok"] is True
+    data = result["data"]
+    tree = data["tree"]
+    assert tree["pagination"] == source["data"]["pagination"]
+    assert tree["pagination"]["truncated"] is source_truncated
+    assert tree["data"] == source["data"]["root"]
+    assert len(tree["entries"]) == source["data"]["pagination"]["returned_root_count"]
+    assert data["max_nodes"] == max(1, max_nodes)
+    assert data["emitted_nodes"] == emitted
+    assert data["truncated"] is bool(reason)
+    assert data["truncation_reason"] == reason
+    if depth == 0:
+        assert "children" not in tree
+    else:
+        assert len(tree["children"]) == emitted - 1
+        assert all(child["data"]["detail_deferred"] for child in tree["children"])
+    assert calls == [("rd.event.get_action_tree", {
+        "session_id": "sess_demo", "max_depth": 2, "max_nodes": max(1, max_nodes),
+    })]
+    assert controller.set_frame_calls == []
+    assert server._runtime.replays["sess_demo"].active_event_id == 101
+
+
+@pytest.mark.parametrize("action", ["ls", "cat", "resolve"])
+@pytest.mark.parametrize("source_kind", ["depth", "root_page", "complete"])
+def test_catalog_routed_vfs_node_readers_keep_upstream_pagination(monkeypatch, action, source_kind):
+    from rdc_tool.core.engine import CoreEngine
+    from rdc_tool.tool_router import build_operation_registry
+
+    if source_kind == "depth":
+        roots = [_FakeAction(101, children=[_FakeAction(111, children=[_FakeAction(112)])])]
+    else:
+        roots = [_FakeAction(event_id) for event_id in range(1, 258 if source_kind == "root_page" else 4)]
+    _install_common_env(monkeypatch, _FakeController(roots=roots))
+    _seed_capture()
+    _seed_session(101)
+    engine = CoreEngine(registry=build_operation_registry())
+    calls = []
+
+    async def routed_dispatch(operation, args, **kwargs):
+        calls.append((operation, dict(args)))
+        return await engine.execute(operation, args)
+
+    monkeypatch.setattr(server, "dispatch_operation", routed_dispatch)
+    source_args = {"session_id": "sess_demo", "max_depth": 2, "max_nodes": 2000}
+    source = asyncio.run(engine.execute("rd.event.get_action_tree", source_args))
+    args = {"session_id": "sess_demo", "path": "/draws"}
+    if action == "ls":
+        args["projection"] = {"kind": "tabular"}
+    result = asyncio.run(engine.execute(f"rd.vfs.{action}", args))
+    assert source["ok"] is True and result["ok"] is True
+    node = result["data"]["node"]
+    assert node["pagination"] == source["data"]["pagination"]
+    assert node["pagination"]["truncated"] is (source_kind != "complete")
+    assert node["data"] == source["data"]["root"]
+    assert len(node["entries"]) == node["pagination"]["returned_root_count"]
+    assert calls == [("rd.event.get_action_tree", source_args)]
+    if action == "ls":
+        assert result["data"]["entries"] == node["entries"]
+        assert result["projections"]["tabular"]["row_count"] == len(node["entries"])
+
+
 def test_get_action_tree_tabular_projection_flattens_actions(monkeypatch: pytest.MonkeyPatch) -> None:
     controller = _FakeController(
         roots=[
@@ -1270,6 +1370,90 @@ def test_export_shader_bundle_returns_runtime_error_when_event_has_no_bound_shad
     assert payload["success"] is False
     assert payload["code"] == "shader_bundle_empty"
     assert payload["details"]["resolved_event_id"] == 202
+
+
+@pytest.mark.parametrize("action", ["get_stage_state", "get_shader", "get_resource_bindings", "get_constant_buffers"])
+@pytest.mark.parametrize("stage,code,category", [
+    ("RT", "shader_stage_unsupported", "capability"),
+    ("not-a-stage", "invalid_shader_stage", "validation"),
+    ("", "invalid_shader_stage", "validation"),
+])
+def test_pipeline_stage_rejection_precedes_native_and_event_access(monkeypatch, action, stage, code, category):
+    def forbidden(*args, **kwargs):
+        pytest.fail("stage rejection must precede native/controller/event access")
+
+    monkeypatch.setattr(server.server_runtime, "_get_rd", forbidden)
+    monkeypatch.setattr(server.server_runtime, "_get_controller", forbidden)
+    monkeypatch.setattr(server.server_runtime, "_ensure_event", forbidden)
+    payload = json.loads(asyncio.run(server._dispatch_pipeline(
+        action, {"session_id": "not-opened", "event_id": 1691, "stage": stage})))
+    assert payload["success"] is False
+    assert payload["code"] == code
+    assert payload["category"] == category
+    assert payload["details"]["effects_attempted"] is False
+    assert payload["details"]["context_preserved"] is True
+    assert payload["details"]["failure_stage"] == "validate_stage"
+
+
+@pytest.mark.parametrize("action", ["get_stage_state", "get_shader", "get_resource_bindings", "get_constant_buffers"])
+@pytest.mark.parametrize("stage,code,category", [
+    ("RT", "shader_stage_unsupported", "capability"),
+    (" rT ", "shader_stage_unsupported", "capability"),
+    ("not-a-stage", "invalid_shader_stage", "validation"),
+    ("", "invalid_shader_stage", "validation"),
+])
+def test_catalog_routed_stage_rejection_preserves_canonical_proof(monkeypatch, action, stage, code, category):
+    from rdc_tool.core.engine import CoreEngine
+    from rdc_tool.tool_router import build_operation_registry
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("catalog-routed stage rejection must precede native/controller/event access")
+
+    for name in ("_get_rd", "_get_controller", "_ensure_event"):
+        monkeypatch.setattr(server.server_runtime, name, forbidden)
+    operation = f"rd.pipeline.{action}"
+    result = asyncio.run(CoreEngine(registry=build_operation_registry()).execute(
+        operation, {"session_id": "not-opened", "event_id": 1691, "stage": stage}))
+    assert result["ok"] is False
+    assert result["result_kind"] == operation
+    assert result["error"]["code"] == code
+    assert result["error"]["category"] == category
+    assert result["error"]["details"]["effects_attempted"] is False
+    assert result["error"]["details"]["context_preserved"] is True
+    assert result["error"]["details"]["failure_stage"] == "validate_stage"
+
+
+@pytest.mark.parametrize("stage", ["VS", "hs", "DS", "gs", "PS", "cs", "MS", "as"])
+def test_catalog_routed_shader_query_keeps_case_insensitive_stage(monkeypatch, stage):
+    from rdc_tool.core.engine import CoreEngine
+    from rdc_tool.tool_router import build_operation_registry
+
+    controller = _FakeController(roots=[_FakeAction(101, flags=_FakeActionFlags.Drawcall)])
+    _install_common_env(monkeypatch, controller)
+    server.server_runtime._pipeline_service = _FakePipelineService()
+    _seed_capture()
+    _seed_session(101)
+    result = asyncio.run(CoreEngine(registry=build_operation_registry()).execute(
+        "rd.pipeline.get_shader", {"session_id": "sess_demo", "stage": stage, "event_id": 101}))
+    assert result["ok"] is True
+    assert result["data"]["shader"]["stage"] == stage.upper()
+    assert result["data"]["shader"]["shader_id"] == "shader@101"
+
+
+@pytest.mark.parametrize("stage", ["VS", "hs", "DS", "gs", "PS", "cs", "MS", "as"])
+def test_native_shader_stage_keeps_exact_supported_mapping(monkeypatch, stage):
+    monkeypatch.setattr(server.server_runtime, "_get_rd", lambda: SimpleNamespace(ShaderStage=_FakeShaderStage))
+    assert server.server_runtime._rd_stage(stage) == stage.lower()
+
+
+def test_missing_mesh_stage_never_falls_back_to_compute(monkeypatch):
+    from rdc_tool.core.errors import CoreError
+    monkeypatch.setattr(server.server_runtime, "_get_rd", lambda: SimpleNamespace(
+        ShaderStage=SimpleNamespace(Pixel="ps", Compute="cs")))
+    with pytest.raises(CoreError) as error:
+        server.server_runtime._rd_stage("MS")
+    assert error.value.code == "shader_stage_unsupported"
+    assert error.value.category == "capability"
 
 
 def test_pipeline_get_stage_state_reports_degraded_binding_truth(monkeypatch: pytest.MonkeyPatch) -> None:
