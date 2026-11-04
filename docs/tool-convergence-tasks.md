@@ -15,12 +15,12 @@
 | T2 修复多 subpass | T1 | 通过 | 完整拓扑与逻辑/物理推进协调，处理附件、resolve、descriptor/layout/barrier及恢复；原生与Android数值/恢复通过 |
 | T3 Store 异常收敛 | T0,T2 | 通过 | 2229/pass2220/颜色804479原始load=DONT_CARE、store=STORE；图案来自load，2237结束后像素为正常场景。保留原始rpinfo再归一化并区分Begin load/End store，无清零或隐藏诊断 |
 | T4 同源运行环境 | T2,T3 | 通过 | Python、DLL/PYD、双ABI APK、ADB/shader工具整套匹配；实际CLI/Agent加载、APK签名/so BuildID及受限环境启动分别核验 |
-| T5 Tools 全操作 | T4 | 通过 | canonical129项/980d49d7…a90f，120项有实际运行证据，9项N/A；最终1172 tests/2subtests、完整source gate及整包验证通过 |
+| T5 Tools 全操作 | T4 | 通过 | canonical129项/980d49d7…a90f，120项有实际运行证据，9项N/A；最终完整1176 tests/2subtests（目录检查修复另有31项定向复验）、完整source gate及整包验证通过 |
 | T6 Agent 消费 | T4,T5 | 通过 | 同安装绑定、busy保护、真实画面、事件恢复、Close/Cancel/显式重连/断连通过；3440 tests/4既有opt-in默认跳过，受影响测试、coverage-ratchet/type/lint/gates/build通过 |
 | T7 文档与资源清理 | T5,T6 | 通过 | 自有native/debugger/QA/forward已退出；设备备份与调试器、QA/测试树已清理，桌面启动权交还；既有ADB保留 |
 | T8 仓库默认环境同步 | T4–T7 | 通过 | 根binaries的3009文件与候选逐项hash匹配，原CMD入口实加载1.48；修复原生JSON生成token带CR、严格JSON内容门禁及Git字节保护 |
-| T9 发布规则与强制门禁 | T8 | 待验证 | AGENTS写硬规则、release-baseline写机制；正式打包要求clean commit、source/native/整包验证，同包实际导入及精确路径核对，源码/产物漂移拒绝、发布三件失败回滚；CI全测/严格doctor通过才上传验收包，不自动Github发布 |
-| T10 精简交付与推送 | T0–T9 | 执行中 | 清理本轮缓存/过渡证据，保留实际依赖和最小验收集；整理三库结构化提交信息，普通推送至origin/main、origin/main、origin/v1.x并核对远端；Native dde88226a与Agent f3cddd56已上传；Tools首次clean提交764c2ae的正式验包拦住旧扫描对合法owner_lease的误判，精确化旧协议字段检查并复验后上传 |
+| T9 发布规则与强制门禁 | T8 | 通过 | AGENTS写硬规则、release-baseline写机制；正式打包要求clean commit、source/native/整包验证，同包实际导入及精确路径核对，源码/产物漂移拒绝、发布三件失败回滚；CI全测/严格doctor通过才上传验收包，不自动Github发布 |
+| T10 精简交付与推送 | T0–T9 | 通过 | 已清理约7.60GiB原生缓存、231份过渡回执及最后测试/验证ZIP；Native dde88226a→v1.x、Agent f3cddd56→main、Tools实现及修复1aa16a8→main均已普通推送。Agent CI41838905324已成功；Tools首轮CI的生成目录误判已修正并补真实按需创建验证，31定向测试/独立复核通过，最新CI状态单列、不冒称通过。 |
 
 ### 根因与实际修复
 
@@ -43,9 +43,9 @@ PH原先中断多subpass后恢复为单subpass pass，随后继续原始NextSubp
 
 ### 清理、证据与边界
 
-已按明确路径、Git归属、无活动进程及无链接越界清理本轮Native开发输出、对象/链接/Android缓存和旧运行时副本，逻辑文件约7.60 GiB。磁盘实际剩余空间另行测量，不用逻辑体积冒充释放量。保留当前最终产物/符号、唯一完整候选、Python构建/测试依赖、合法fixture及最小验收证据；不删除原capture、用户SDK/NDK、Agent node_modules/out、原.cursor及旧调查材料。
+已按明确路径、Git归属、无活动进程及无链接越界清理本轮Native开发输出、对象/链接/Android缓存和旧运行时副本，逻辑文件约7.60 GiB；另清理231份过渡回执、7个评审测试目录及最后验证ZIP/测试状态。磁盘实际剩余空间另行测量，不用逻辑体积冒充释放量。保留当前最终产物/符号、唯一完整候选、Python构建/测试依赖、合法fixture及最小验收证据；不删除原capture、用户SDK/NDK、Agent node_modules/out、原.cursor及旧调查材料。
 
-证据根：intermediate/native-replay；主要索引catalog-verification.json、source-delivery-identity.json、release-chain-delivery.json、publication-cleanup.json及native-trace。Agent正式消费见其acceptance-ledger。远端CI与GitHub Release是独立事实；上传后仅记录实际状态，不以本地绿色冒称云端通过。
+证据根：intermediate/native-replay；主要索引catalog-verification.json、source-delivery-identity.json、release-chain-delivery.json、publication-cleanup.json及native-trace。Agent正式消费见其acceptance-ledger。远端CI与GitHub Release是独立事实：Agent CI已成功；Tools新CI已触发，状态以对应提交运行记录为准。正式clean提交05a7f90的打包/源码门禁/同包Native导入/完整ZIP链已本地实际通过（ZIP c30dc4ff…f2844，验后删除）；1176+2全测通过。未创建tag或GitHub Release。
 
 未验证：其他GPU/API/设备、arm32实机、未覆盖depth/stencil resolve、secondary/multiview组合、模型质量及Windows独立preview物理视觉。构建、原生数值、UI与手机呈现各有独立证据，不互相替代。
 
