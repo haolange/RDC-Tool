@@ -19,8 +19,8 @@
 | T6 Agent 消费 | T4,T5 | 通过 | 同安装绑定、busy保护、真实画面、事件恢复、Close/Cancel/显式重连/断连通过；3440 tests/4既有opt-in默认跳过，受影响测试、coverage-ratchet/type/lint/gates/build通过 |
 | T7 文档与资源清理 | T5,T6 | 通过 | 自有native/debugger/QA/forward已退出；设备备份与调试器、QA/测试树已清理，桌面启动权交还；既有ADB保留 |
 | T8 仓库默认环境同步 | T4–T7 | 通过 | 根binaries的3009文件与候选逐项hash匹配，原CMD入口实加载1.48；修复原生JSON生成token带CR、严格JSON内容门禁及Git字节保护 |
-| T9 发布规则与强制门禁 | T8 | 通过 | AGENTS写硬规则、release-baseline写机制；正式打包要求clean commit、source/native/整包验证，同包实际导入及精确路径核对，源码/产物漂移拒绝、发布三件失败回滚；CI全测/严格doctor通过才上传验收包，不自动Github发布 |
-| T10 精简交付与推送 | T0–T9 | 执行中 | 清理本轮缓存/过渡证据，保留实际依赖和最小验收集；整理三库结构化提交信息，普通推送至origin/main、origin/main、origin/v1.x并核对远端；Native dde88226a已上传，Tools/Agent收口中 |
+| T9 发布规则与强制门禁 | T8 | 待验证 | AGENTS写硬规则、release-baseline写机制；正式打包要求clean commit、source/native/整包验证，同包实际导入及精确路径核对，源码/产物漂移拒绝、发布三件失败回滚；CI全测/严格doctor通过才上传验收包，不自动Github发布 |
+| T10 精简交付与推送 | T0–T9 | 执行中 | 清理本轮缓存/过渡证据，保留实际依赖和最小验收集；整理三库结构化提交信息，普通推送至origin/main、origin/main、origin/v1.x并核对远端；Native dde88226a与Agent f3cddd56已上传；Tools首次clean提交764c2ae的正式验包拦住旧扫描对合法owner_lease的误判，精确化旧协议字段检查并复验后上传 |
 
 ### 根因与实际修复
 

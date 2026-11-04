@@ -147,6 +147,25 @@ def test_verify_release_package_rejects_pre_ga_payload_marker(tmp_path: Path) ->
         verify_release_package._verify_no_pre_ga_payload(package)
 
 
+def test_pre_ga_scan_accepts_current_process_lifetime_lease(tmp_path: Path) -> None:
+    root = Path(__file__).resolve().parents[1]
+    package = tmp_path / "current-owner.zip"
+    with zipfile.ZipFile(package, "w") as archive:
+        for name in ("client.py", "server.py", "ownership.py"):
+            source = root / "rdc_tool/daemon" / name
+            archive.writestr("rdc-tool/rdc_tool/daemon/" + name, source.read_bytes())
+    verify_release_package._verify_no_pre_ga_payload(package)
+
+
+@pytest.mark.parametrize("payload", ['{"owner_lease":{}}', '{ "owner_lease" \n : {} }', "{'owner_lease': None}"])
+def test_pre_ga_scan_still_rejects_retired_serialized_lease(tmp_path: Path, payload: str) -> None:
+    package = tmp_path / "retired-owner.zip"
+    with zipfile.ZipFile(package, "w") as archive:
+        archive.writestr("rdc-tool/retired.json", payload)
+    with pytest.raises(RuntimeError, match="pre-GA mapping field"):
+        verify_release_package._verify_no_pre_ga_payload(package)
+
+
 def test_verify_release_package_rejects_manifest_with_rdc_fixture(tmp_path: Path) -> None:
     root = tmp_path / "rdc-tool"
     for rel in ("bin/rdc-tool.cmd", "bin/rdc-tool", "cli/run_cli.py", "install.cmd", "tests/fixtures/sample.rdc"):

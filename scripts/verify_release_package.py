@@ -57,7 +57,6 @@ PRE_GA_PATH_MARKERS = (
 PRE_GA_TEXT_MARKERS = (
     "worker_" + "materialize",
     "runtime_" + "owner",
-    "owner_" + "lease",
     "runtime_" + "baton",
     "active_" + "baton",
     "rehydrate_" + "status",
@@ -68,6 +67,7 @@ PRE_GA_TEXT_MARKERS = (
     "export_" + "runtime_" + "baton",
     "rehydrate_" + "runtime_" + "baton",
 )
+PRE_GA_MAPPING_FIELDS = ("owner_" + "lease",)
 
 
 def _cmd_exe() -> str:
@@ -381,6 +381,11 @@ def _verify_no_pre_ga_payload(zip_path: Path) -> None:
             for marker in PRE_GA_TEXT_MARKERS:
                 if marker in text:
                     raise RuntimeError(f"package contains pre-GA marker {marker!r} in {normalized}")
+            for field in PRE_GA_MAPPING_FIELDS:
+                # The retired serialized protocol field is distinct from the
+                # current daemon's process-lifetime lease handle and errors.
+                if re.search(r"([\"'])" + re.escape(field) + r"\1\s*:", text):
+                    raise RuntimeError(f"package contains pre-GA mapping field {field!r} in {normalized}")
 
 
 def _verify_no_public_mcp_surface(zip_path: Path) -> None:
