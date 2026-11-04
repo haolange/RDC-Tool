@@ -209,15 +209,29 @@ def test_required_directories_exist() -> None:
         ROOT / "tests",
         ROOT / "binaries" / "windows" / "x64" / "python",
         ROOT / "binaries" / "windows" / "x64" / "pymodules",
-        ROOT / "intermediate" / "runtime" / "rdc_tool_cli",
-        ROOT / "intermediate" / "runtime" / "worker-state",
-        ROOT / "intermediate" / "artifacts",
-        ROOT / "intermediate" / "pytest",
-        ROOT / "intermediate" / "logs",
     ]
     for p in required:
         assert p.is_dir(), str(p)
     assert (ROOT / "bin" / "rdc-tool").is_file()
+
+
+@pytest.mark.parametrize("override", [False, True])
+def test_runtime_directories_are_created_on_demand(tmp_path, monkeypatch, override):
+    from rdc_tool import runtime_paths as paths
+
+    monkeypatch.setattr(paths, "tools_root", lambda: tmp_path / "checkout")
+    monkeypatch.delenv("RDC_TOOL_INTERMEDIATE_ROOT", raising=False)
+    state = tmp_path / ("owned-state" if override else "checkout/intermediate")
+    if override:
+        monkeypatch.setenv("RDC_TOOL_INTERMEDIATE_ROOT", str(state))
+    assert not state.exists()
+    paths.ensure_runtime_dirs()
+    for directory in (paths.runtime_root(), paths.cli_runtime_dir(), paths.worker_state_dir(),
+                      paths.artifacts_dir(), paths.pytest_dir(), paths.logs_dir()):
+        assert directory.is_relative_to(state)
+        assert directory.is_dir()
+    if override:
+        assert not (tmp_path / "checkout/intermediate").exists()
 
 
 def test_runtime_manifest_declares_bundled_python_and_required_runtime_files() -> None:

@@ -37,11 +37,6 @@ REQUIRED_DIRS = [
     "tests",
     "binaries/windows/x64/python",
     "binaries/windows/x64/pymodules",
-    "intermediate/runtime/rdc_tool_cli",
-    "intermediate/runtime/worker-state",
-    "intermediate/artifacts",
-    "intermediate/pytest",
-    "intermediate/logs",
 ]
 
 REQUIRED_FILES = [
