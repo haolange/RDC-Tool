@@ -187,7 +187,6 @@ def _normalize_remote_session_record(value: Any) -> Dict[str, Any]:
             "port": _normalize_int(requested.get("port")),
         },
         "options": {
-            "repair_policy": "auto_safe",
             "push_config": bool(options.get("push_config", True)),
             "device_serial": str(options.get("device_serial") or "").strip(),
             "local_port": _normalize_int(options.get("local_port")),

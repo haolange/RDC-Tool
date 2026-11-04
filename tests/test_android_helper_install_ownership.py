@@ -113,7 +113,6 @@ def test_starting_process_does_not_acquire_existing_installation_config(monkeypa
     monkeypatch.setattr(rb, "_ensure_renderdoc_conf", lambda item: config_writes.append(item.package_name))
     monkeypatch.setattr(rb, "_list_renderdoc_socket_ports", lambda *args: [2])
     monkeypatch.setattr(rb, "_package_pids", lambda *args: [91])
-    monkeypatch.setattr(rb, "_is_package_running", lambda *args: True)
     monkeypatch.setattr(rb, "_adb_shell", shell)
     monkeypatch.setattr(rb, "_run_subprocess", forward)
     observed = rb._prepare_android_service_steps(value, rb.AndroidBootstrapOptions(), False, "helper/.Loader")
@@ -130,3 +129,8 @@ def test_starting_process_does_not_acquire_existing_installation_config(monkeypa
     assert observed.apk_sha256 == "a" * 64
     assert observed.installed_apk_sha256 == "b" * 64
     assert observed.apk_identity_status == "different"
+
+
+@pytest.fixture(autouse=True)
+def short_install_wait_budget(monkeypatch):
+    monkeypatch.setattr(rb, "DEFAULT_ANDROID_TIMEOUT_MS", 5)

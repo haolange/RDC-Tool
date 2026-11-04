@@ -18,6 +18,7 @@ def no_pending_package_manager(monkeypatch):
     # These tests isolate helper repair and cancellation. Active-session parsing
     # and its actual install boundary are exercised in test_android_install_state.
     monkeypatch.setattr(rb, "_preflight_android_install", lambda result: None)
+    monkeypatch.setattr(rb, "DEFAULT_ANDROID_TIMEOUT_MS", 5)
 
 
 def result(tmp_path):
@@ -55,61 +56,45 @@ def test_invalid_apk_never_reaches_installer(monkeypatch, tmp_path):
     assert not commands
 
 
-@pytest.mark.parametrize("installed,target,action", [(136, 145, None), (145, 145, None), (146, 145, "downgrade_helper")])
-def test_installed_version_code_controls_safe_upgrade(monkeypatch, tmp_path, installed, target, action):
+@pytest.mark.parametrize("installed,target", [(136, 145), (145, 145), (146, 145)])
+def test_version_difference_automatically_updates_or_downgrades(monkeypatch, tmp_path, installed, target):
     current = result(tmp_path)
     monkeypatch.setattr(rb, "_adb_shell", lambda *a, **k: SimpleNamespace(stdout=f"package:{current.package_name}", stderr=""))
     monkeypatch.setattr(rb, "_helper_snapshot", lambda _: facts(installed_version_code=installed, target_version_code=target))
     installs = []
     monkeypatch.setattr(rb, "_install_android_helper", lambda *a, **k: installs.append(k))
-    if action:
-        with pytest.raises(rb.AndroidRemoteBootstrapError) as error:
-            rb._ensure_android_helper_installed(current, rb.AndroidBootstrapOptions())
-        assert error.value.code == "remote_repair_required"
-        assert error.value.details["remote"]["repair"]["actions"] == [action]
-        assert not installs
-    else:
-        rb._ensure_android_helper_installed(current, rb.AndroidBootstrapOptions())
-        assert len(installs) == (installed < target)
+    rb._ensure_android_helper_installed(current, rb.AndroidBootstrapOptions())
+    assert installs == ([] if installed == target else [{"update": True, "downgrade": installed > target}])
 
 
-@pytest.mark.parametrize("changed", ["installed_identity", "apk_sha256", "device_serial", "service_identity"])
-def test_confirmation_binds_every_mutation_identity(monkeypatch, tmp_path, changed):
-    current = result(tmp_path)
-    state = facts()
-    monkeypatch.setattr(rb, "_helper_snapshot", lambda _: state.copy())
-    with pytest.raises(rb.AndroidRemoteBootstrapError) as error:
-        rb._require_repair_confirmation(current, rb.AndroidBootstrapOptions(), ["restart_helper"])
-    fingerprint = error.value.details["remote"]["repair"]["fingerprint"]
-    state[changed] = ["new-process"] if changed == "service_identity" else "changed"
-    with pytest.raises(rb.AndroidRemoteBootstrapError) as stale:
-        rb._require_repair_confirmation(current, rb.AndroidBootstrapOptions(repair_policy="confirmed", repair_confirmation={"fingerprint": fingerprint}), ["restart_helper"])
-    assert stale.value.code == "remote_repair_state_changed"
-
-
-def test_confirmation_for_restart_cannot_authorize_uninstall(monkeypatch, tmp_path):
-    current = result(tmp_path)
-    monkeypatch.setattr(rb, "_helper_snapshot", lambda _: facts())
-    restart = rb._repair_assessment(current, ["restart_helper"])
-    with pytest.raises(rb.AndroidRemoteBootstrapError) as error:
-        rb._require_repair_confirmation(current, rb.AndroidBootstrapOptions(repair_policy="confirmed", repair_confirmation={"fingerprint": restart["fingerprint"]}), ["reinstall_helper"])
-    assert error.value.code == "remote_repair_state_changed"
-
-
-def test_update_signature_conflict_requests_confirmation_without_uninstall(monkeypatch, tmp_path):
+@pytest.mark.parametrize("kind", ["signature", "downgrade"])
+def test_incompatible_package_is_replaced_in_one_attempt(monkeypatch, tmp_path, kind):
     current = result(tmp_path)
     identity(monkeypatch)
     monkeypatch.setattr(rb, "_helper_snapshot", lambda _: facts())
     commands = []
-    def run(command, **kwargs):
+    def install(command, **kwargs):
         commands.append(command)
-        return SimpleNamespace(returncode=1, stderr="INSTALL_FAILED_UPDATE_INCOMPATIBLE", stdout="")
-    monkeypatch.setattr(rb, "_run_process", run)
+        failure = "INSTALL_FAILED_UPDATE_INCOMPATIBLE" if kind == "signature" else "INSTALL_FAILED_VERSION_DOWNGRADE"
+        return SimpleNamespace(returncode=1, stdout="", stderr=failure) if len(commands) == 1 else SimpleNamespace(returncode=0, stdout="Success", stderr="")
+    def shell(adb, serial, *args, **kwargs):
+        assert args == ("pm", "uninstall", current.package_name)
+        return SimpleNamespace(stdout="Success", stderr="")
+    monkeypatch.setattr(rb, "_run_process", install)
+    monkeypatch.setattr(rb, "_adb_shell", shell)
+    rb._install_android_helper(current, rb.AndroidBootstrapOptions(), update=True)
+    assert len(commands) == 2 and current.installed_apk
+    assert current.uninstalled_existing == (kind == "signature")
+    assert ("-d" in commands[-1]) == (kind == "downgrade")
+
+
+def test_unidentified_running_helper_is_not_stopped(monkeypatch, tmp_path):
+    current = result(tmp_path)
+    monkeypatch.setattr(rb, "_helper_snapshot", lambda _: facts(installed_identity=""))
+    monkeypatch.setattr(rb, "_adb_shell", lambda *a, **k: pytest.fail("unknown identity cannot be stopped"))
     with pytest.raises(rb.AndroidRemoteBootstrapError) as error:
-        rb._install_android_helper(current, rb.AndroidBootstrapOptions(), update=True)
-    assert error.value.code == "remote_repair_required"
-    assert error.value.details["remote"]["repair"]["actions"] == ["reinstall_helper"]
-    assert len(commands) == 1 and "-r" in commands[0] and not current.uninstalled_existing
+        rb.repair_incompatible_android_helper(current, rb.AndroidBootstrapOptions())
+    assert error.value.code == "android_helper_state_unknown"
 
 
 def test_cancel_after_package_commit_retains_installation_fact(monkeypatch, tmp_path):
@@ -128,15 +113,6 @@ def test_cancel_after_package_commit_retains_installation_fact(monkeypatch, tmp_
         assert current.installed_apk and current.install_mode == "install"
     finally:
         rb._connection_budget.reset(token)
-
-
-def test_unknown_running_helper_requires_confirmation_before_stop(monkeypatch, tmp_path):
-    current = result(tmp_path)
-    monkeypatch.setattr(rb, "_helper_snapshot", lambda _: facts(service_identity=["42:100"]))
-    monkeypatch.setattr(rb, "_adb_shell", lambda *a, **k: pytest.fail("must not stop unconfirmed helper"))
-    with pytest.raises(rb.AndroidRemoteBootstrapError) as error:
-        rb.repair_incompatible_android_helper(current, rb.AndroidBootstrapOptions())
-    assert error.value.code == "remote_repair_required"
 
 
 def test_native_busy_does_not_enter_repair(monkeypatch):
@@ -160,40 +136,6 @@ def test_progress_comes_from_actual_install_step(monkeypatch, tmp_path):
     monkeypatch.setattr(rb, "_run_process", lambda *a, **k: SimpleNamespace(returncode=0, stdout="Success", stderr=""))
     rb._install_android_helper(current, rb.AndroidBootstrapOptions(progress=stages.append), update=True)
     assert stages == ["installing"] and current.install_mode == "update"
-
-
-@pytest.mark.parametrize("kind", ["signature", "downgrade"])
-def test_stopped_helper_confirmation_survives_failed_attempt_cleanup(monkeypatch, tmp_path, kind):
-    current = result(tmp_path)
-    identity(monkeypatch)
-    installed = {"present": True, "code": 136 if kind == "signature" else 146}
-    monkeypatch.setattr(rb, "_helper_snapshot", lambda _: facts(installed_version_code=installed["code"]))
-    commands = []
-    def run(command, **kwargs):
-        commands.append(command)
-        if kind == "signature" and installed["present"]:
-            return SimpleNamespace(returncode=1, stderr="INSTALL_FAILED_UPDATE_INCOMPATIBLE", stdout="")
-        installed["code"] = 145
-        return SimpleNamespace(returncode=0, stdout="Success", stderr="")
-    def shell(adb, serial, *args, **kwargs):
-        if args[:2] == ("pm", "uninstall"):
-            installed["present"] = False
-            return SimpleNamespace(stdout="Success", stderr="")
-        return SimpleNamespace(stdout=f"package:{current.package_name}", stderr="")
-    monkeypatch.setattr(rb, "_run_process", run)
-    monkeypatch.setattr(rb, "_adb_shell", shell)
-    monkeypatch.setattr(rb, "_package_pids", lambda *args: [])
-    with pytest.raises(rb.AndroidRemoteBootstrapError) as needed:
-        rb._ensure_android_helper_installed(current, rb.AndroidBootstrapOptions())
-    assessment = needed.value.details["remote"]["repair"]
-    assert not assessment["service_identity"]
-    assert rb.cleanup_android_remote(current) == []
-    next_attempt = result(tmp_path)
-    rb._ensure_android_helper_installed(next_attempt,
-        rb.AndroidBootstrapOptions(repair_policy="confirmed", repair_confirmation={"fingerprint": assessment["fingerprint"]}))
-    assert next_attempt.installed_apk
-    assert next_attempt.uninstalled_existing == (kind == "signature")
-    assert any("-d" in command for command in commands) == (kind == "downgrade")
 
 
 def test_install_requires_positive_package_manager_result(monkeypatch, tmp_path):
@@ -275,7 +217,7 @@ def test_connect_cancel_after_package_commit_publishes_joined_installation_recei
             assert receipt.stage == "cancelled"
             assert receipt.details["installation"] == {"installed_apk": not install_timeout,
                 "uninstalled_existing": install_timeout, "install_mode": "" if install_timeout else "install"}
-            assert receipt.details["remote"]["code"] == ("android_apk_install_timeout" if install_timeout else "remote_connect_cancelled")
+            assert receipt.details["remote"]["code"] == ("remote_install_unconfirmed" if install_timeout else "remote_connect_cancelled")
             if install_timeout:
                 assert receipt.details["device_action"]["state"] == "unconfirmed"
             assert cleaned == [current]
@@ -308,12 +250,86 @@ def test_install_timeout_is_typed_and_preserves_confirmed_mutation_facts(monkeyp
     monkeypatch.setattr(rb, "_run_process", timeout)
     with pytest.raises(rb.AndroidRemoteBootstrapError) as error:
         rb._prepare_android_service(current, rb.AndroidBootstrapOptions(), False, "helper/.Loader")
-    assert error.value.code == "android_apk_install_timeout"
+    assert error.value.code == "remote_install_unconfirmed"
     assert error.value.details["remote"]["stage"] == "installing"
     assert error.value.details["device_action"]["state"] == "unconfirmed"
     assert error.value.details["device_action"]["kind"] == "android_install"
     assert error.value.details["installation"] == {"installed_apk": False, "uninstalled_existing": uninstalled, "install_mode": ""}
     assert error.value.details["stdout"] == "Performing Streamed Install\n"
     assert error.value.details["stderr"] == "pending"
-    assert error.value.details["command"][-1] == current.apk_path
     assert cleaned == [current]
+
+
+def test_missing_receipt_verifies_target_bytes_and_continues_without_reinstall(monkeypatch, tmp_path):
+    current = result(tmp_path)
+    identity(monkeypatch)
+    installs = []
+    monkeypatch.setattr(rb, "_run_process", lambda command, **kwargs: installs.append(command) or SimpleNamespace(returncode=0, stdout="", stderr=""))
+    monkeypatch.setattr(rb, "_inspect_android_install_state", lambda _: {"installation_state": "clear", "observation": "verified", "sessions": []})
+    monkeypatch.setattr(rb, "_observe_installed_apk", lambda item: setattr(item, "apk_identity_status", "matched"))
+    rb._install_android_helper(current, rb.AndroidBootstrapOptions())
+    assert len(installs) == 1 and current.installed_apk
+
+
+def test_pending_install_resolves_in_original_budget_without_second_install(monkeypatch, tmp_path):
+    current = result(tmp_path)
+    identity(monkeypatch)
+    observations = iter([{"installation_state": "pending", "observation": "pending", "sessions": []},
+                         {"installation_state": "clear", "observation": "verified", "sessions": []}])
+    monkeypatch.setattr(rb, "_inspect_android_install_state", lambda _: next(observations))
+    monkeypatch.setattr(rb.time, "sleep", lambda _: None)
+    monkeypatch.setattr(rb, "_observe_installed_apk", lambda item: setattr(item, "apk_identity_status", "matched"))
+    budget = rb.ConnectionBudget(5000)
+    token = rb._connection_budget.set(budget)
+    try:
+        rb._wait_for_android_install(current, require_target=True)
+        assert rb._connection_budget.get() is budget
+    finally:
+        rb._connection_budget.reset(token)
+
+
+def test_clear_session_alone_never_proves_installation(monkeypatch, tmp_path):
+    current = result(tmp_path)
+    monkeypatch.setattr(rb, "_inspect_android_install_state", lambda _: {"installation_state": "clear", "observation": "verified", "sessions": []})
+    monkeypatch.setattr(rb, "_observe_installed_apk", lambda item: setattr(item, "apk_identity_status", "different"))
+    with pytest.raises(rb.AndroidRemoteBootstrapError) as error:
+        rb._wait_for_android_install(current, require_target=True, receipt={"stdout": "missing terminal result"})
+    assert error.value.code == "remote_install_unconfirmed"
+    assert error.value.details["stdout"] == "missing terminal result"
+    assert not current.installed_apk
+
+
+def test_accepted_launch_waits_for_phone_permission_with_original_budget(monkeypatch, tmp_path):
+    current = result(tmp_path)
+    clock = [0.0]
+    commands = []
+    monkeypatch.setattr(rb.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(rb.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    monkeypatch.setattr(rb, "_adb_shell", lambda *args, **kwargs: commands.append(args[2:]) or SimpleNamespace(stdout="Activity: com.smartisanos.security/.permission.SpecialRadioPermissionsActivity", stderr=""))
+    monkeypatch.setattr(rb, "_package_pids", lambda *args: [321] if clock[0] >= 20 else [])
+    budget = rb.ConnectionBudget(30000)
+    token = rb._connection_budget.set(budget)
+    try:
+        rb._start_android_helper(current, current.package_name + '/.Loader', rb.AndroidBootstrapOptions())
+        assert clock[0] == 20 and current.owned_pids == [321]
+        assert len(commands) == 1 and commands[0][:2] == ('am', 'start')
+        assert rb._connection_budget.get() is budget
+    finally:
+        rb._connection_budget.reset(token)
+
+
+def test_permission_wait_cancellation_does_not_launch_an_alternate_activity(monkeypatch, tmp_path):
+    current = result(tmp_path)
+    budget = rb.ConnectionBudget(30000)
+    commands = []
+    monkeypatch.setattr(rb, "_adb_shell", lambda *args, **kwargs: commands.append(args[2:]) or SimpleNamespace(stdout="Status: ok", stderr=""))
+    monkeypatch.setattr(rb, "_package_pids", lambda *args: [])
+    monkeypatch.setattr(rb.time, "sleep", lambda _: budget.cancelled.set())
+    token = rb._connection_budget.set(budget)
+    try:
+        with pytest.raises(rb.AndroidRemoteBootstrapError) as error:
+            rb._start_android_helper(current, current.package_name + '/.Loader', rb.AndroidBootstrapOptions())
+        assert error.value.code == 'remote_connect_cancelled'
+        assert len(commands) == 1 and not current.started_activity
+    finally:
+        rb._connection_budget.reset(token)

@@ -2504,7 +2504,7 @@ def _remote_snapshot_payload_from_handle(handle: RemoteHandle) -> Dict[str, Any]
         "device_serial": str(handle.device_serial or bootstrap.get("device_serial") or "").strip(),
         "local_port": _as_int(bootstrap.get("port"), 0),
         "remote_port": _as_int(bootstrap.get("remote_port"), requested["port"]),
-        "repair_policy": "auto_safe",
+
         "push_config": True,
     }
     return {
@@ -3415,8 +3415,6 @@ async def _connect_remote_endpoint(host: str, port: int, transport: str, options
                 android_options = AndroidBootstrapOptions(
                     device_serial=str(options.get("device_serial") or ""),
                     local_port=_as_int(options.get("local_port"), 0),
-                    repair_policy=str(options.get("repair_policy") or "auto_safe"),
-                    repair_confirmation=options.get("repair_confirmation"),
                     expected_version=_renderdoc_version_value(),
                     progress=lambda stage: _progress(stage, f"Android service: {stage}"),
                     push_config=_as_bool(options.get("push_config"), True))
@@ -4125,7 +4123,7 @@ def _remote_session_metadata(
             "port": requested_port,
         },
         "options": {
-            "repair_policy": "auto_safe",
+
             "push_config": _as_bool(bootstrap.get("pushed_config"), True),
             "device_serial": str(handle.device_serial or bootstrap.get("device_serial") or "").strip(),
             "local_port": int(handle.port or 0),
@@ -13201,13 +13199,6 @@ async def _dispatch_remote(action: str, args: Dict[str, Any]) -> str:
                 details={"transport": transport},
             )
 
-        if transport == "adb_android":
-            policy = options.get("repair_policy", "auto_safe")
-            confirmation = options.get("repair_confirmation")
-            if policy not in {"auto_safe", "confirmed"} or (policy == "confirmed" and (not isinstance(confirmation, dict) or not isinstance(confirmation.get("fingerprint"), str) or not re.fullmatch(r"[0-9a-f]{64}", confirmation["fingerprint"]))):
-                return _err("Invalid Android repair policy or confirmation", code="validation_error", category="validation")
-            if "install_apk" in options:
-                return _err("install_apk is not a supported remote option; use repair_policy", code="validation_error", category="validation")
         endpoint_host = host
         endpoint_port = port
         bootstrap_detail: Dict[str, Any] = {}

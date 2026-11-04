@@ -107,6 +107,34 @@ function Remove-ObsoleteReleaseFiles {
     }
 }
 
+function Remove-ObsoleteNativeRuntimeFiles {
+    param([string]$SourceRoot, [string]$TargetRoot)
+    $sourceReceipt = Join-Path $SourceRoot 'binaries/windows/x64/manifest.runtime.json'
+    $previousRelease = Join-Path $TargetRoot 'RELEASE_MANIFEST.json'
+    if (-not (Test-Path -LiteralPath $sourceReceipt) -or -not (Test-Path -LiteralPath $previousRelease)) { return }
+    $receipt = Get-Content -LiteralPath $sourceReceipt -Raw | ConvertFrom-Json
+    $previous = Get-Content -LiteralPath $previousRelease -Raw | ConvertFrom-Json
+    $expected = @{}
+    foreach ($build in $receipt.native_build.builds) {
+        if ($build.target -eq 'windows-x64') {
+            foreach ($file in $build.runtime_files) { $expected[$file.path] = $true }
+        }
+    }
+    if ($expected.Count -eq 0) { throw 'source native runtime receipt is empty' }
+    foreach ($file in $previous.files) {
+        $relative = [string]$file.path
+        if ($relative -notmatch '^binaries/windows/x64/(?:[^/]+\.(?:dll|pyd)|renderdoc\.json|pymodules/[^/]+)$' -or $expected.ContainsKey($relative)) { continue }
+        $target = [IO.Path]::GetFullPath((Join-Path $TargetRoot $relative))
+        if (-not $target.StartsWith($TargetRoot.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'obsolete native file escapes installation' }
+        Assert-LinkFreePath -Path $target
+        if (-not (Test-Path -LiteralPath $target -PathType Leaf)) { continue }
+        $hash = [BitConverter]::ToString([Convert]::FromBase64String((Get-RdcFileSha256 -Path $target))).Replace('-', '').ToLowerInvariant()
+        if ($hash -ne $file.sha256) { throw "obsolete native file differs from the previous release: $relative" }
+        Remove-Item -LiteralPath $target -Force
+        Write-Step "removed obsolete native runtime file $relative"
+    }
+}
+
 function Copy-RdcToolTools {
     param(
         [string]$SourceRoot,
@@ -126,19 +154,23 @@ function Copy-RdcToolTools {
         if ((Get-Item -LiteralPath $TargetRoot).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'installation target must not be a link' }
         if (-not (Test-Path -LiteralPath (Join-Path $TargetRoot 'cli\run_cli.py'))) { throw 'target is not an RDC-Tool installation' }
     }
+    Remove-ObsoleteNativeRuntimeFiles -SourceRoot $SourceRoot -TargetRoot $TargetRoot
     Remove-ObsoleteReleaseFiles -SourceRoot $SourceRoot -TargetRoot $TargetRoot
     New-Item -ItemType Directory -Path $TargetRoot -Force | Out-Null
-    Get-ChildItem -LiteralPath $SourceRoot -Recurse -Force | ForEach-Object {
-        if ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "refusing source link: $($_.FullName)" }
+    function Get-InstallEntries([string]$Directory) {
+        foreach ($entry in Get-ChildItem -LiteralPath $Directory -Force) {
+            if ($excludeDirNames -contains $entry.Name) { continue }
+            $excluded = $false
+            foreach ($prefix in $excludeDirPrefixes) { if ($entry.Name.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) { $excluded = $true; break } }
+            if ($excluded) { continue }
+            if ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "refusing source link: $($entry.FullName)" }
+            $entry
+            if ($entry.PSIsContainer) { Get-InstallEntries -Directory $entry.FullName }
+        }
+    }
+    Get-InstallEntries -Directory $SourceRoot | ForEach-Object {
         $src = $_.FullName
         $rel = $src.Substring($SourceRoot.Length).TrimStart('\', '/')
-        $parts = @($rel -split '[\\/]+' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-        foreach ($part in $parts) {
-            if ($excludeDirNames -contains $part) { return }
-            foreach ($prefix in $excludeDirPrefixes) {
-                if ($part.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) { return }
-            }
-        }
         $dst = Join-Path $TargetRoot $rel
         Assert-LinkFreePath -Path $dst
         if ($_.PSIsContainer) {

@@ -891,3 +891,8 @@ def test_selected_device_queries_only_its_frozen_serial_before_helper_preparatio
         assert arch == []
     assert calls == [["owned-adb", "start-server"], ["owned-adb", "-s", "serial", "get-state"]]
     assert remote_bootstrap._connection_budget.get() is None
+
+
+@pytest.fixture(autouse=True)
+def short_install_wait_budget(monkeypatch):
+    monkeypatch.setattr(remote_bootstrap, "DEFAULT_ANDROID_TIMEOUT_MS", 5)

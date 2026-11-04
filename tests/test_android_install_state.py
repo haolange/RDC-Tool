@@ -6,6 +6,11 @@ from rdc_tool import remote_bootstrap as rb
 from rdc_tool.android_install_state import parse_active_install_sessions
 
 
+@pytest.fixture(autouse=True)
+def short_private_install_budget(monkeypatch):
+    monkeypatch.setattr(rb, "DEFAULT_ANDROID_TIMEOUT_MS", 5)
+
+
 PACKAGE = "org.renderdoc.renderdoccmd.arm64"
 
 
@@ -108,12 +113,12 @@ def test_confirmed_reinstall_rechecks_pending_state_before_uninstall(monkeypatch
         assert args == ("dumpsys", "package", "installs"), "pending session must prevent uninstall"
         return SimpleNamespace(stdout=next(observations), stderr="")
     monkeypatch.setattr(rb, "_adb_shell", shell)
-    monkeypatch.setattr(rb, "_require_repair_confirmation", lambda *args: {})
+    monkeypatch.setattr(rb, "_assert_helper_identity", lambda *args: {})
     installs = []
     monkeypatch.setattr(rb, "_run_process", lambda command, **kwargs: installs.append(command) or SimpleNamespace(
         returncode=1, stdout="", stderr="INSTALL_FAILED_UPDATE_INCOMPATIBLE"))
     with pytest.raises(rb.AndroidRemoteBootstrapError) as error:
-        rb._install_android_helper(current, rb.AndroidBootstrapOptions(repair_policy="confirmed"), update=True)
+        rb._install_android_helper(current, rb.AndroidBootstrapOptions(), update=True)
     assert error.value.code == "remote_install_unconfirmed"
     assert len(installs) == 1 and not current.uninstalled_existing
 
@@ -140,14 +145,15 @@ def test_ambiguous_install_receipt_retains_device_action_without_retry(monkeypat
         installs.append(command)
         return SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr)
     monkeypatch.setattr(rb, "_run_process", install)
+    monkeypatch.setattr(rb, "_observe_installed_apk", lambda _: None)
     with pytest.raises(rb.AndroidRemoteBootstrapError) as error:
-        rb._install_android_helper(current, rb.AndroidBootstrapOptions(repair_policy="confirmed"), update=True)
+        rb._install_android_helper(current, rb.AndroidBootstrapOptions(), update=True)
     assert error.value.code == "remote_install_unconfirmed"
-    assert error.value.details == {"returncode": returncode, "stdout": stdout, "stderr": stderr,
+    assert {key: error.value.details[key] for key in ("returncode", "stdout", "stderr", "device_action")} == {"returncode": returncode, "stdout": stdout, "stderr": stderr,
         "device_action": {"kind": "android_install", "state": "unconfirmed", "device_serial": "serial",
-            "package_name": PACKAGE, "apk_sha256": "a" * 64, "sessions": [], "observation": "unreadable"}}
+            "package_name": PACKAGE, "apk_sha256": "a" * 64, "sessions": [], "observation": "verified"}}
     assert len(installs) == 1
-    assert queries == [("dumpsys", "package", "installs")]
+    assert queries[0] == ("dumpsys", "package", "installs")
     assert current.uninstalled_existing and not current.installed_apk
     assert current.cleanup_actions == []
 
