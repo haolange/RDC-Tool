@@ -5,8 +5,8 @@ scope: []
 source_files: []
 depends_on: []
 related_to:
-    - path: rdc-tool-聚合包与发布根/rdx-tools-文档集用户与开发者指南
     - path: rdc-tool-聚合包与发布根/rdx-python-运行时与守护进程调度层
+      reason: spec_catalog 从 rdx-python 运行时的工具注册表读取并生成公开的 tool_catalog.json，是运行时工具目录的构建期消费者。
 kk_module_id: 88403f2952b25b05bc969cef783c19d3
 kk_ordinal: 2
 kk_cards:

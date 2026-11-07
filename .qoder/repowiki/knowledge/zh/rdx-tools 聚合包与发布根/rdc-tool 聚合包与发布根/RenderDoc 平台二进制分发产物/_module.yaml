@@ -5,9 +5,9 @@ scope: []
 source_files: []
 depends_on: []
 related_to:
-    - path: rdc-tool-聚合包与发布根/rdc-tool-发布制品构建与发布门禁脚本集
+    - path: rdc-tool-聚合包与发布根/rdx-python-运行时与守护进程调度层
+      reason: Python 运行时在启动时装配本地 RenderDoc 运行时，直接消费 Windows x64 与 Android (arm32/arm64) 预编译的二进制、Vulkan 捕获层与内嵌 Python 3.14 发行版。
 kk_module_id: 6cd514f19f7d88f9dccb8c899523ff3c
-kk_ordinal: 1
 kk_cards:
     architecture_design:
         id: 96c98aa2c04f1377964e7ace758bc52a
