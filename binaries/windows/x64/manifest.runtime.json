@@ -38,8 +38,8 @@
     },
     {
       "path": "pymodules/renderdoc.pyd",
-      "size": 6527488,
-      "sha256": "1e4c734171cf4ad81656fd74091fc246cb470b6db1202ce6329fbfc139d5fe25"
+      "size": 5862912,
+      "sha256": "33caa4cdb75308ed27fac39a7c6878a695e41f453ac17d2bd9bb2aa18d37b76c"
     },
     {
       "path": "python/DLLs/_asyncio.pyd",
@@ -14818,8 +14818,8 @@
     },
     {
       "path": "renderdoc.dll",
-      "size": 25701888,
-      "sha256": "3ce77ff79eb89201bfaa9f3a784284568e68a56746dab8510694dc3eca33a904"
+      "size": 25836544,
+      "sha256": "636a5c58e871f84201210dc78cd387fc20e1306a384f7408a896af97fa3f8071"
     },
     {
       "path": "renderdoc.json",
@@ -14899,36 +14899,36 @@
     "source": {
       "base_revision": "f6aff93bcbb823eb4a8fcea324e55cd54adbdcf9",
       "upstream_revision": "282b28b3a3d097f2fd8faddc4517cd283b22f3ee",
-      "tree_sha256": "0a0fd1db7374b7cc2e7495c03fed7eec8702eff8aa0739542813bc2e049028cb"
+      "tree_sha256": "bce2094cc878e9677ad807d469746baa2a87c252df09ef5d4022a4df8047dfe3"
     },
     "builds": [
       {
         "target": "windows-x64",
-        "configuration": "Release x64; native CLI + Python binding",
+        "configuration": "Release x64",
         "toolchain": {
-          "msvc": "14.44.35207",
-          "host": "x64",
-          "compiler_options": "/MP2",
-          "project_parallelism": 2,
-          "python": "3.14.3",
-          "visual_studio": "18.10.12201.205",
-          "windows_sdk": "10.0.26100.0",
           "python_abi": "cp314-win_amd64",
-          "inputs": "official Python 3.14.3 NuGet development package; matching receipt in Tools builddeps/python3143/receipt.json"
+          "msvc": "14.51.36231",
+          "target": "x64",
+          "python_package": "official CPython NuGet python 3.14.3",
+          "python": "3.14.3",
+          "compiler_host": "HostX86",
+          "windows_sdk": "10.0.26100.0",
+          "visual_studio": "18 Community",
+          "python_package_sha256": "ef63a18b486268cbfd1fa59e7b6094c42521b25f0184af8b267e1718dd0cb3a5"
         },
-        "inputs_sha256": "0a0fd1db7374b7cc2e7495c03fed7eec8702eff8aa0739542813bc2e049028cb",
+        "inputs_sha256": "bce2094cc878e9677ad807d469746baa2a87c252df09ef5d4022a4df8047dfe3",
         "outputs": [
           {
             "role": "renderdoc_dll",
             "path": "binaries/windows/x64/renderdoc.dll",
-            "size": 25701888,
-            "sha256": "3ce77ff79eb89201bfaa9f3a784284568e68a56746dab8510694dc3eca33a904"
+            "size": 25836544,
+            "sha256": "636a5c58e871f84201210dc78cd387fc20e1306a384f7408a896af97fa3f8071"
           },
           {
             "role": "renderdoc_pyd",
             "path": "binaries/windows/x64/pymodules/renderdoc.pyd",
-            "size": 6527488,
-            "sha256": "1e4c734171cf4ad81656fd74091fc246cb470b6db1202ce6329fbfc139d5fe25"
+            "size": 5862912,
+            "sha256": "33caa4cdb75308ed27fac39a7c6878a695e41f453ac17d2bd9bb2aa18d37b76c"
           }
         ],
         "runtime_files": [
@@ -14943,14 +14943,9 @@
             "sha256": "1387a9f99c2f4342dea0d68208081f936b10a0049d28478c896b808c5c13d057"
           },
           {
-            "path": "binaries/windows/x64/pymodules/renderdoc.pyd",
-            "size": 6527488,
-            "sha256": "1e4c734171cf4ad81656fd74091fc246cb470b6db1202ce6329fbfc139d5fe25"
-          },
-          {
             "path": "binaries/windows/x64/renderdoc.dll",
-            "size": 25701888,
-            "sha256": "3ce77ff79eb89201bfaa9f3a784284568e68a56746dab8510694dc3eca33a904"
+            "size": 25836544,
+            "sha256": "636a5c58e871f84201210dc78cd387fc20e1306a384f7408a896af97fa3f8071"
           },
           {
             "path": "binaries/windows/x64/renderdoc.json",
@@ -14961,76 +14956,55 @@
             "path": "binaries/windows/x64/symsrv.dll",
             "size": 127944,
             "sha256": "1d91eab8b40e70c7db6d53d3b15d50bf0784f113307307395302333003b63d98"
+          },
+          {
+            "path": "binaries/windows/x64/pymodules/renderdoc.pyd",
+            "size": 5862912,
+            "sha256": "33caa4cdb75308ed27fac39a7c6878a695e41f453ac17d2bd9bb2aa18d37b76c"
           }
-        ],
-        "metadata_generation": {
-          "target": "_jsonProcess only; no DLL/PYD or Android recompile",
-          "native_compiled_source_sha256": "0a0fd1db7374b7cc2e7495c03fed7eec8702eff8aa0739542813bc2e049028cb",
-          "producer_fix": "Trim extracted major/minor version tokens; prevents CR inside JSON strings",
-          "project_before_sha256": "99a0d73f93d873948033c0aedb9b656f5d86729b3f08aa1ee185d96e715900f5",
-          "inputs": {
-            "renderdoc\\renderdoc.vcxproj": "6f23517e7235a13d938115df72e4e2674da799472f19da1c4d0161663fd2c8dc",
-            "renderdoc\\api\\replay\\version.h": "091d085602b3976d764afd4b5d7cdf22b7f73c9c0959305e7379b6c0793c9cc4",
-            "renderdoc\\driver\\vulkan\\renderdoc.json": "5dcd64faa6d804ef071e3cde7e8388a9a480096058e135be5523a429f0848e7b"
-          },
-          "output": {
-            "size": 1625,
-            "sha256": "6d557c6be870204b5cf10a83ef39f4745314d117f7a902686e8e63f58afc77d2"
-          },
-          "layer_json_strict_parse": true,
-          "native_dll_pyd_apk_bytes_unchanged": true
-        }
+        ]
       },
       {
         "target": "android-arm32",
-        "configuration": "Release; Android API 21; unstripped native symbols",
+        "configuration": "Release; Android API 21; unstripped",
         "toolchain": {
-          "JAVA_HOME": "C:/Program Files/Android/openjdk/jdk-21.0.8",
-          "ANDROID_HOME": "C:/Program Files (x86)/Android/android-sdk",
-          "ANDROID_NDK_HOME": "C:/Program Files (x86)/Android/AndroidNDK/android-ndk-r27c",
-          "ndk_version": "27.2.12479018",
+          "version_code_override": 149,
+          "ndk": "27.2.12479018 (r27c)",
+          "java": "21.0.10",
+          "android_compile_sdk": "35",
+          "host_compiler": "MSVC 14.51.36231",
           "cmake": "4.3.1-msvc1",
-          "generator": "Ninja",
-          "host_compiler": "MSVC 14.44.35207",
           "android_build_tools": "36.0.0",
-          "android_jar": "android-35",
-          "jdk": "21.0.8",
-          "java_source_target": "8",
-          "clang_driver_mode": "g++",
-          "signing": {
-            "keystore": "C:/Users/vulcangu/.android/debug.keystore",
-            "alias": "androiddebugkey",
-            "certificate_sha256": "4eff1b6a447a3ccf149accac4096047940edc22aba1605bc57a6e035097b599e"
-          }
+          "signer_certificate_sha256": "0e6f9baa87ca7e01a3e418cf0b8a0f13333c7e2433d6b3bf37826fb2a1a6c297"
         },
-        "inputs_sha256": "0a0fd1db7374b7cc2e7495c03fed7eec8702eff8aa0739542813bc2e049028cb",
+        "inputs_sha256": "bce2094cc878e9677ad807d469746baa2a87c252df09ef5d4022a4df8047dfe3",
         "outputs": [
           {
             "role": "helper_apk",
             "path": "binaries/android/arm32/org.renderdoc.renderdoccmd.arm32.apk",
-            "size": 54801093,
-            "sha256": "126af5dbaef441595638232eb49b2566f12193594e26564891a2dce95d716678",
+            "size": 54805189,
+            "sha256": "2cf4af761f2c32df5f67f72ce29e8b220cc918ccba74d108bdb71f5f41a2f93d",
             "apk": {
               "package_name": "org.renderdoc.renderdoccmd.arm32",
-              "version_code": 148,
-              "version_name": "f6aff93bcbb823eb4a8fcea324e55cd54adbdcf9",
-              "apk_sha256": "126af5dbaef441595638232eb49b2566f12193594e26564891a2dce95d716678",
+              "version_code": 149,
+              "version_name": "dde88226a1cf8145edfe7094a67cbcdab6363d46",
+              "apk_sha256": "2cf4af761f2c32df5f67f72ce29e8b220cc918ccba74d108bdb71f5f41a2f93d",
               "signer_certificate_sha256": [
-                "4eff1b6a447a3ccf149accac4096047940edc22aba1605bc57a6e035097b599e"
+                "0e6f9baa87ca7e01a3e418cf0b8a0f13333c7e2433d6b3bf37826fb2a1a6c297"
               ],
               "signature_validation": "not_performed",
               "libraries": [
                 {
                   "path": "lib/armeabi-v7a/libVkLayer_GLES_RenderDoc.so",
-                  "size": 193202580,
-                  "sha256": "1cbd6c10b16b65dd55351262c5db4dce53cf197ea61a99634764dc0df8e20a60",
-                  "build_id": "15db8ea3e3879e12"
+                  "size": 193105168,
+                  "sha256": "e0c34fc184945bc4219eff547ecf96190838462e5f8c0ea100d6aadf853a299c",
+                  "build_id": "92266c3618b4da39"
                 },
                 {
                   "path": "lib/armeabi-v7a/librenderdoccmd.so",
-                  "size": 2198268,
-                  "sha256": "643b9b8329b1d58134a0a56e0ed647a7954f0f3eb0788cbc3ddae475a3654ed3",
-                  "build_id": "603ff5459674b562af7d071d85a9b69e7a217cac"
+                  "size": 2197872,
+                  "sha256": "8eb6ef6a2885c6a71c2e8654488305547fd54b006e178edb157069a15329644f",
+                  "build_id": "6c8d725235c85b658525ab7aacc2e56ce46cbb27"
                 }
               ]
             }
@@ -15039,54 +15013,45 @@
       },
       {
         "target": "android-arm64",
-        "configuration": "Release; Android API 21; unstripped native symbols",
+        "configuration": "Release; Android API 21; unstripped",
         "toolchain": {
-          "JAVA_HOME": "C:/Program Files/Android/openjdk/jdk-21.0.8",
-          "ANDROID_HOME": "C:/Program Files (x86)/Android/android-sdk",
-          "ANDROID_NDK_HOME": "C:/Program Files (x86)/Android/AndroidNDK/android-ndk-r27c",
-          "ndk_version": "27.2.12479018",
+          "version_code_override": 149,
+          "ndk": "27.2.12479018 (r27c)",
+          "java": "21.0.10",
+          "android_compile_sdk": "35",
+          "host_compiler": "MSVC 14.51.36231",
           "cmake": "4.3.1-msvc1",
-          "generator": "Ninja",
-          "host_compiler": "MSVC 14.44.35207",
           "android_build_tools": "36.0.0",
-          "android_jar": "android-35",
-          "jdk": "21.0.8",
-          "java_source_target": "8",
-          "clang_driver_mode": "g++",
-          "signing": {
-            "keystore": "C:/Users/vulcangu/.android/debug.keystore",
-            "alias": "androiddebugkey",
-            "certificate_sha256": "4eff1b6a447a3ccf149accac4096047940edc22aba1605bc57a6e035097b599e"
-          }
+          "signer_certificate_sha256": "0e6f9baa87ca7e01a3e418cf0b8a0f13333c7e2433d6b3bf37826fb2a1a6c297"
         },
-        "inputs_sha256": "0a0fd1db7374b7cc2e7495c03fed7eec8702eff8aa0739542813bc2e049028cb",
+        "inputs_sha256": "bce2094cc878e9677ad807d469746baa2a87c252df09ef5d4022a4df8047dfe3",
         "outputs": [
           {
             "role": "helper_apk",
             "path": "binaries/android/arm64/org.renderdoc.renderdoccmd.arm64.apk",
             "size": 56373951,
-            "sha256": "36df7cff5d0b70f15606632cf54dd36b5a4ab0335acd7e9eaa0fb23b43615f66",
+            "sha256": "41a3edcaabce610c84abe813ac44418615caf17d4adda5e7fbad55ec31ee7a5d",
             "apk": {
               "package_name": "org.renderdoc.renderdoccmd.arm64",
-              "version_code": 148,
-              "version_name": "f6aff93bcbb823eb4a8fcea324e55cd54adbdcf9",
-              "apk_sha256": "36df7cff5d0b70f15606632cf54dd36b5a4ab0335acd7e9eaa0fb23b43615f66",
+              "version_code": 149,
+              "version_name": "dde88226a1cf8145edfe7094a67cbcdab6363d46",
+              "apk_sha256": "41a3edcaabce610c84abe813ac44418615caf17d4adda5e7fbad55ec31ee7a5d",
               "signer_certificate_sha256": [
-                "4eff1b6a447a3ccf149accac4096047940edc22aba1605bc57a6e035097b599e"
+                "0e6f9baa87ca7e01a3e418cf0b8a0f13333c7e2433d6b3bf37826fb2a1a6c297"
               ],
               "signature_validation": "not_performed",
               "libraries": [
                 {
                   "path": "lib/arm64-v8a/libVkLayer_GLES_RenderDoc.so",
-                  "size": 238583160,
-                  "sha256": "87dca006a7e9138ee1e18439883fa32b23b8db8817a069866fd7ce4c95494982",
-                  "build_id": "f248e2630f709b10"
+                  "size": 238489784,
+                  "sha256": "f59b0d231adaebf4dbcf93f7f0700cba2d5f9062c476fb523b6ee922b49c7857",
+                  "build_id": "5bd3efc2a76a6d48"
                 },
                 {
                   "path": "lib/arm64-v8a/librenderdoccmd.so",
-                  "size": 2902648,
-                  "sha256": "1c65a2c6667e504ec489082f30d376861cb6db980c572503f6cf9db783c44f42",
-                  "build_id": "d81c98d419295804724895772d2cd24dab6397a9"
+                  "size": 2902280,
+                  "sha256": "043fc1ee7b363393134fb795cbd894a6d9f009608dae56d84c95c01132405a0b",
+                  "build_id": "06c33d4f8eb67a32c70939b85a832150f4ba7fbb"
                 }
               ]
             }
