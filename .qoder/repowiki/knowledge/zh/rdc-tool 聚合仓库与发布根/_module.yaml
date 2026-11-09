@@ -1,0 +1,49 @@
+schema_version: 1
+module_path: root
+title: rdc-tool 聚合仓库与发布根
+scope: []
+source_files: []
+depends_on: []
+related_to: []
+kk_module_id: 95959b57215d815ea431a2a38cd544ce
+kk_cards:
+    architecture_design:
+        id: f501ee20-8ec9-420c-aa33-84ade6a963e9
+        title: rdc-tool 聚合仓库与发布根
+    coding_conventions:
+        id: a4a5a6ef-b7ef-458b-b375-4138545032ec
+        title: rdc-tool 聚合仓库与发布根
+    overview:
+        id: d85d566f-0f0b-4ad6-954e-c7ac2f99dab2
+        title: rdc-tool 聚合仓库与发布根
+    tech_stack:
+        id: b7f19f45-63d8-4168-aee1-8f7cf4d6393c
+        title: rdc-tool 聚合仓库与发布根
+    unique_setup_and_commands:
+        id: 032e0aa4-3896-4597-9220-0e2e0d3d3518
+        title: rdc-tool 聚合仓库与发布根
+    build_system:
+        id: d5fcd628-7ec7-4256-b1ea-84e60b62fa8e
+        title: Python setuptools + scripts 驱动的发布与 CI 构建系统
+    configuration_system:
+        id: 18614688-9ebe-4f94-b7de-d32a99461105
+        title: rdc-tool 配置系统：基于 dataclass + 环境变量的纯代码配置
+    dependency_management:
+        id: dba7a17e-63ca-42fa-a997-77ae089e6b09
+        title: Python 依赖声明、运行时包裁剪与二进制制品清单
+    error_handling:
+        id: 90a993dc-df57-41f2-96f0-3b98c600ae34
+        title: CoreError 分类体系与 map_exception 统一适配层
+    frontend_style:
+        id: cee5502e-886e-4d59-bbad-601045c9b322
+        title: 内嵌 CSS 调试报告主题（RDC-Tool Debug Report）
+    logging_system:
+        id: a3d64968-7a9e-4c70-860a-385a67f50468
+        title: Python logging 系统：基于 stdlib logging 的层级化日志配置与运行时动态调级
+kk_repo_cards:
+    - build_system
+    - configuration_system
+    - dependency_management
+    - error_handling
+    - frontend_style
+    - logging_system

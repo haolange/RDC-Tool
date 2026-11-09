@@ -7,6 +7,7 @@
 - [rdc_tool/server_runtime.py](file://rdc_tool/server_runtime.py)
 - [rdc_tool/core/patch_engine.py](file://rdc_tool/core/patch_engine.py)
 - [rdc_tool/operation_definitions.py](file://rdc_tool/operation_definitions.py)
+- [rdc_tool/models.py](file://rdc_tool/models.py)
 - [tests/test_shader_replace_contracts.py](file://tests/test_shader_replace_contracts.py)
 - [docs/rdc-native-agent-playbook.md](file://docs/rdc-native-agent-playbook.md)
 </cite>
@@ -17,6 +18,7 @@
 - 更新了架构描述，反映调试功能已整合到 `server_runtime.py` 和 `patch_engine.py` 中
 - 修正了断点管理、变量检查和调用栈分析的代码位置引用
 - 更新了操作定义引用，指向 `operation_definitions.py` 中的完整调试操作列表
+- **新增Shader替换精度提升机制**：补丁现在绑定到确切的目标ID和原始源材料，拒绝模糊或不匹配的替换；确保shader修改可追溯到其起源，防止意外将补丁应用到错误的shader变体或版本
 - 调整了架构图和数据流图以匹配当前实现
 
 ## 目录
@@ -36,6 +38,8 @@
 
 调试功能不再依赖独立的 `DebugService` 类，而是直接在 `server_runtime.py` 中通过 `_dispatch_debug` 函数实现，并与 `ShaderDebugHandle` 数据结构协同工作，提供完整的调试状态管理和生命周期控制。
 
+**Shader替换精度提升**：最新版本的补丁引擎引入了精确的身份验证机制，确保每个补丁都绑定到确切的目标着色器ID和原始源材料。系统会验证当前绑定的着色器是否与预期目标匹配，拒绝模糊或不匹配的替换操作，从而防止意外将补丁应用到错误的着色器变体或版本。这一机制保持了与现有替换契约的兼容性，同时维护了shader调试工作流的完整性。
+
 ## 项目结构
 - 入口层：
   - shader 处理器将动作转发到运行时调度器。
@@ -48,6 +52,8 @@
   - 调试逻辑内嵌于 `server_runtime._dispatch_debug`，直接调用 RenderDoc 控制器的 ContinueDebug、FreeTrace 等方法。
 - 操作定义层：
   - operation_definitions.py 定义了所有调试操作的输入输出规范，包括 set_breakpoints、get_variables、get_callstack、step、continue、run_to、finish 等。
+- 数据模型层：
+  - models.py 定义了 PatchSpec、PatchResult 等核心数据结构，包含 target_shader_id、expected_source_hash 等身份验证字段。
 - 测试与文档：
   - 大量用例验证 edit_and_replace、get_source、get_disassembly、断点与步进行为、SPIR-V 二进制/文本路径、DXIL 只读场景等。
   - 使用手册给出像素调试与编辑流程示例。
@@ -88,10 +94,13 @@ F --> H
   - `_require_shader_debug_handle`：验证调试句柄的有效性，防止跨会话或过期句柄被重用。
 - 补丁引擎
   - PatchEngine：反汇编（优先 SPIR-V ASM），应用 patch（force_full_precision、insert_guard），编译并 ReplaceResource 热替换，记录 PatchRecord 以便回滚。
+  - **身份验证机制**：在执行替换前验证 target_shader_id 与当前绑定的着色器ID是否匹配，验证 expected_source_hash 与当前源哈希是否一致，确保补丁应用的精确性。
 - 运行时调度
   - server_runtime：会话与控制器管理、目标纹理配置、像素历史聚合、断点与步进循环、变量与调用栈读取、资源释放。
 - 操作定义
   - operation_definitions.py：定义所有调试操作的输入输出契约，包括参数类型、必填项、作用域和影响范围。
+- 数据模型
+  - models.py：定义 PatchSpec 包含 target_shader_id、expected_source_hash 等身份验证字段；PatchResult 包含 applied_to_shader_hash、original_shader_hash 等追溯信息。
 
 **章节来源**
 - [rdc_tool/server_runtime.py:184-199](file://rdc_tool/server_runtime.py#L184-L199)
@@ -99,6 +108,7 @@ F --> H
 - [rdc_tool/server_runtime.py:11603-11740](file://rdc_tool/server_runtime.py#L11603-L11740)
 - [rdc_tool/core/patch_engine.py:175-300](file://rdc_tool/core/patch_engine.py#L175-L300)
 - [rdc_tool/operation_definitions.py:600-825](file://rdc_tool/operation_definitions.py#L600-L825)
+- [rdc_tool/models.py:333-374](file://rdc_tool/models.py#L333-L374)
 
 ## 架构总览
 下图展示从用户发起调试到渲染驱动执行的端到端流程，包括断点设置、步进、变量读取与调用栈获取。
@@ -270,6 +280,45 @@ F --> |否| L["仅返回disassembly与edit_plan"]
 - [rdc_tool/core/patch_engine.py:196-300](file://rdc_tool/core/patch_engine.py#L196-L300)
 - [tests/test_shader_replace_contracts.py:1551-1582](file://tests/test_shader_replace_contracts.py#L1551-L1582)
 
+### Shader替换精度提升机制
+
+#### 目标着色器身份验证
+PatchEngine 在执行替换操作前会进行严格的身份验证，确保补丁应用到正确的着色器：
+
+1. **目标ID匹配验证**：如果 PatchSpec 中指定了 `target_shader_id`，系统会验证当前事件绑定的着色器ID是否与预期目标完全匹配。若不匹配，立即拒绝替换并返回详细的错误信息，包括预期ID和实际绑定的ID。
+
+2. **源哈希验证**：通过 `expected_source_hash` 字段，系统可以验证当前着色器源代码的SHA-256哈希是否与预期一致。这确保了补丁不会被应用到已被其他操作修改过的着色器版本上。
+
+3. **绑定状态检查**：在执行任何替换前，系统会确认目标阶段确实绑定了有效的着色器，避免对未绑定的阶段执行无效操作。
+
+这些验证机制共同确保了shader修改的可追溯性，防止意外将补丁应用到错误的shader变体或版本。
+
+#### 原始源材料绑定
+PatchEngine 在应用补丁时会记录完整的溯源信息：
+
+1. **原始哈希记录**：在 `PatchResult` 中记录 `original_shader_hash`，标识补丁应用前的着色器状态。
+
+2. **应用后哈希追踪**：记录 `applied_to_shader_hash`，标识补丁应用后的着色器状态，便于后续验证和回滚。
+
+3. **构建输入溯源**：通过 `build_input` 字段记录 BuildTargetShader 的输入详情，包括编码方式、字节大小、SHA-256哈希等，确保编译过程的透明性。
+
+4. **源文本保留**：在 `PatchResult` 中保留 `source_before_text` 和 `source_after_text`，提供完整的修改前后对比。
+
+#### 错误处理与拒绝策略
+当验证失败时，系统会返回结构化的错误响应：
+
+- **shader_binding_lookup_failed**：着色器ID不匹配，包含 expected_shader_id 和 bound_shader_id 详细信息。
+- **shader_source_mismatch**：源哈希不匹配，包含 expected_source_hash 和 actual_source_hash 对比信息。
+- **failure_stage 和 failure_reason**：明确标识失败发生的阶段和具体原因，便于快速定位问题。
+
+这种严格的验证机制保持了与现有替换契约的兼容性，同时维护了shader调试工作流的完整性，确保每次修改都可追溯到其起源。
+
+**章节来源**
+- [rdc_tool/core/patch_engine.py:268-295](file://rdc_tool/core/patch_engine.py#L268-L295)
+- [rdc_tool/core/patch_engine.py:360-385](file://rdc_tool/core/patch_engine.py#L360-L385)
+- [rdc_tool/core/patch_engine.py:940-970](file://rdc_tool/core/patch_engine.py#L940-L970)
+- [rdc_tool/models.py:333-374](file://rdc_tool/models.py#L333-L374)
+
 ### 着色器级别调试与优化实践示例
 - 像素调试
   - 使用 `debug_start` 指定像素坐标与目标输出，支持像素历史聚合与跨事件匹配策略；运行后通过 step/continue 逐步执行，必要时设置断点。
@@ -278,6 +327,7 @@ F --> |否| L["仅返回disassembly与edit_plan"]
   - 在断点处调用 get_variables 查看局部变量，调用 get_callstack 确认函数上下文，结合 evaluate_expression 快速取值。
 - 源级修改与回滚
   - 通过 get_disassembly 获取可编辑 IR，使用 edit_and_replace 应用 force_full_precision 或 insert_guard 等操作；成功后可 revert_patch 恢复原始着色器。
+  - **精确替换实践**：在执行替换前，先通过 get_source 获取当前着色器源代码并计算哈希，将哈希值作为 expected_source_hash 传递给 PatchSpec，确保替换操作的精确性。
 - 参考命令
   - 像素值与历史查询、着色器源码/反汇编/常量查看、截图导出等，详见使用手册。
 
@@ -306,6 +356,8 @@ R --> P["core/patch_engine.py"]
 R --> SDH["ShaderDebugHandle (内嵌)"]
 P --> RD["renderdoc 模块"]
 SDH --> RD
+M["models.py"] --> P
+M --> R
 ```
 
 **图表来源**
@@ -315,6 +367,7 @@ SDH --> RD
 - [rdc_tool/server_runtime.py:9518-10897](file://rdc_tool/server_runtime.py#L9518-L10897)
 - [rdc_tool/server_runtime.py:11603-11740](file://rdc_tool/server_runtime.py#L11603-L11740)
 - [rdc_tool/core/patch_engine.py:50-60](file://rdc_tool/core/patch_engine.py#L50-L60)
+- [rdc_tool/models.py:333-374](file://rdc_tool/models.py#L333-L374)
 
 **章节来源**
 - [rdc_tool/core/patch_engine.py:50-60](file://rdc_tool/core/patch_engine.py#L50-L60)
@@ -330,10 +383,12 @@ SDH --> RD
   - 优先选择 SPIR-V ASM 以减少中间转换开销；DXIL/DXBC 路径需完整 HLSL 输入，编译失败不替换且保留上下文证据。
 - 变量与调用栈
   - get_variables 限制 max_variables 以控制响应大小；调用栈仅在可用时返回，避免不必要开销。
+- **身份验证开销**：目标ID匹配和源哈希验证的计算开销极小（字符串比较和哈希查找），不会显著影响替换性能。这些验证在编译前执行，避免了无效编译的资源浪费。
 
 **章节来源**
 - [rdc_tool/server_runtime.py:11660-11675](file://rdc_tool/server_runtime.py#L11660-L11675)
 - [rdc_tool/server_runtime.py:11730-11735](file://rdc_tool/server_runtime.py#L11730-L11735)
+- [rdc_tool/core/patch_engine.py:268-295](file://rdc_tool/core/patch_engine.py#L268-L295)
 
 ## 故障排查指南
 - 常见错误与定位
@@ -342,6 +397,8 @@ SDH --> RD
   - 反汇编不可用：当调试源码不可用时，按 edit_plan 提示回退到 disassembly；DXIL 路径可能只读。
   - 编译失败：查看结构化错误中的 compiler_output 与 compile_flags，修正源或目标编码。
   - 调试句柄无效：确认 shader_debug_id 属于当前活跃会话；过期或跨会话句柄会被拒绝。
+  - **着色器ID不匹配**：当出现 `shader_binding_lookup_failed` 错误且 failure_reason 为 `shader_id_mismatch` 时，检查 PatchSpec 中的 target_shader_id 是否与当前事件绑定的着色器ID一致。可通过 get_pipeline 查询当前绑定的着色器ID。
+  - **源哈希不匹配**：当出现 `shader_source_mismatch` 错误时，说明当前着色器源代码已被其他操作修改。应重新获取最新的源代码和哈希值，或使用不带 expected_source_hash 的请求。
 - 日志与工件
   - server_runtime 记录远程能力矩阵与尝试日志，包括 pixel_history_summary、attempts_log 等详细信息。
   - PatchEngine 在替换失败时会尝试清理临时资源；必要时手动 revert_patch 恢复原始着色器。
@@ -352,11 +409,15 @@ SDH --> RD
 - [tests/test_shader_replace_contracts.py:1420-1464](file://tests/test_shader_replace_contracts.py#L1420-L1464)
 - [tests/test_shader_replace_contracts.py:1551-1582](file://tests/test_shader_replace_contracts.py#L1551-L1582)
 - [rdc_tool/server_runtime.py:9975-9987](file://rdc_tool/server_runtime.py#L9975-L9987)
+- [rdc_tool/core/patch_engine.py:268-295](file://rdc_tool/core/patch_engine.py#L268-L295)
+- [rdc_tool/core/patch_engine.py:360-385](file://rdc_tool/core/patch_engine.py#L360-L385)
 
 ## 结论
 该着色器调试处理器以 RenderDoc 为核心，提供了完整的断点管理、变量检查、调用栈分析与源级修改能力。通过 SPIR-V 工具链集成与结构化错误反馈，开发者可以在回放环境中高效定位着色器问题并进行针对性优化。建议在复杂场景中结合像素历史、断点与变量快照，形成"观察—假设—验证—修复"的闭环流程。
 
 调试功能已从独立的 DebugService 类重构为内嵌于 server_runtime 的实现，通过 ShaderDebugHandle 数据类和 _dispatch_debug 函数提供更直接的调试状态管理和更清晰的代码结构。这种重构简化了依赖关系，提高了代码的可维护性，同时保持了原有的功能完整性。
+
+**Shader替换精度提升**：最新版本的补丁引擎引入了精确的身份验证机制，确保每个补丁都绑定到确切的目标着色器ID和原始源材料。系统会验证当前绑定的着色器是否与预期目标匹配，拒绝模糊或不匹配的替换操作，从而防止意外将补丁应用到错误的着色器变体或版本。这一机制保持了与现有替换契约的兼容性，同时维护了shader调试工作流的完整性，为着色器级别的调试和优化提供了更强的安全保障。
 
 ## 附录
 - 术语
@@ -364,6 +425,8 @@ SDH --> RD
   - 热替换：在不重启进程的情况下替换着色器资源。
   - 调用栈：函数调用的层次结构，包含函数名、文件、行号与地址。
   - ShaderDebugHandle：调试会话的状态容器，维护 trace、debugger、variables、breakpoints 等关键信息。
+  - **目标着色器身份验证**：在执行替换前验证 target_shader_id 与当前绑定着色器ID的匹配性，确保补丁应用的精确性。
+  - **源哈希验证**：通过 expected_source_hash 验证当前着色器源代码的完整性，防止补丁被应用到已修改的版本上。
 - 相关工具
   - spirv-as/spirv-dis：SPIR-V 汇编/反汇编工具，影响 raw SPIR-V ASM 工作流可用性。
 - 调试操作列表
@@ -379,3 +442,5 @@ SDH --> RD
 
 **章节来源**
 - [rdc_tool/operation_definitions.py:600-825](file://rdc_tool/operation_definitions.py#L600-L825)
+- [rdc_tool/core/patch_engine.py:268-295](file://rdc_tool/core/patch_engine.py#L268-L295)
+- [rdc_tool/core/patch_engine.py:360-385](file://rdc_tool/core/patch_engine.py#L360-L385)

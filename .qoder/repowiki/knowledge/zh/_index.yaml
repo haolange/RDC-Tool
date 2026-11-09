@@ -1,9 +1,9 @@
 # 知识卡导出索引文件
 schema_version: 1
 locale: zh-CN
-commit: ef5b314db020180d11c0fe6219754987468b00c9
+commit: 510f3ac32108be60a9fe6a59f62d9e7d7dd18ba1
 branch: main
-exported_at: "2026-11-07T06:40:09Z"
+exported_at: "2026-11-09T11:10:46Z"
 modules:
     rdc-tool-聚合包与发布根:
         dir_name: rdc-tool 聚合包与发布根
@@ -28,7 +28,7 @@ modules:
         depends_on: []
         related_to:
             - path: rdc-tool-聚合包与发布根/rdx-python-运行时与守护进程调度层
-              reason: spec_catalog 从 rdx-python 运行时的工具注册表读取并生成公开的 tool_catalog.json，是运行时工具目录的构建期消费者。
+              reason: spec_catalog 从运行时注册表读取 tool_catalog.json，而该注册表由 Python 运行时在启动时生成并写入。
     rdc-tool-聚合包与发布根/rdc-tool-发布制品构建与发布门禁脚本集:
         dir_name: rdc-tool 发布制品构建与发布门禁脚本集
         title: rdc-tool 发布制品构建与发布门禁脚本集
@@ -46,9 +46,9 @@ modules:
         depends_on: []
         related_to:
             - path: rdc-tool-聚合包与发布根/rdc-tool-发布制品构建与发布门禁脚本集
-              reason: 发布门禁脚本在构建后执行 CLI 冒烟测试与制品校验，调用 pytest 测试套件验证 rdx-tools 分发包的正确性。
+              reason: 发布门禁在制品完成后调用 pytest 套件执行 CLI 冒烟测试与契约测试，以阻止未通过测试的制品发布。
             - path: rdc-tool-聚合包与发布根/rdx-python-运行时与守护进程调度层
-              reason: pytest 测试套件直接覆盖 RDC-Tool CLI、Windows named-pipe 守护进程客户端、运行时、重放、VFS、预览等 rdx-python 模块的行为与契约。
+              reason: pytest 测试套件直接驱动 RDC-Tool CLI、守护进程客户端、运行时、重放、VFS、预览等模块，验证其公开行为契约。
     rdc-tool-聚合包与发布根/rdx-python-运行时与守护进程调度层:
         dir_name: RDC-Tool Python 运行时与守护进程调度层
         title: RDC-Tool Python 运行时与守护进程调度层
@@ -64,7 +64,9 @@ modules:
         source_files: []
         children: []
         depends_on: []
-        related_to: []
+        related_to:
+            - path: rdc-tool-聚合包与发布根/rdx-python-运行时与守护进程调度层
+              reason: 文档集中会话/代理模型、工具参考、配置与故障排查章节描述 Python 运行时与守护进程的实际行为，作为其对外契约的用户文档。
     rdc-tool-聚合包与发布根/renderdoc-平台二进制分发产物:
         dir_name: RenderDoc 平台二进制分发产物
         title: RenderDoc 平台二进制分发产物
@@ -73,11 +75,13 @@ modules:
         children: []
         depends_on: []
         related_to:
+            - path: rdc-tool-聚合包与发布根/rdc-tool-发布制品构建与发布门禁脚本集
+              reason: 发布脚本在构建自包含 Windows x64 包时需打包 renderdoc 平台二进制产物（Vulkan 捕获层、内嵌 Python 发行版及 APK）。
             - path: rdc-tool-聚合包与发布根/rdx-python-运行时与守护进程调度层
-              reason: Python 运行时在启动时装配本地 RenderDoc 运行时，直接消费 Windows x64 与 Android (arm32/arm64) 预编译的二进制、Vulkan 捕获层与内嵌 Python 3.14 发行版。
+              reason: Python 运行时在 Windows/Android 上启动原生 RenderDoc 代理（含 Vulkan 捕获层与内嵌 Python 3.14）以回放 .rdc，依赖该目录提供的预编译二进制。
     root:
-        dir_name: rdx-tools 聚合包与发布根
-        title: rdx-tools 聚合包与发布根
+        dir_name: rdc-tool 聚合仓库与发布根
+        title: rdc-tool 聚合仓库与发布根
         scope: []
         source_files: []
         children:
