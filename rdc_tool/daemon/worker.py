@@ -18,7 +18,7 @@ from rdc_tool.io_utils import safe_json_text
 from rdc_tool.progress import ProgressEvent, ProgressSink
 from rdc_tool.runtime_paths import binaries_root, pymodules_dir
 from rdc_tool.runtime_worker_state import clear_worker_state, save_worker_state
-from rdc_tool.runtime_identity import native_manifest_status
+from rdc_tool.runtime_identity import host_native_manifest_status
 
 
 READY_TIMEOUT_S = 10.0
@@ -90,7 +90,7 @@ class RuntimeWorkerProcess:
     def _spawn(self) -> None:
         bin_dir = binaries_root().resolve()
         pymod_dir = pymodules_dir().resolve()
-        native = native_manifest_status(bin_dir.parents[2])
+        native = host_native_manifest_status(bin_dir.parents[2])
         if native["status"] == "invalid":
             raise RuntimeError(f"Native runtime integrity failed before worker startup: {native['reason']}")
         manifest_path = (bin_dir / "manifest.runtime.json").resolve()

@@ -21,3 +21,6 @@ binaries/**/*.pdb
 binaries/**/*.lib
 binaries/**/*.exp
 binaries/**/*.ilk
+
+# Linux runtimes are built/imported locally with their own matching ABI receipt.
+/binaries/linux/

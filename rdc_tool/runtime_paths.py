@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from rdc_tool.native_platform import is_windows
+
 import os
 import sys
 from pathlib import Path
@@ -59,7 +61,12 @@ def ensure_tools_root_env(*, force: bool = False) -> Path:
 
 def binaries_root() -> Path:
     """Directory containing ``renderdoc.dll`` and third-party runtime artifacts."""
-    return tools_root() / "binaries" / "windows" / "x64"
+    override = os.environ.get("RDC_TOOL_RUNTIME_DLL_DIR", "").strip()
+    if override:
+        return Path(override).expanduser().resolve()
+    from rdc_tool.native_platform import platform_target
+    host, arch = platform_target().rsplit("-", 1)
+    return tools_root() / "binaries" / host / arch
 
 
 def bundled_python_root() -> Path:
@@ -68,7 +75,7 @@ def bundled_python_root() -> Path:
 
 
 def bundled_python_executable() -> Path:
-    return bundled_python_root() / "python.exe"
+    return bundled_python_root() / "python.exe" if is_windows() else Path(sys.executable).resolve()
 
 
 def android_binaries_root() -> Path:
@@ -77,7 +84,8 @@ def android_binaries_root() -> Path:
 
 
 def pymodules_dir() -> Path:
-    return binaries_root() / "pymodules"
+    override = os.environ.get("RDC_TOOL_RENDERDOC_PATH", "").strip()
+    return Path(override).expanduser().resolve() if override else binaries_root() / "pymodules"
 
 
 def intermediate_root() -> Path:

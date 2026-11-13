@@ -1,8 +1,11 @@
 """One resolver for bundled host executables and explicit user overrides."""
 from __future__ import annotations
+
+from rdc_tool.native_platform import is_windows
 import hashlib
 import json
 import os
+import shutil
 from pathlib import Path
 from rdc_tool.runtime_paths import binaries_root
 
@@ -21,6 +24,8 @@ class HostToolUnavailableError(RuntimeError):
 
 def resolve_host_tool(name: str) -> Path:
     relative, variable = HOST_TOOLS[name]
+    if not is_windows():
+        relative = relative.removesuffix(".exe")
     override = os.environ.get(variable, "").strip()
     if override:
         path = Path(override).expanduser()
@@ -29,6 +34,11 @@ def resolve_host_tool(name: str) -> Path:
         if not path.is_absolute():
             raise HostToolUnavailableError(f"{variable} must be an absolute path.")
     else:
+        if not is_windows():
+            resolved = shutil.which(Path(relative).name)
+            if not resolved:
+                raise HostToolUnavailableError(f"Optional host utility not installed: {name}")
+            return Path(resolved).resolve()
         path = binaries_root() / relative
     if not path.is_file():
         source = variable if override else "this RDC-Tool installation"
@@ -39,7 +49,7 @@ def host_tools_status() -> dict:
     result = {}
     for name, (relative, variable) in HOST_TOOLS.items():
         override = os.environ.get(variable, "").strip()
-        entry = {"source": "explicit" if override else "bundled", "path": "", "available": False}
+        entry = {"source": "explicit" if override else ("bundled" if is_windows() else "host"), "path": "", "available": False}
         try:
             entry.update(path=str(resolve_host_tool(name)), available=True)
         except HostToolUnavailableError as error:
@@ -48,6 +58,8 @@ def host_tools_status() -> dict:
     return result
 
 def validate_bundled_host_tools() -> tuple[bool, list[str]]:
+    if not is_windows():
+        return True, []  # No Linux host tools are bundled or claimed as verified.
     root = binaries_root()
     failures = []
     try:

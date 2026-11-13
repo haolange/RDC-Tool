@@ -150,3 +150,8 @@ Android 安装前只读查询 `dumpsys package installs` 的 active sessions。�
 `rd.remote.connect.timeout_policy` 从 `timeout_policy.py` 单源生成，声明 `argument`、`default_timeout_ms`、`worker_grace_ms`、`transport_grace_ms` 和 `process_grace_ms`。调用方显式传入本机 native budget；worker 在该 budget 后保留 85 秒用于 join／清理，CLI transport 再保留 5 秒，宿主进程再保留 5 秒用于接收最终回执。原有 90 秒 transport 余量在 worker／transport 间拆分，不更改用户设置；调用方不得读取描述猜测或在缺失 policy 时默认放行。
 
 应用内解除未决安装使用唯一只读操作 `rd.remote.inspect_installation`，参数仅 `device_serial`，必须经非 default owning context。该操作复用连接前的设备校验、同安装 APK 包名／SHA256 和 PackageManager active-session 检查；不安装、卸载、启动 helper、建立连接或 abandon。结果 `installation_state=clear|pending|unknown` 与 `observation=verified|pending|unreadable` 分别表示可核实的状态和观察范围。`clear` 只证明没有相关未决安装，不证明 helper 已安装、兼容或已连接；应用确认冻结 CLI/catalog 与原目标 APK 身份一致后，才能继续用户本次明确请求的正常准备。pending／unknown 保留原未决事实和设备占用。
+
+
+## Linux host and foreground transport
+
+The Linux candidate uses the same operations and canonical envelopes. `rdc-tool stdio` exposes the foreground runtime worker JSON-lines protocol without a network/socket listener, with exclusive context ownership and native cleanup on shutdown/EOF. See [linux-native.md](linux-native.md) for protocol, ABI, replay and preview limitations. Linux does not validate or load the Windows native receipt as its own.

@@ -1,3 +1,12 @@
+
+import pytest
+
+@pytest.fixture(autouse=True)
+def _windows_contract(monkeypatch):
+    from rdc_tool import host_tools, native_platform
+    monkeypatch.setattr(host_tools, "is_windows", lambda: True)
+    monkeypatch.setattr(native_platform, "is_windows", lambda: True)
+
 from pathlib import Path
 import hashlib
 import json

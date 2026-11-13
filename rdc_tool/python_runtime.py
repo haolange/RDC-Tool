@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from rdc_tool.native_platform import is_windows
+
 import json
+import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,7 +37,7 @@ def bundled_python_root() -> Path:
 
 
 def bundled_python_executable() -> Path:
-    return bundled_python_root() / "python.exe"
+    return bundled_python_root() / "python.exe" if is_windows() else Path(sys.executable).resolve()
 
 
 def _load_manifest() -> dict[str, Any]:
@@ -102,6 +105,9 @@ def current_python_runtime_details() -> dict[str, str]:
 
 
 def validate_bundled_python_layout() -> tuple[bool, list[str], dict[str, Any]]:
+    if not is_windows():
+        failures = [] if sys.version_info >= (3, 11) else ["Python 3.11 or newer is required"]
+        return not failures, failures, {"mode": "host_python", "bundled_python": None, "current_python": current_python_runtime_details()}
     manifest = _load_manifest()
     metadata = dict(manifest.get("bundled_python") or {})
     required_metadata_keys = (
@@ -150,7 +156,7 @@ def validate_bundled_python_layout() -> tuple[bool, list[str], dict[str, Any]]:
         if not layout.stdlib_path.is_dir():
             failures.append(f"missing bundled python stdlib dir: {layout.stdlib_path}")
         else:
-            for marker in ("os.py", "site.py", "encodings\\__init__.py"):
+            for marker in ("os.py", "site.py", "encodings/__init__.py"):
                 if not (layout.stdlib_path / marker).is_file():
                     failures.append(f"missing stdlib marker: {layout.stdlib_path / marker}")
 

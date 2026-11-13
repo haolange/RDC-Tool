@@ -1,4 +1,4 @@
-"""RDC-Tool daemon server using Windows named pipes."""
+"""RDC-Tool daemon server using platform-local IPC."""
 
 from __future__ import annotations
 
@@ -10,6 +10,8 @@ import threading
 import time
 from datetime import datetime, timezone
 from multiprocessing.connection import Listener
+from multiprocessing import AuthenticationError
+from rdc_tool.daemon import transport
 from pathlib import Path
 from typing import Any, Dict
 
@@ -28,6 +30,7 @@ from rdc_tool.progress import ProgressEvent, ProgressSink
 from rdc_tool.runtime_paths import cli_runtime_dir
 from rdc_tool.runtime_state import clear_context_state, load_context_state, save_context_state
 from rdc_tool.runtime_worker_state import load_worker_state
+from rdc_tool.replay_lifecycle import mark_replay_requires_restart
 from rdc_tool.timeout_policy import worker_exec_timeout_s
 
 logger = logging.getLogger("rdc_tool.daemon")
@@ -100,7 +103,7 @@ class DaemonRuntime(ProgressSink):
     ) -> None:
         self.pipe_name = pipe_name
         self.token = token
-        self.address = rf"\\.\pipe\{pipe_name}"
+        self.address = transport.address(pipe_name)
         self.daemon_context = _normalize_context(daemon_context)
         self.owner_pid = int(owner_pid) if owner_pid else 0
         self.lease_timeout_seconds = _normalize_timeout(
@@ -354,20 +357,7 @@ class DaemonRuntime(ProgressSink):
         return self._worker
 
     def _mark_replay_requires_restart(self, message: str) -> None:
-        state = load_context_state(self.daemon_context)
-        sessions = state.get("sessions") or {}
-        for record in sessions.values():
-            record["state"] = "degraded"
-            record["is_live"] = False
-            record["last_error"] = message
-            record["recovery"] = {**dict(record.get("recovery") or {}),
-                "status": "requires_restart", "last_error": message}
-        if sessions:
-            state["recovery"] = {**dict(state.get("recovery") or {}),
-                "status": "degraded", "last_error": message,
-                "recovered_session_ids": [], "deferred_session_ids": [],
-                "degraded_session_ids": list(sessions)}
-            save_context_state(state, self.daemon_context)
+        mark_replay_requires_restart(self.daemon_context, message)
 
     def _request_worker(self, method: str, params: Dict[str, Any], *, timeout: float = 30.0) -> Dict[str, Any]:
         worker = self._ensure_worker()
@@ -673,7 +663,7 @@ class DaemonRuntime(ProgressSink):
     def serve_forever(self) -> int:
         self._owner_lease = OwnerLease(_daemon_state_path(self.daemon_context), self.daemon_context)
         _PROCESS_OWNER_LEASES.append(self._owner_lease)
-        self._listener = Listener(address=self.address, family="AF_PIPE")
+        self._listener = Listener(address=self.address, **transport.connection_options(self.token))
         self._serve_started = True
         logger.info("daemon listening on %s", self.address)
         self._persist_state()
@@ -686,6 +676,9 @@ class DaemonRuntime(ProgressSink):
             while self.running:
                 try:
                     conn = self._listener.accept()
+                except AuthenticationError:
+                    logger.warning("Rejected unauthenticated daemon connection")
+                    continue
                 except Exception:
                     break
                 threading.Thread(

@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import errno
-import msvcrt
+from rdc_tool.file_lock import lock, unlock
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -24,19 +23,7 @@ class DaemonOwnerUnavailable(RuntimeError):
 
 
 def try_lock(handle: BinaryIO) -> bool:
-    handle.seek(0)
-    try:
-        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-        return True
-    except OSError as exc:
-        if exc.errno == errno.EACCES and getattr(exc, "winerror", None) in (None, 33):
-            return False
-        raise
-
-
-def unlock(handle: BinaryIO) -> None:
-    handle.seek(0)
-    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+    return lock(handle, blocking=False)
 
 
 class OwnerLease:

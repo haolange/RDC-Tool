@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 
-import msvcrt
+from rdc_tool.file_lock import lock, unlock
 
 from rdc_tool.io_utils import atomic_write_json
 from rdc_tool.runtime_paths import cli_runtime_dir
@@ -231,12 +231,12 @@ def _locked_snapshot_file(context: Optional[str] = "default"):
     with _context_mutex(context):
         with open(lock_path, "a+b") as handle:
             handle.seek(0)
-            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+            lock(handle)
             try:
                 yield
             finally:
                 handle.seek(0)
-                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                unlock(handle)
 
 
 def default_context_snapshot(context: Optional[str] = "default") -> Dict[str, Any]:

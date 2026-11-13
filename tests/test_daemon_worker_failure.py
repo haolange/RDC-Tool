@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from rdc_tool.daemon import server as daemon_server
+from rdc_tool import replay_lifecycle
 
 
 @pytest.mark.parametrize("method", ["exec", "clear_context"])
@@ -28,8 +29,8 @@ def test_worker_request_failure_is_not_replayed(monkeypatch, method, failure):
     daemon = object.__new__(daemon_server.DaemonRuntime)
     daemon.daemon_context = "owned-context"
     monkeypatch.setattr(daemon, "_ensure_worker", lambda: worker)
-    monkeypatch.setattr(daemon_server, "load_context_state", lambda context: copy.deepcopy(state))
-    monkeypatch.setattr(daemon_server, "save_context_state", lambda value, context: saved.append((copy.deepcopy(value), context)), raising=False)
+    monkeypatch.setattr(replay_lifecycle, "load_context_state", lambda context: copy.deepcopy(state))
+    monkeypatch.setattr(replay_lifecycle, "save_context_state", lambda value, context: saved.append((copy.deepcopy(value), context)), raising=False)
     with pytest.raises(RuntimeError, match="outcome unknown"):
         daemon._request_worker(method, {"operation": "rd.shader.revert_replacement"}, timeout=1)
     assert len(calls) == 1
@@ -57,7 +58,7 @@ def test_worker_request_success_keeps_state_and_controller(monkeypatch):
         stop=lambda: pytest.fail("successful worker must not stop"))
     daemon = object.__new__(daemon_server.DaemonRuntime)
     monkeypatch.setattr(daemon, "_ensure_worker", lambda: worker)
-    monkeypatch.setattr(daemon_server, "load_context_state", lambda *args: pytest.fail("success must not quarantine"))
+    monkeypatch.setattr(replay_lifecycle, "load_context_state", lambda *args: pytest.fail("success must not quarantine"))
     assert daemon._request_worker("exec", {"operation": "rd.shader.revert_replacement"}) == response
     assert len(calls) == 1
     assert calls[0][1]["progress_sink"] is daemon
@@ -74,8 +75,8 @@ def test_new_worker_marks_persisted_replay_for_controlled_recovery(monkeypatch, 
     daemon.daemon_context = "owned-context"
     daemon._worker = worker if existing_worker else None
     monkeypatch.setattr(daemon_server, "RuntimeWorkerProcess", lambda **kwargs: worker)
-    monkeypatch.setattr(daemon_server, "load_context_state", lambda context: copy.deepcopy(state))
-    monkeypatch.setattr(daemon_server, "save_context_state", lambda value, context: saved.append(copy.deepcopy(value)))
+    monkeypatch.setattr(replay_lifecycle, "load_context_state", lambda context: copy.deepcopy(state))
+    monkeypatch.setattr(replay_lifecycle, "save_context_state", lambda value, context: saved.append(copy.deepcopy(value)))
     assert daemon._ensure_worker() is worker
     assert started == [True]
     assert len(saved) == 1
@@ -93,5 +94,5 @@ def test_live_worker_is_not_reclassified_on_normal_request(monkeypatch):
     daemon = object.__new__(daemon_server.DaemonRuntime)
     daemon.daemon_context = "owned-context"
     daemon._worker = worker
-    monkeypatch.setattr(daemon_server, "load_context_state", lambda context: pytest.fail("live worker must retain its controller"))
+    monkeypatch.setattr(replay_lifecycle, "load_context_state", lambda context: pytest.fail("live worker must retain its controller"))
     assert daemon._ensure_worker() is worker

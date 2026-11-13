@@ -5,6 +5,8 @@ are separate observations; an embedded commit alone never certifies a source tre
 """
 from __future__ import annotations
 
+from rdc_tool.native_platform import is_windows
+
 import ctypes
 import hashlib
 import json
@@ -231,7 +233,16 @@ def native_manifest_status(root: Path) -> dict[str, Any]:
 
 
 def _loaded_renderdoc_dll() -> Path | None:
-    if os.name != "nt":
+    if not is_windows() and sys.platform.startswith("linux"):
+        paths = set()
+        for line in Path("/proc/self/maps").read_text().splitlines():
+            fields = line.split(None, 5)
+            if len(fields) == 6 and Path(fields[5]).name.startswith("librenderdoc.so"):
+                paths.add(Path(fields[5]).resolve())
+        if len(paths) > 1:
+            raise OSError("multiple RenderDoc native libraries are loaded")
+        return next(iter(paths), None)
+    if not is_windows():
         raise OSError("native_loader_query_unsupported")
     kernel = ctypes.WinDLL("kernel32", use_last_error=True)
     kernel.GetModuleHandleW.argtypes = [ctypes.c_wchar_p]
@@ -269,10 +280,63 @@ def loaded_runtime_identity(bin_dir: Path, pymod_dir: Path) -> dict[str, Any]:
         if dll is None:
             return {**result, "status": "not_loaded" if module is None else "unavailable",
                     "reason": "native_dll_not_loaded"}
-        matches = dll == (bin_dir / "renderdoc.dll").resolve()
+        from rdc_tool.native_platform import native_library_path, native_binding_path
+        matches = dll == native_library_path(bin_dir).resolve()
         if module is not None:
-            matches = matches and pyd == (pymod_dir / "renderdoc.pyd").resolve()
+            matches = matches and pyd == native_binding_path(pymod_dir).resolve()
         return {**result, "status": ("observed" if module is not None else "partial") if matches else "mismatch",
                 "configured_paths_match": matches, "hash_scope": "on_disk_files_at_observation"}
     except (OSError, AttributeError, TypeError) as exc:
         return {**result, "status": "unavailable", "reason": str(exc)}
+
+
+def linux_native_manifest_status(root: Path) -> dict[str, Any]:
+    """Validate Linux's independent provenance; never reuse Windows receipts."""
+    from rdc_tool.runtime_paths import binaries_root
+    from rdc_tool.native_platform import platform_target
+    host, arch = platform_target().rsplit("-", 1)
+    override = os.environ.get("RDC_TOOL_RUNTIME_DLL_DIR", "").strip()
+    directory = Path(override).expanduser().resolve() if override else root / "binaries" / host / arch
+    manifest_path = directory / "manifest.runtime.json"
+    if not manifest_path.is_file():
+        return {"status": "unavailable", "reason": "linux_native_build_receipt_missing"}
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        receipt = manifest["native_build"]
+        from rdc_tool.native_platform import platform_target
+        if receipt["target"] != platform_target():
+            raise ValueError("Linux native receipt target mismatch")
+        import sysconfig
+        if receipt.get("python_abi") != sysconfig.get_config_var("SOABI"):
+            raise ValueError("Linux RenderDoc binding Python ABI mismatch")
+        if not receipt.get("source_url") or not receipt.get("version"):
+            raise ValueError("Linux native provenance is incomplete")
+        files = manifest["files"]
+        if not files:
+            raise ValueError("Linux native manifest has no files")
+        seen = set()
+        for item in files:
+            name = item["path"]
+            path = (directory / name).resolve()
+            path.relative_to(directory.resolve())
+            if name in seen:
+                raise ValueError("Duplicate native file")
+            seen.add(name)
+            if file_identity(path) != {"size": item["size"], "sha256": item["sha256"]}:
+                raise ValueError(f"Linux native file identity mismatch: {name}")
+        from rdc_tool.native_platform import native_binding_path
+        binding_override = os.environ.get("RDC_TOOL_RENDERDOC_PATH", "").strip()
+        binding_dir = Path(binding_override).expanduser().resolve() if binding_override else directory / "pymodules"
+        binding_dir.relative_to(directory.resolve())
+        for path in (directory / "librenderdoc.so", native_binding_path(binding_dir)):
+            if path.relative_to(directory).as_posix() not in seen:
+                raise ValueError(f"Linux native manifest missing required file: {path.name}")
+        return {"status": "verified", "receipt": receipt, "manifest": str(manifest_path), "hash_scope": "on_disk_files"}
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        return {"status": "invalid", "reason": str(exc)}
+
+
+def host_native_manifest_status(root: Path) -> dict[str, Any]:
+    if not is_windows() and sys.platform.startswith("linux"):
+        return linux_native_manifest_status(root)
+    return native_manifest_status(root)

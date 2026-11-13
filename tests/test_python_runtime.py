@@ -1,5 +1,14 @@
 from __future__ import annotations
 
+import pytest
+
+@pytest.fixture(autouse=True)
+def _windows_contract(monkeypatch):
+    from rdc_tool import python_runtime, native_platform
+    monkeypatch.setattr(python_runtime, "is_windows", lambda: True)
+    monkeypatch.setattr(native_platform, "is_windows", lambda: True)
+
+
 import json
 from pathlib import Path
 
