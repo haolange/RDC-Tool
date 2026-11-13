@@ -4,6 +4,9 @@ RenderDoc `.rdc` replay CLI for agents and humans.
 
 **Platform:** Windows x64 local replay + Android remote replay. **Current baseline:** RenderDoc 1.45.
 
+**Linux development candidate:** Linux CLI/stdio and bounded D3D11 static inspection are available. Native replay requires a compatible Linux RenderDoc runtime and GPU driver; D3D11 replay is **not** provided by upstream Linux RenderDoc. See [Linux 安装与启动](docs/linux-native.md), [静态读取](docs/static-d3d11-inspection.md), and [实际回放路径及限制](docs/linux-replay-paths.md). This is not a qualified cross-platform release.
+
+
 Download the Windows x64 zip from [Releases](https://github.com/haolange/RDC-Tool/releases), extract it, run `install.cmd`, open a new terminal, then run:
 
 ```bat

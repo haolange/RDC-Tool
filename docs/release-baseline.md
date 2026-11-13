@@ -31,3 +31,8 @@ bash scripts/smoke_cli.sh --rdc "C:/path/sample.rdc" --context release-smoke
 ```
 
 The smoke entry writes `intermediate/logs/smoke_cli.log`; `release_gate.py --require-smoke-reports` requires `[smoke] PASS`. Preview-geometry evidence is separate. Use an explicit `.rdc` sample for full replay smoke; committed repository fixtures are test-only and are not bundled in the release package. Smoke evidence does not replace package verification or device-presentation evidence.
+
+
+## Linux candidate provenance
+
+Linux runtime identity is independent of the Windows/Android paired release receipt. `host_native_manifest_status` selects the Linux receipt with its Python ABI and complete file hashes; `native_manifest_status` continues validating the existing Windows/Android release bundle. The candidate uses upstream RenderDoc 1.47 and must not claim the custom Windows extensions. Passing Linux doctor or GLES replay does not qualify a Windows release, Android presentation, or D3D11 Linux replay.

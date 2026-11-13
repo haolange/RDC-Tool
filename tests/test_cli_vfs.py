@@ -76,7 +76,7 @@ def test_build_parser_accepts_cli_first_doctor_and_tools() -> None:
     assert tools_describe.operation == "rd.pipeline.get_state"
 
 
-def test_doctor_reports_cli_only_contract(monkeypatch) -> None:
+def test_doctor_reports_cli_only_contract(monkeypatch, tmp_path) -> None:
     captured: list[dict] = []
 
     monkeypatch.setattr(rdc_tool_cli, "_print_json", lambda payload: captured.append(payload))
@@ -88,6 +88,13 @@ def test_doctor_reports_cli_only_contract(monkeypatch) -> None:
         lambda: (True, [], {"bundled_python": {"python_version": "test", "python_entry": "python.exe"}}),
     )
 
+    from rdc_tool import native_platform
+    native_file = tmp_path / "native"
+    native_file.write_bytes(b"test runtime")
+    monkeypatch.setattr(native_platform, "native_library_path", lambda directory: native_file)
+    monkeypatch.setattr(native_platform, "native_binding_path", lambda directory: native_file)
+    monkeypatch.setattr(rdc_tool_cli, "host_native_manifest_status", lambda root: {"status": "verified"})
+    monkeypatch.setattr(rdc_tool_cli, "loaded_runtime_identity", lambda *args: {"status": "not_loaded"})
     args = argparse.Namespace(command="doctor", daemon_context="ctx-doctor", json=True)
     exit_code = asyncio.run(rdc_tool_cli._main_async(args))
 

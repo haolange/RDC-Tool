@@ -17,13 +17,13 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from rdc_tool.context_snapshot import clear_context_snapshot
-from rdc_tool.runtime_paths import cli_runtime_dir
+from rdc_tool.runtime_paths import cli_runtime_dir, binaries_root, pymodules_dir
 from rdc_tool.runtime_state import clear_context_state
 
 os.environ.setdefault("RDC_TOOL_ROOT", str(ROOT))
 os.environ.setdefault("RDC_TOOL_ARTIFACT_DIR", str(TEST_ROOT / "artifacts"))
-os.environ.setdefault("RDC_TOOL_RENDERDOC_PATH", str(ROOT / "binaries" / "windows" / "x64" / "pymodules"))
-os.environ.setdefault("RDC_TOOL_RUNTIME_DLL_DIR", str(ROOT / "binaries" / "windows" / "x64"))
+os.environ.setdefault("RDC_TOOL_RENDERDOC_PATH", str(pymodules_dir()))
+os.environ.setdefault("RDC_TOOL_RUNTIME_DLL_DIR", str(binaries_root()))
 
 
 @pytest.fixture(autouse=True)

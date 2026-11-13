@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from rdc_tool import cli, environment
+from rdc_tool import cli, environment, file_lock
 from rdc_tool.daemon import client
 
 
@@ -26,36 +26,35 @@ def test_nonblocking_retry_and_unlock(monkeypatch):
     modes = []
     monkeypatch.setattr(client.time, 'monotonic', lambda: clock[0])
     monkeypatch.setattr(client.time, 'sleep', lambda seconds: clock.__setitem__(0, clock[0] + seconds))
-    def locking(fd, mode, size):
-        modes.append(mode)
-        assert size == 1
-        if mode == client.msvcrt.LK_NBLCK and len(modes) <= 2:
+    def locking(fd, blocking):
+        modes.append(blocking)
+        if not blocking and len(modes) <= 2:
             raise OSError(errno.EACCES, 'locked')
-    monkeypatch.setattr(client.msvcrt, 'locking', locking)
+    monkeypatch.setattr(file_lock, '_lock_fd', locking)
+    monkeypatch.setattr(client, 'unlock', lambda handle: modes.append('unlock'))
     with client._locked_daemon_start('retry'):
         assert clock[0] == pytest.approx(.1)
-    assert modes == [client.msvcrt.LK_NBLCK] * 3 + [client.msvcrt.LK_UNLCK]
+    assert modes == [False] * 3 + ['unlock']
 
 
 @pytest.mark.parametrize('failure', [OSError(errno.EBADF, 'bad descriptor'), OSError(errno.EINVAL, 'bad argument'), OSError(errno.EIO, 'I/O'), KeyboardInterrupt()])
 def test_non_contention_and_interrupt_release_mutex(monkeypatch, failure):
-    real_locking = client.msvcrt.locking
+    real_locking = file_lock._lock_fd
     def fail(*args):
         raise failure
-    monkeypatch.setattr(client.msvcrt, 'locking', fail)
+    monkeypatch.setattr(file_lock, '_lock_fd', fail)
     monkeypatch.setattr(client.time, 'sleep', lambda _: pytest.fail('must not retry'))
     with pytest.raises(type(failure)):
         with client._locked_daemon_start('failed'):
             pytest.fail('entered')
-    monkeypatch.setattr(client.msvcrt, 'locking', real_locking)
+    monkeypatch.setattr(file_lock, '_lock_fd', real_locking)
     with client._locked_daemon_start('failed'):
         pass
 
 
 def test_explicit_access_denied_is_not_contention(monkeypatch):
-    failure = OSError(errno.EACCES, 'denied')
-    failure.winerror = 5
-    monkeypatch.setattr(client.msvcrt, 'locking', lambda *args: (_ for _ in ()).throw(failure))
+    failure = OSError(errno.EPERM, 'denied')
+    monkeypatch.setattr(file_lock, '_lock_fd', lambda *args: (_ for _ in ()).throw(failure))
     monkeypatch.setattr(client.time, 'sleep', lambda _: pytest.fail('must not retry'))
     with pytest.raises(OSError) as caught:
         with client._locked_daemon_start('denied'):
@@ -69,15 +68,15 @@ def test_timeout_never_enters_startup_or_unlocks(monkeypatch):
     monkeypatch.setattr(client.time, 'monotonic', lambda: clock[0])
     monkeypatch.setattr(client.time, 'sleep', lambda seconds: clock.__setitem__(0, clock[0] + seconds))
     modes = []
-    def busy(fd, mode, size):
-        modes.append(mode)
+    def busy(fd, blocking):
+        modes.append(blocking)
         raise OSError(errno.EACCES, 'locked')
-    monkeypatch.setattr(client.msvcrt, 'locking', busy)
+    monkeypatch.setattr(file_lock, '_lock_fd', busy)
     monkeypatch.setattr(client, '_ensure_daemon_locked', lambda **kw: pytest.fail('startup entered'))
     with pytest.raises(client.DaemonStartLockTimeout) as caught:
         client.ensure_daemon(context='busy')
     assert clock[0] == pytest.approx(.125)
-    assert set(modes) == {client.msvcrt.LK_NBLCK}
+    assert set(modes) == {False}
     payload = cli._exception_error_payload('rdc_tool.cli', caught.value)
     assert payload['error']['code'] == 'daemon_start_lock_timeout'
     assert caught.value.details['waiting_for'] == 'file_lock'
@@ -99,7 +98,7 @@ def test_thread_mutex_and_file_retry_share_one_deadline(monkeypatch):
     monkeypatch.setattr(client, 'DAEMON_START_LOCK_TIMEOUT_S', .2)
     monkeypatch.setattr(client.time, 'monotonic', lambda: clock[0])
     monkeypatch.setattr(client.time, 'sleep', lambda seconds: clock.__setitem__(0, clock[0] + seconds))
-    monkeypatch.setattr(client.msvcrt, 'locking', lambda *args: (_ for _ in ()).throw(OSError(errno.EACCES, 'locked')))
+    monkeypatch.setattr(file_lock, '_lock_fd', lambda *args: (_ for _ in ()).throw(OSError(errno.EACCES, 'locked')))
     with pytest.raises(client.DaemonStartLockTimeout):
         with client._locked_daemon_start('deadline'):
             pytest.fail('entered')

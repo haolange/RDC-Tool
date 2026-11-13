@@ -1,15 +1,17 @@
-"""Client utilities for RDC-Tool daemon over Windows named pipes."""
+"""Client utilities for RDC-Tool daemon over platform-local IPC."""
 
 from __future__ import annotations
 
 import json
 import os
 import secrets
+import signal
 import subprocess
 import sys
 import time
 import threading
-import msvcrt
+from rdc_tool.file_lock import unlock
+from rdc_tool.daemon import transport
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from multiprocessing.connection import Client
@@ -87,7 +89,7 @@ def _locked_daemon_start(context: str):
                 yield
             finally:
                 handle.seek(0)
-                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                unlock(handle)
     finally:
         mutex.release()
 
@@ -180,7 +182,7 @@ def session_state_path(context: Optional[str] = "default") -> Path:
 
 
 def _pipe_address(pipe_name: str) -> str:
-    return rf"\\.\pipe\{pipe_name}"
+    return transport.address(pipe_name)
 
 
 def _ensure_state_dir() -> None:
@@ -521,6 +523,16 @@ def _is_windows_process_running(pid: int) -> bool:
 
 
 def _kill_process(pid: int) -> bool:
+    if int(pid) <= 0 or int(pid) == os.getpid():
+        return False
+    if os.name != "nt":
+        try:
+            os.kill(int(pid), signal.SIGKILL)
+            return True
+        except ProcessLookupError:
+            return True
+        except OSError:
+            return False
     try:
         proc = subprocess.run(
             ["taskkill", "/PID", str(int(pid)), "/F", "/T"],
@@ -538,7 +550,20 @@ def _kill_process(pid: int) -> bool:
 def _is_process_running(pid: int) -> bool:
     if os.name == "nt":
         return _is_windows_process_running(pid)
-    return False
+    if int(pid) <= 0:
+        return False
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    # A zombie has exited but has not yet been reaped by its parent.
+    try:
+        state = Path(f"/proc/{int(pid)}/stat").read_text().rsplit(")", 1)[1].split()[0]
+        return state != "Z"
+    except (OSError, IndexError):
+        return True
 
 
 def owner_lost_should_stop(
@@ -621,7 +646,7 @@ def daemon_request(
         raise RuntimeError("No active daemon state. Run `rdc-tool daemon start` first.")
     address = _pipe_address(pipe_name)
     payload = {"token": token, "method": str(method), "params": dict(params or {})}
-    conn = Client(address=address, family="AF_PIPE")
+    conn = Client(address=address, **transport.connection_options(token))
     try:
         conn.send(payload)
         if timeout:

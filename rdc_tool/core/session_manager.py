@@ -378,6 +378,16 @@ class SessionManager:
             fix_hint="Verify that the .rdc file is valid and supported by this RenderDoc runtime.",
         )
         state.capture_file = cap
+        support_query = getattr(cap, "LocalReplaySupport", None)
+        if callable(support_query):
+            support = await self._offload(support_query)
+            unsupported = getattr(getattr(rd, "ReplaySupport", None), "Unsupported", None)
+            if unsupported is not None and support == unsupported:
+                raise SessionError(
+                    code="local_replay_unsupported",
+                    message="This RenderDoc runtime cannot replay the capture API on this host.",
+                    details={"capture_path": str(rdc_path), "local_replay_support": str(support)},
+                )
 
         status, controller = await self._offload(cap.OpenCapture, rd.ReplayOptions(), None)
         _check_status(

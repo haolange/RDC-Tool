@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 
-import msvcrt
+from rdc_tool.file_lock import lock, unlock
 
 from rdc_tool.context_snapshot import default_preview_state, normalize_context_id, normalize_preview_state
 from rdc_tool.io_utils import atomic_append_jsonl, atomic_write_json
@@ -67,12 +67,12 @@ def _locked_context_state_file(context: Optional[str] = "default"):
     with _context_mutex(context):
         with open(lock_path, "a+b") as handle:
             handle.seek(0)
-            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+            lock(handle)
             try:
                 yield
             finally:
                 handle.seek(0)
-                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                unlock(handle)
 
 
 def _normalize_int(value: Any, default: int = 0) -> int:

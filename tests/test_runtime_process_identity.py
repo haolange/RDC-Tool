@@ -52,7 +52,11 @@ def test_actual_os_birth_is_stable_for_live_current_and_parent_processes(monkeyp
     assert result["status"] == "available"
     assert result["worker"]["pid"] == os.getpid()
     assert result["daemon"]["pid"] == os.getppid()
-    assert result["worker"]["start_generation"] != result["daemon"]["start_generation"]
+    # Linux birth ticks have finite resolution: parent and child may share a tick.
+    # Process identity is the pair (pid, birth), not the birth value alone.
+    assert result["worker"]["start_generation"]
+    assert result["daemon"]["start_generation"]
+    assert result["worker"] != result["daemon"]
     assert result == identity.runtime_process_identity()
 
 

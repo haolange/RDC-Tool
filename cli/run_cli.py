@@ -90,6 +90,8 @@ def _print_launcher_help() -> None:
         "commands:",
         "  version",
         "  doctor",
+        "  inspect-rdc <capture> --output-dir <dir> (static inspection, no replay)",
+        "  stdio",
         "  tools list|search|describe",
         "  daemon start|stop|status",
         "  context status|update|list|clear",

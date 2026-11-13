@@ -2,10 +2,13 @@
 set -eu
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 tools_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
-python_cmd="$tools_root/binaries/windows/x64/python/python.exe"
+case "$(uname -s)" in
+  Linux*) python_cmd="${RDC_TOOL_PYTHON:-python3}" ;;
+  *) python_cmd="$tools_root/binaries/windows/x64/python/python.exe" ;;
+esac
 python_script="$tools_root/cli/run_cli.py"
-if [ ! -f "$python_cmd" ]; then
-  echo "Bundled Python is missing. Repair this RDC-Tool installation." >&2
+if ! command -v "$python_cmd" >/dev/null 2>&1; then
+  echo "Python is missing. Set RDC_TOOL_PYTHON to a compatible Python 3.11+ interpreter." >&2
   exit 2
 fi
 if command -v cygpath >/dev/null 2>&1; then

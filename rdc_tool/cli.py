@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from rdc_tool.native_platform import is_windows
+
 import argparse
 import asyncio
 import ctypes
@@ -43,7 +45,7 @@ from rdc_tool.runtime_paths import (
     tools_root,
 )
 from rdc_tool.runtime_requirements import missing_dependencies
-from rdc_tool.runtime_identity import loaded_runtime_identity, native_manifest_status
+from rdc_tool.runtime_identity import loaded_runtime_identity, host_native_manifest_status
 from rdc_tool.timeout_policy import daemon_exec_timeout_s
 
 EXIT_OK = 0
@@ -66,6 +68,7 @@ def _print_launcher_help() -> None:
         "commands:",
         "  version",
         "  doctor",
+        "  inspect-rdc <capture> --output-dir <dir> (static inspection, no replay)",
         "  tools list|search|describe",
         "  daemon start|stop|status",
         "  context status|update|list|clear",
@@ -128,7 +131,7 @@ def _parse_json_object(raw: str, *, source: str) -> Dict[str, Any]:
 
 
 def _windows_command_line() -> str:
-    if os.name != "nt":
+    if not is_windows():
         return ""
     try:
         get_command_line = ctypes.windll.kernel32.GetCommandLineW
@@ -417,18 +420,22 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     dependencies_missing = missing_dependencies()
     python_ok, python_failures, python_details = validate_bundled_python_layout()
 
-    renderdoc_dll = binaries_root() / "renderdoc.dll"
+    from rdc_tool.native_platform import native_library_path, native_binding_path
+    renderdoc_dll = native_library_path(binaries_root())
     renderdoc_json = binaries_root() / "renderdoc.json"
-    renderdoc_pyd = pymodules_dir() / "renderdoc.pyd"
+    renderdoc_pyd = native_binding_path(pymodules_dir())
     renderdoc_failures = [
         str(path)
-        for path in (renderdoc_dll, renderdoc_json, renderdoc_pyd)
+        for path in ((renderdoc_dll, renderdoc_json, renderdoc_pyd) if is_windows() else (renderdoc_dll, renderdoc_pyd))
         if not path.is_file()
     ]
 
     android_failures = [str(android_binaries_root() / abi / f"org.renderdoc.renderdoccmd.{abi}.apk")
                         for abi in ("arm32", "arm64")
                         if not (android_binaries_root() / abi / f"org.renderdoc.renderdoccmd.{abi}.apk").is_file()]
+
+    if not is_windows():
+        android_failures = []  # Android and shader utilities are optional host capabilities.
 
     catalog_error = ""
     catalog_count = 0
@@ -460,7 +467,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     host_tools_ok, host_tool_failures = validate_bundled_host_tools()
     spirv_as = host_tools["spirv_as"]["path"]
     spirv_dis = host_tools["spirv_dis"]["path"]
-    native_build = native_manifest_status(root)
+    native_build = host_native_manifest_status(root)
     loaded_runtime = loaded_runtime_identity(binaries_root(), pymodules_dir())
     details = {
         "product": "rdc-tool",
@@ -528,8 +535,8 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         not dependencies_missing
         and python_ok
         and not android_failures
-        and host_tools_ok
-        and all(item["available"] for item in host_tools.values())
+        and (not is_windows() or host_tools_ok)
+        and (not is_windows() or all(item["available"] for item in host_tools.values()))
         and not renderdoc_failures
         and native_build["status"] != "invalid"
         and loaded_runtime["status"] != "mismatch"
@@ -561,7 +568,7 @@ def _version_payload() -> Dict[str, Any]:
         data={
             "tool_version": TOOL_VERSION,
             "schema_version": SCHEMA_VERSION,
-            "platform": "windows-x64" if os.name == "nt" else sys.platform,
+            "platform": "windows-x64" if is_windows() else sys.platform,
             "tools_root": str(root),
             "public_commands": ["rdc-tool"],
             "entrypoints": {
@@ -633,6 +640,9 @@ def _completion_words() -> list[str]:
         "image",
         "assert",
         "completion",
+        "stdio",
+        "inspect-rdc",
+        "--output-dir",
         "powershell",
         "bash",
         "zsh",
@@ -1407,6 +1417,14 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--daemon-context", default="default", help="Daemon state namespace (default: default)")
     parser.add_argument("--owner-pid", type=int, default=None, help="Host process PID used for daemon auto-stop")
     sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("stdio", help="Run a foreground JSON-lines worker over stdin/stdout (no listener)")
+    p_inspect = sub.add_parser(
+        "inspect-rdc",
+        help="Inspect an RDC file statically without replay or a daemon",
+        description="Inspect RDC container data without replay. This does not create a GPU replay session.",
+    )
+    p_inspect.add_argument("capture", type=Path, metavar="CAPTURE", help="RDC capture file to inspect")
+    p_inspect.add_argument("--output-dir", type=Path, required=True, metavar="DIR", help="Directory for static inspection artifacts")
 
     def add_session_arg(command_parser: argparse.ArgumentParser) -> None:
         command_parser.add_argument("--session-id", default=None)
@@ -1790,7 +1808,18 @@ def main() -> None:
     args = parser.parse_args()
     logging.getLogger().setLevel(getattr(logging, os.environ.get("RDC_TOOL_LOG_LEVEL", "WARNING").upper(), logging.WARNING))
     try:
-        code = asyncio.run(_main_async(args))
+        if args.command == "inspect-rdc":
+            from rdc_tool.static_inspect import inspect_capture
+            result = inspect_capture(args.capture, args.output_dir)
+            if not isinstance(result, dict):
+                raise TypeError("Static capture inspection must return a JSON object")
+            _print_json(result)
+            code = EXIT_RUNTIME_ERR if result.get("ok") is False else EXIT_OK
+        elif args.command == "stdio":
+            from rdc_tool.stdio_host import run_stdio
+            code = run_stdio(str(args.daemon_context))
+        else:
+            code = asyncio.run(_main_async(args))
     except Exception as exc:  # noqa: BLE001
         _print_json(_exception_error_payload("rdc_tool.cli", exc, transport="cli"))
         code = EXIT_RUNTIME_ERR

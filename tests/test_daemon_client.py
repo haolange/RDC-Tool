@@ -517,7 +517,7 @@ def test_daemon_request_timeout_returns_structured_details(monkeypatch, tmp_path
     _configure_runtime_dir(monkeypatch, tmp_path)
 
     class _FakeClient:
-        def __init__(self, *, address: str, family: str) -> None:
+        def __init__(self, *, address: str, family: str, authkey: bytes | None = None) -> None:
             self.address = address
             self.family = family
 

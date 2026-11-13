@@ -116,3 +116,27 @@ def query_calls(rd: Any, controller: Any, *, event_id: int | None, chunk_indices
             "next_offset": next_offset if next_offset < len(associations) else None,
             "node_budget_exhausted": budget[0] == 0,
             "scope": "captured_api_calls"}
+
+
+def read_container_info(rd: Any, path: str) -> dict[str, Any]:
+    """Read the RDC container without creating a replay device.
+
+    LocalReplaySupport is deliberately not presented as proof of replayability:
+    some drivers return Supported before OpenCapture discovers a missing backend.
+    """
+    capture = rd.OpenCaptureFile()
+    try:
+        status = capture.OpenFile(path, "", None)
+        if status != rd.ResultCode.Succeeded:
+            raise RuntimeError(f"OpenFile: {status}")
+        sections = []
+        for index in range(capture.GetSectionCount()):
+            props = capture.GetSectionProperties(index)
+            sections.append({"index": index, "name": str(props.name),
+                "type": int(props.type), "version": int(props.version),
+                "flags": int(props.flags), "compressed_size": int(props.compressedSize),
+                "uncompressed_size": int(props.uncompressedSize)})
+        return {"status": "available", "scope": "capture_container_only",
+                "replay_verified": False, "driver": str(capture.DriverName()), "sections": sections}
+    finally:
+        capture.Shutdown()

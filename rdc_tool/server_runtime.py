@@ -1437,6 +1437,8 @@ async def _create_preview_binding(
     *,
     title: str,
 ) -> PreviewBinding:
+    if PreviewWindowHost is None:
+        raise _preview_error("unsupported_platform", "Native preview windows are not implemented on this platform; use headless exports.", context_id=context_id)
     host = PreviewWindowHost(
         title=title,
         on_closed=lambda by_user, ctx=context_id: _preview_window_closed(ctx, by_user),
@@ -6116,8 +6118,10 @@ async def runtime_startup() -> None:
     ensure_runtime_dirs()
     bootstrap = bootstrap_renderdoc_runtime(probe_import=False)
     renderdoc_dir = bootstrap.pymodules_dir
-    if not (renderdoc_dir / "renderdoc.pyd").is_file():
-        _record_log("warning", f"renderdoc runtime missing: {renderdoc_dir / 'renderdoc.pyd'}")
+    from rdc_tool.native_platform import native_binding_path
+    binding_path = native_binding_path(renderdoc_dir)
+    if not binding_path.is_file():
+        _record_log("warning", f"renderdoc runtime missing: {binding_path}")
     for item in bootstrap.dll_dir_errors:
         _record_log("warning", f"renderdoc bootstrap warning: {item}")
 
@@ -6438,9 +6442,9 @@ async def _core_capabilities(*, detail: str) -> Dict[str, Any]:
     summary = {
         "replay": _capability_entry(
             True,
-            reason="Bundled RenderDoc replay runtime is available.",
+            reason="Native RenderDoc runtime is available; capture API and device compatibility are checked when opening replay.",
             optional=False,
-            source="bundled_runtime",
+            source="native_runtime",
         ),
         "remote": _capability_entry(
             bool(_runtime.enable_remote and remote_connected),
@@ -7348,6 +7352,11 @@ async def _dispatch_capture(action: str, args: Dict[str, Any]) -> str:
             "size_bytes": int(path.stat().st_size) if path.exists() else 0,
             "mtime_utc": datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat() if path.exists() else None,
         }
+        from rdc_tool.core.capture_queries import read_container_info
+        try:
+            metadata["container"] = await _offload(read_container_info, _get_rd(), str(path))
+        except Exception as exc:
+            metadata["container"] = {"status": "unavailable", "reason": str(exc), "replay_verified": False}
         return _ok(metadata=_sanitize_dict(metadata))
 
 

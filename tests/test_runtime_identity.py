@@ -1,5 +1,14 @@
 from __future__ import annotations
 
+import pytest
+
+@pytest.fixture(autouse=True)
+def _windows_contract(monkeypatch):
+    from rdc_tool import runtime_identity, native_platform
+    monkeypatch.setattr(runtime_identity, "is_windows", lambda: True)
+    monkeypatch.setattr(native_platform, "is_windows", lambda: True)
+
+
 import hashlib
 import io
 import json
