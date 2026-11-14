@@ -361,6 +361,7 @@ def test_pixel_history_resolves_explicit_output_target(monkeypatch: pytest.Monke
         sample = 0
 
     resolution_calls: list[tuple[int, dict[str, int]]] = []
+    binding_calls: list[int] = []
 
     async def _fake_get_controller(session_id: str) -> object:
         return object()
@@ -390,6 +391,11 @@ def test_pixel_history_resolves_explicit_output_target(monkeypatch: pytest.Monke
     async def _fake_truth(session_id: str, event_id: int) -> dict[str, object]:
         return {"binding_truth_level": "binding_verified", "summary_degraded_reasons": []}
 
+    async def _fake_bindings(session_id, event_id, history, controller):
+        binding_calls.append(event_id)
+        return [{"event_id": history[0]["event_id"], "binding_truth_level": "binding_verified"}]
+
+    monkeypatch.setattr(server.server_runtime, "_pixel_history_writer_bindings", _fake_bindings)
     monkeypatch.setattr(server.server_runtime, "_get_controller", _fake_get_controller)
     monkeypatch.setattr(server.server_runtime, "_ensure_event", _fake_ensure_event)
     monkeypatch.setattr(server.server_runtime, "_resolve_visual_target_for_event", _fake_resolve_visual_target_for_event)
@@ -407,6 +413,10 @@ def test_pixel_history_resolves_explicit_output_target(monkeypatch: pytest.Monke
             )
         )
     )
+    without_bindings = json.loads(asyncio.run(server._dispatch_texture("get_pixel_history", {
+        "session_id": "sess_demo", "event_id": 77, "target": {"rt_index": 1},
+        "x": 4, "y": 5, "include_shaders": False,
+    })))
     conflict = json.loads(
         asyncio.run(
             server._dispatch_texture(
@@ -427,8 +437,75 @@ def test_pixel_history_resolves_explicit_output_target(monkeypatch: pytest.Monke
     assert payload["resolved_event_id"] == 77
     assert payload["history"][0]["shader_out"]["color_rgba"] == [0.1, 0.2, 0.3, 1.0]
     assert payload["history"][0]["pre_mod"]["valid"] is True
-    assert resolution_calls == [(77, {"rt_index": 1})]
+    assert payload["history_bindings"] == [{"event_id": 77, "binding_truth_level": "binding_verified"}]
+    assert payload["history_bindings_status"] == "complete"
+    assert without_bindings["history_bindings"] is None
+    assert without_bindings["history_bindings_status"] == "not_requested"
+    assert binding_calls == [77]
+    assert resolution_calls == [(77, {"rt_index": 1}), (77, {"rt_index": 1})]
     assert conflict["success"] is False and conflict["code"] == "validation_error"
+
+
+
+def test_pixel_history_bindings_follow_writer_events_and_restore_query_event(monkeypatch: pytest.MonkeyPatch) -> None:
+    runtime = server.server_runtime
+    observed: list[tuple[object, ...]] = []
+
+    class _Snapshot:
+        def model_dump(self, mode: str) -> dict[str, object]:
+            return {"api": "Vulkan", "shaders": [{"resource_id": "shader"}],
+                    "render_targets": [{"resource_id": "target"}]}
+
+    class _Pipeline:
+        async def snapshot_pipeline(self, *, session_id, event_id, session_manager, sections):
+            observed.append(("inspect", event_id, tuple(sections)))
+            if event_id == 21:
+                raise RuntimeError("writer pipeline unavailable")
+            return _Snapshot()
+
+    class _Controller:
+        def SetFrameEvent(self, event_id: int, force: bool) -> None:
+            observed.append(("restore", event_id, force))
+
+    monkeypatch.setattr(runtime, "_pipeline_service", _Pipeline())
+    monkeypatch.setattr(runtime, "_session_backend_record", lambda *args, **kwargs: ("remote", {}))
+    bindings = asyncio.run(runtime._pixel_history_writer_bindings("session", 50,
+        [{"event_id": 11}, {"event_id": 11}, {"event_id": 21}], _Controller()))
+    assert observed == [("inspect", 11, ("shaders", "output_targets")),
+                        ("inspect", 21, ("shaders", "output_targets")), ("restore", 50, True)]
+    assert bindings[0]["event_id"] == 11
+    assert bindings[0]["binding_truth_level"] == "binding_verified"
+    assert bindings[0]["shaders"] == [{"resource_id": "shader"}]
+    assert bindings[0]["render_targets"] == [{"resource_id": "target"}]
+    assert bindings[1] == {"event_id": 21, "binding_truth_level": "binding_degraded",
+                           "error": {"code": "history_event_binding_unavailable",
+                                     "message": "writer pipeline unavailable"}}
+
+
+def test_pixel_history_writer_binding_restore_failure_marks_session_for_recovery(monkeypatch: pytest.MonkeyPatch) -> None:
+    runtime = server.server_runtime
+    recorded: list[dict[str, object]] = []
+
+    class _Snapshot:
+        def model_dump(self, mode: str) -> dict[str, object]:
+            return {"api": "Vulkan", "shaders": [{"resource_id": "shader"}],
+                    "render_targets": [{"resource_id": "target"}]}
+
+    class _Pipeline:
+        async def snapshot_pipeline(self, **kwargs):
+            return _Snapshot()
+
+    class _Controller:
+        def SetFrameEvent(self, event_id: int, force: bool) -> None:
+            raise RuntimeError("restore failed")
+
+    monkeypatch.setattr(runtime, "_pipeline_service", _Pipeline())
+    monkeypatch.setattr(runtime, "_session_backend_record", lambda *args, **kwargs: ("remote", {}))
+    monkeypatch.setattr(runtime, "_update_context_session_record", lambda session, **fields: recorded.append(fields))
+    with pytest.raises(runtime.CoreError) as raised:
+        asyncio.run(runtime._pixel_history_writer_bindings("session", 50, [{"event_id": 11}], _Controller()))
+    assert raised.value.code == "replay_restore_failed"
+    assert recorded[0]["recovery_status"] == "requires_restart"
 
 
 def test_pixel_history_preserves_native_modification_values(monkeypatch: pytest.MonkeyPatch) -> None:

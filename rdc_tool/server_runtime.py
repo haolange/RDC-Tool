@@ -5605,6 +5605,53 @@ def _pixel_history_item_payload(item: Any, color_type: str = "unknown") -> Dict[
     }
 
 
+async def _pixel_history_writer_bindings(
+    session_id: str, event_id: int, history: Sequence[Dict[str, Any]], controller: Any,
+) -> List[Dict[str, Any]]:
+    """Read binding evidence at history events, then restore the requested event."""
+    from rdc_tool.core.replay_read import ReplayRestoreError, preserving_event
+
+    writer_events = list(dict.fromkeys(int(item["event_id"]) for item in history))
+    if not writer_events:
+        return []
+
+    async def inspect() -> List[Dict[str, Any]]:
+        bindings: List[Dict[str, Any]] = []
+        for writer_event in writer_events:
+            try:
+                if writer_event <= 0:
+                    raise ValueError("Pixel history did not provide a valid writer event")
+                if _pipeline_service is None:
+                    raise RuntimeError("Pipeline service is unavailable")
+                snapshot = await _pipeline_service.snapshot_pipeline(
+                    session_id=session_id, event_id=writer_event, session_manager=_session_manager,
+                    sections=["shaders", "output_targets"],
+                )
+                state = snapshot.model_dump(mode="json")
+                truth = _pipeline_truth_metadata(session_id, state)
+                bindings.append({
+                    "event_id": writer_event,
+                    "shaders": state["shaders"],
+                    "render_targets": state["render_targets"],
+                    "binding_truth_level": truth["binding_truth_level"],
+                    "summary_degraded_reasons": truth["summary_degraded_reasons"],
+                })
+            except Exception as exc:
+                bindings.append({
+                    "event_id": writer_event,
+                    "binding_truth_level": "binding_degraded",
+                    "error": {"code": "history_event_binding_unavailable", "message": str(exc)},
+                })
+        return bindings
+
+    try:
+        return await preserving_event(controller, event_id, inspect)
+    except ReplayRestoreError as exc:
+        _update_context_session_record(session_id, recovery_status="requires_restart", last_error=str(exc))
+        raise CoreError(code="replay_restore_failed", message=str(exc), category="runtime",
+                        details={"session_id": session_id, "restored": False}) from exc
+
+
 def _pixel_history_summary(items: Sequence[Dict[str, Any]], event_id: int) -> Dict[str, Any]:
     matched = [item for item in items if int(item.get("event_id") or 0) == int(event_id)]
     passed = [item for item in matched if bool(item.get("passed"))]
@@ -9318,8 +9365,14 @@ async def _dispatch_texture(action: str, args: Dict[str, Any]) -> str:
         color_type = _pixel_history_color_type(texture_desc)
         history = [_pixel_history_item_payload(item, color_type) for item in history_raw]
         truth_meta = await _event_truth_metadata(session_id, int(event_id))
+        history_bindings = None
+        if args.get("include_shaders", True):
+            history_bindings = await _pixel_history_writer_bindings(session_id, int(event_id), history, controller)
         return _ok(
             history=history,
+            history_bindings=history_bindings,
+            history_bindings_status=("not_requested" if history_bindings is None else
+                                     "partial" if any("error" in item for item in history_bindings) else "complete"),
             resolved_event_id=int(event_id),
             texture_id=str(rid),
             target_metadata={
