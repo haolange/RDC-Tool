@@ -9470,6 +9470,28 @@ async def _dispatch_texture(action: str, args: Dict[str, Any]) -> str:
         payload["image_path"] = payload.get("saved_path") or artifact_path
         payload["name_info"] = name_info
         payload["texture_format"] = _texture_format_name(texture_desc)
+        texture_width = int(getattr(texture_desc, "width", 0) or 0)
+        texture_height = int(getattr(texture_desc, "height", 0) or 0)
+        image_width = _as_int(meta.get("width"), 0)
+        image_height = _as_int(meta.get("height"), 0)
+        if texture_width > 0 and texture_height > 0 and image_width > 0 and image_height > 0:
+            effective_scale = min(image_width / texture_width, image_height / texture_height)
+            content_width = texture_width * effective_scale
+            content_height = texture_height * effective_scale
+            payload["image_mapping"] = {
+                "status": "available",
+                "source_size": {"width": texture_width, "height": texture_height},
+                "effective_scale": effective_scale,
+                "content_rect": {
+                    "x": (image_width - content_width) / 2,
+                    "y": (image_height - content_height) / 2,
+                    "width": content_width,
+                    "height": content_height,
+                },
+                "flip_y": view["flip_y"],
+            }
+        else:
+            payload["image_mapping"] = {"status": "unavailable", "reason": "dimensions_unavailable"}
         truth_meta = await _event_truth_metadata(session_id, int(event_id))
         payload["resolved_event_id"] = int(event_id)
         payload["texture_id"] = str(source_texture_id)

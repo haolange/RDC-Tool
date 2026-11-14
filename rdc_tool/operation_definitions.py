@@ -4029,7 +4029,7 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                    'constraints.<br>flip_y (boolean, optional): See input_schema for '
                    'constraints.<br>include_alpha (boolean, optional): See input_schema for '
                    'constraints.',
-  'returns_raw': 'ok (bool)<br>data (dict): {image_path}<br>artifacts (list)<br>error '
+  'returns_raw': 'ok (bool)<br>data (dict): {image_path, image_mapping}. image_mapping reports native source_size, effective_scale, image-space content_rect and flip_y, or an unavailable reason when dimensions are missing.<br>artifacts (list)<br>error '
                  '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
   'param_names': ['session_id',
                   'texture_id',

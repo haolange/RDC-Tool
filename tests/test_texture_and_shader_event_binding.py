@@ -60,6 +60,47 @@ def _restore_runtime_services() -> None:
         server.server_runtime._session_manager = original_session_manager
 
 
+@pytest.mark.parametrize("texture_size", [(800, 600), (0, 0)])
+def test_render_overlay_reports_native_to_image_mapping(
+    monkeypatch: pytest.MonkeyPatch, texture_size: tuple[int, int],
+) -> None:
+    async def descriptor(session_id: str, texture_id: object, *, event_id: int):
+        return str(texture_id), SimpleNamespace(width=texture_size[0], height=texture_size[1], name="")
+
+    async def bindings(session_id: str, event_id: int):
+        return {}
+
+    async def truth(session_id: str, event_id: int):
+        return {"binding_truth_level": "binding_verified", "summary_degraded_reasons": []}
+
+    async def render_event(**kwargs):
+        assert kwargs["view_config"]["flip_y"] is True
+        return SimpleNamespace(), {"width": 1920, "height": 1080, "scale": 0}
+
+    monkeypatch.setattr(server.server_runtime, "_get_texture_descriptor", descriptor)
+    monkeypatch.setattr(server.server_runtime, "_binding_name_index_for_event", bindings)
+    monkeypatch.setattr(server.server_runtime, "_event_truth_metadata", truth)
+    monkeypatch.setattr(server.server_runtime, "_artifact_path", lambda artifact: "overlay.png")
+    server.server_runtime._session_manager = SimpleNamespace()
+    server.server_runtime._render_service = SimpleNamespace(render_event=render_event)
+
+    payload = json.loads(asyncio.run(server._dispatch_texture("render_overlay", {
+        "session_id": "sess_demo", "texture_id": "ResourceId::24",
+        "event_id": 42, "overlay": "Drawcall", "flip_y": True,
+    })))
+
+    assert payload["success"] is True
+    mapping = payload["image_mapping"]
+    if texture_size == (0, 0):
+        assert mapping == {"status": "unavailable", "reason": "dimensions_unavailable"}
+    else:
+        assert mapping["status"] == "available"
+        assert mapping["source_size"] == {"width": 800, "height": 600}
+        assert mapping["effective_scale"] == pytest.approx(1.8)
+        assert mapping["content_rect"] == pytest.approx({"x": 240, "y": 0, "width": 1440, "height": 1080})
+        assert mapping["flip_y"] is True
+
+
 def test_texture_event_bound_tools_respect_explicit_event_id(monkeypatch: pytest.MonkeyPatch) -> None:
     seen_events: list[int] = []
 

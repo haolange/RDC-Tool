@@ -1,7 +1,7 @@
 {
   "schema_version": "1",
   "source_path": "rdc_tool/operation_definitions.py",
-  "fingerprint": "3d8a65d0af4fcba0a08f2cab397a5a8e53e3ee4e92cbe466cb080bcd2b5d468b",
+  "fingerprint": "f36f34a160318490b1f0152cf4ac7b02f03bb1f66c566f505da590044531df7a",
   "tool_count": 129,
   "groups": {
     "3.7，缓冲区与网格数据访问 (Buffer & Mesh Data Access)": 6,
@@ -6857,7 +6857,7 @@
       "group": "3.6，纹理数据访问与分析 (Texture Data Access & Analysis)",
       "description": "用于将叠加层 (overlay) 渲染到纹理上并导出，例如绘制调用高亮、线框、视口/裁剪 (viewport/scissor) 或过度绘制 (quad overdraw) 等。",
       "parameter_raw": "session_id (string): session_id (str)<br>texture_id (string): texture_id (str)<br>overlay (string): overlay (str): 叠加层类型，可选 'None', 'Drawcall', 'Wireframe', 'ViewportScissor', 'Overdraw'<br>event_id (integer, optional): event_id (int, 可选): 叠加层关联的事件 ID<br>output_path (string, optional): output_path (str, 可选)<br>image_format (string, optional): image_format (str, 可选, 默认 'png')<br>channels (string, optional): See input_schema for constraints.<br>file_format (string, optional): See input_schema for constraints.<br>flip_y (boolean, optional): See input_schema for constraints.<br>include_alpha (boolean, optional): See input_schema for constraints.",
-      "returns_raw": "ok (bool)<br>data (dict): {image_path}<br>artifacts (list)<br>error (dict|null)<br>meta (dict)<br>projections (dict, 可选)",
+      "returns_raw": "ok (bool)<br>data (dict): {image_path, image_mapping}. image_mapping reports native source_size, effective_scale, image-space content_rect and flip_y, or an unavailable reason when dimensions are missing.<br>artifacts (list)<br>error (dict|null)<br>meta (dict)<br>projections (dict, 可选)",
       "param_names": [
         "session_id",
         "texture_id",
