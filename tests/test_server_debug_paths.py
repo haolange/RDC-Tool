@@ -426,6 +426,7 @@ def test_texture_get_pixel_history_times_out(monkeypatch) -> None:
     monkeypatch.setattr(server.server_runtime, "_get_controller", _fake_get_controller)
     monkeypatch.setattr(server.server_runtime, "_ensure_event", _fake_ensure_event)
     monkeypatch.setattr(server.server_runtime, "_resolve_texture_id", _fake_resolve_texture_id)
+    monkeypatch.setattr(server.server_runtime, "pixel_history_input_attachment_conflict", lambda *args: None)
     monkeypatch.setattr(server.server_runtime, "_pixel_history_raw", _slow_history)
     monkeypatch.setattr(server.server_runtime, "PIXEL_HISTORY_TIMEOUT_S", 0.01)
     monkeypatch.setattr(server.server_runtime, "_get_rd", lambda: SimpleNamespace(Subresource=_FakeSubresource))

@@ -6,6 +6,41 @@ import struct
 from typing import Any
 
 
+def pixel_history_input_attachment_conflict(rd: Any, controller: Any, resource_id: Any,
+                                            event_id: int) -> tuple[int, int] | None:
+    """Identify a recorded Vulkan image used as both input and output without input usage."""
+    if controller.GetAPIProperties().pipelineType != rd.GraphicsAPI.Vulkan:
+        return None
+    uses = controller.GetUsage(resource_id)
+    inputs = {int(item.eventId) for item in uses
+              if item.usage == rd.ResourceUsage.InputTarget and 0 < int(item.eventId) <= event_id}
+    outputs = {int(item.eventId) for item in uses
+               if item.usage in (rd.ResourceUsage.ColorTarget, rd.ResourceUsage.DepthStencilTarget)
+               and 0 < int(item.eventId) <= event_id}
+    conflicts = inputs & outputs
+    if not conflicts:
+        return None
+    resource = next((item for item in controller.GetResources() if item.resourceId == resource_id), None)
+    structured = controller.GetStructuredFile()
+    if resource is None or structured is None:
+        return None
+    for index in resource.initialisationChunks:
+        if not 0 <= int(index) < len(structured.chunks):
+            raise ValueError("Resource initialization chunk is outside the structured capture")
+        chunk = structured.chunks[int(index)]
+        if str(chunk.name) != "vkCreateImage":
+            continue
+        image = chunk.FindChild("Image")
+        create_info = chunk.FindChild("CreateInfo")
+        usage = create_info.FindChild("usage") if create_info is not None else None
+        if image is not None and image.AsResourceId() == resource_id and usage is not None:
+            flags = int(usage.AsInt())
+            if flags & 0x80 == 0:  # VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT
+                return min(conflicts), flags
+            return None
+    return None
+
+
 def shader_content_hash(reflection: Any) -> str | None:
     raw = getattr(reflection, "rawBytes", None)
     return hashlib.sha256(bytes(raw)).hexdigest() if raw else None

@@ -3850,7 +3850,9 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                  'for non-first fragments. shader_out is native fragment output, not shader input; '
                  'depth is ModificationValue.depth. Validity does not prove bit-exact FragCoord.z, '
                  'invocation correspondence, or a numerical error bound; reconstructed depth-test '
-                 'flags and quantization do not supply that bound.<br>'
+                 'flags and quantization do not supply that bound. Vulkan images used as both input '
+                 'and output attachments without input-attachment usage return '
+                 'pixel_history_unsupported_input_attachment after replay position restoration.<br>'
                  'artifacts (list)<br>error (dict|null)<br>meta (dict)<br>projections (dict, 可选)',
   'param_names': ['session_id',
                   'texture_id',

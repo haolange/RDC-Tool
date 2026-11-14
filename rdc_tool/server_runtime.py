@@ -70,6 +70,7 @@ from rdc_tool.core.event_graph import EventGraphService
 from rdc_tool.core.patch_engine import PatchEngine, _compiler_output_is_fatal, _shader_build_input_provenance
 from rdc_tool.core.perf_service import PerfService
 from rdc_tool.core.pipeline_service import PipelineService
+from rdc_tool.core.replay_facts import pixel_history_input_attachment_conflict
 from rdc_tool.core.render_service import RenderService
 from rdc_tool.core.session_manager import SessionError, SessionManager
 from rdc_tool.models import PatchSpec, ShaderStage, _new_id
@@ -9324,6 +9325,7 @@ async def _dispatch_texture(action: str, args: Dict[str, Any]) -> str:
         if set(target) - {"texture_id", "rt_index"} or (target.get("texture_id") is not None and target.get("rt_index") is not None):
             return _err("Target requires only one of texture_id or rt_index", code="validation_error")
         controller = await _get_controller(session_id)
+        original_event = _active_event(session_id)
         event_id = await _ensure_event(session_id, _as_int(args["event_id"]) if args.get("event_id") is not None else None)
         if args.get("texture_id") is not None:
             rid = await _resolve_texture_id(session_id, args["texture_id"], event_id=event_id)
@@ -9332,6 +9334,27 @@ async def _dispatch_texture(action: str, args: Dict[str, Any]) -> str:
             rid, texture_desc, _, _ = await _resolve_visual_target_for_event(
                 session_id, event_id, target=target)
         rd = _get_rd()
+        conflict = await _offload(pixel_history_input_attachment_conflict, rd, controller, rid, event_id)
+        if conflict is not None:
+            conflict_event, usage_flags = conflict
+            details = {"context_id": _runtime_context_id(), "session_id": session_id,
+                       "failure_stage": "validate_input_attachment", "usage_event_id": conflict_event,
+                       "image_usage_flags": usage_flags}
+            try:
+                if original_event <= 0 or await _ensure_event(session_id, original_event) != original_event \
+                        or _active_event(session_id) != original_event:
+                    raise RuntimeError("Original replay event was not restored")
+            except Exception as exc:
+                return _err(f"Pixel History unavailable; replay restoration failed: {exc}",
+                            code="pixel_history_unavailable_restore_failed", category="runtime",
+                            details={**details, "replay_state_restored": False})
+            return _err(
+                "Pixel History unavailable: a Vulkan image is used as both input and output attachment "
+                "without VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT. Read the region before and after candidate "
+                "events and confirm it with draw coverage instead.",
+                code="pixel_history_unsupported_input_attachment", category="capability",
+                details={**details, "replay_state_restored": True, "restored_event_id": original_event},
+            )
         sub = rd.Subresource()
         sub.mip = _as_int(args.get("mip"), 0)
         sub.slice = _as_int(args.get("slice"), 0)

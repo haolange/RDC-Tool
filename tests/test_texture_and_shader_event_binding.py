@@ -400,6 +400,7 @@ def test_pixel_history_resolves_explicit_output_target(monkeypatch: pytest.Monke
     monkeypatch.setattr(server.server_runtime, "_ensure_event", _fake_ensure_event)
     monkeypatch.setattr(server.server_runtime, "_resolve_visual_target_for_event", _fake_resolve_visual_target_for_event)
     monkeypatch.setattr(server.server_runtime, "_pixel_history_raw_with_timeout", _fake_history)
+    monkeypatch.setattr(server.server_runtime, "pixel_history_input_attachment_conflict", lambda *args: None)
     monkeypatch.setattr(server.server_runtime, "_event_truth_metadata", _fake_truth)
     monkeypatch.setattr(server.server_runtime, "_get_rd", lambda: SimpleNamespace(
         Subresource=_Subresource, CompType=SimpleNamespace(Float=1)))
@@ -444,6 +445,43 @@ def test_pixel_history_resolves_explicit_output_target(monkeypatch: pytest.Monke
     assert binding_calls == [77]
     assert resolution_calls == [(77, {"rt_index": 1}), (77, {"rt_index": 1})]
     assert conflict["success"] is False and conflict["code"] == "validation_error"
+
+
+def test_pixel_history_rejects_invalid_vulkan_attachment_and_restores_entry(monkeypatch: pytest.MonkeyPatch) -> None:
+    runtime = server.server_runtime
+    active = {"event": 19}
+
+    async def get_controller(session_id: str) -> object:
+        return object()
+
+    async def ensure_event(session_id: str, event_id: int | None) -> int:
+        active["event"] = int(event_id or active["event"])
+        return active["event"]
+
+    async def resolve_texture(session_id: str, texture_id: object, *, event_id: int | None = None) -> object:
+        return texture_id
+
+    async def forbidden_native_call(*args: object) -> list[object]:
+        raise AssertionError("Pixel History must not run for an invalid input attachment")
+
+    monkeypatch.setattr(runtime, "_get_controller", get_controller)
+    monkeypatch.setattr(runtime, "_ensure_event", ensure_event)
+    monkeypatch.setattr(runtime, "_active_event", lambda session_id: active["event"])
+    monkeypatch.setattr(runtime, "_resolve_texture_id", resolve_texture)
+    monkeypatch.setattr(runtime, "_get_rd", lambda: object())
+    monkeypatch.setattr(runtime, "_runtime_context_id", lambda: "owned-context")
+    monkeypatch.setattr(runtime, "pixel_history_input_attachment_conflict", lambda *args: (7, 0x10))
+    monkeypatch.setattr(runtime, "_pixel_history_raw_with_timeout", forbidden_native_call)
+    monkeypatch.setattr(runtime, "_render_service", object())
+
+    payload = json.loads(asyncio.run(server._dispatch_texture("get_pixel_history", {
+        "session_id": "replay", "texture_id": "texture", "event_id": 11, "x": 1, "y": 2,
+    })))
+    assert payload["success"] is False
+    assert payload["category"] == "capability"
+    assert payload["code"] == "pixel_history_unsupported_input_attachment"
+    assert payload["details"]["replay_state_restored"] is True
+    assert payload["details"]["restored_event_id"] == active["event"] == 19
 
 
 
