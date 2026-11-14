@@ -6,17 +6,16 @@ import struct
 from typing import Any
 
 
-def pixel_history_input_attachment_conflict(rd: Any, controller: Any, resource_id: Any,
-                                            event_id: int) -> tuple[int, int] | None:
+def pixel_history_input_attachment_conflict(rd: Any, controller: Any, resource_id: Any) -> tuple[int, int] | None:
     """Identify a recorded Vulkan image used as both input and output without input usage."""
     if controller.GetAPIProperties().pipelineType != rd.GraphicsAPI.Vulkan:
         return None
     uses = controller.GetUsage(resource_id)
     inputs = {int(item.eventId) for item in uses
-              if item.usage == rd.ResourceUsage.InputTarget and 0 < int(item.eventId) <= event_id}
+              if item.usage == rd.ResourceUsage.InputTarget and 0 < int(item.eventId)}
     outputs = {int(item.eventId) for item in uses
                if item.usage in (rd.ResourceUsage.ColorTarget, rd.ResourceUsage.DepthStencilTarget)
-               and 0 < int(item.eventId) <= event_id}
+               and 0 < int(item.eventId)}
     conflicts = inputs & outputs
     if not conflicts:
         return None

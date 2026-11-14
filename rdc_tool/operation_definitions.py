@@ -2971,7 +2971,9 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                  'resolved_event_id, pixel_history_summary, selected_target_source, failure_stage, '
                  'failure_reason, attempts}<br>artifacts (list)<br>error (dict|null): remote '
                  'backend/session 明确不支持时，优先返回 capability-style 错误，而不是等到 trace 创建后才报 '
-                 '`debugger_handle_missing`<br>meta (dict)<br>projections (dict, 可选)',
+                 '`debugger_handle_missing`. When a target requires an unsupported Vulkan input-attachment '
+                 'Pixel History, returns pixel_history_unsupported_input_attachment after replay position '
+                 'restoration.<br>meta (dict)<br>projections (dict, 可选)',
   'param_names': ['session_id', 'mode', 'event_id', 'params', 'timeout_ms', 'context_id'],
   'prerequisites': [{'requires': 'session_id',
                      'via_tools': ['rd.capture.open_file', 'rd.capture.open_replay'],
@@ -3851,7 +3853,7 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                  'depth is ModificationValue.depth. Validity does not prove bit-exact FragCoord.z, '
                  'invocation correspondence, or a numerical error bound; reconstructed depth-test '
                  'flags and quantization do not supply that bound. Vulkan images used as both input '
-                 'and output attachments without input-attachment usage return '
+                 'and output attachments without input-attachment usage at any capture event return '
                  'pixel_history_unsupported_input_attachment after replay position restoration.<br>'
                  'artifacts (list)<br>error (dict|null)<br>meta (dict)<br>projections (dict, 可选)',
   'param_names': ['session_id',

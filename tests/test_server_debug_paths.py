@@ -107,11 +107,72 @@ def _install_debug_env(monkeypatch, controller: _FakeController, history_items: 
     monkeypatch.setattr(server.server_runtime, "_ensure_event", _fake_ensure_event)
     monkeypatch.setattr(server.server_runtime, "_configure_texture_output_for_target", _fake_configure)
     monkeypatch.setattr(server.server_runtime, "_pixel_history_raw", _fake_history)
+    monkeypatch.setattr(server.server_runtime, "pixel_history_input_attachment_conflict", lambda *args: None)
     monkeypatch.setattr(server.server_runtime, "_output_target_resource_ids", lambda session_id, event_id: asyncio.sleep(0, result=[]))
     monkeypatch.setattr(server.server_runtime, "_refresh_pixel_context", lambda session_id, x, y: asyncio.sleep(0))
     monkeypatch.setattr(server.server_runtime, "_get_rd", lambda: SimpleNamespace(DebugPixelInputs=_FakeDebugInputs))
     monkeypatch.setattr(server.server_runtime, "_session_manager", SimpleNamespace(get_output=lambda session_id: _FakeOutput()))
     server._runtime.shader_debugs.clear()
+
+
+def test_debug_start_rejects_unsupported_pixel_history_and_restores_entry(monkeypatch) -> None:
+    controller = _FakeController([])
+    _install_debug_env(monkeypatch, controller, [])
+    runtime = server.server_runtime
+    active = {"event": 19}
+
+    async def ensure_event(session_id: str, event_id: int | None) -> int:
+        active["event"] = int(event_id or active["event"])
+        return active["event"]
+
+    async def forbidden_native_call(*args: object) -> list[object]:
+        raise AssertionError("Pixel History must not run for an invalid input attachment")
+
+    monkeypatch.setattr(runtime, "_ensure_event", ensure_event)
+    monkeypatch.setattr(runtime, "_active_event", lambda session_id: active["event"])
+    monkeypatch.setattr(runtime, "_runtime_context_id", lambda: "owned-context")
+    monkeypatch.setattr(runtime, "pixel_history_input_attachment_conflict", lambda *args: (7, 0x10))
+    monkeypatch.setattr(runtime, "_pixel_history_raw", forbidden_native_call)
+    payload = json.loads(asyncio.run(server._dispatch_shader("debug_start", {
+        "session_id": "sess_test", "event_id": 5,
+        "params": {"x": 1, "y": 2, "target": {"texture_id": "ResourceId::77"}},
+    })))
+    assert payload["success"] is False
+    assert payload["code"] == "pixel_history_unsupported_input_attachment"
+    assert payload["category"] == "capability"
+    assert payload["details"]["usage_event_id"] == 7
+    assert payload["details"]["replay_state_restored"] is True
+    assert payload["details"]["restored_event_id"] == active["event"] == 19
+    assert controller.debug_calls == []
+
+
+def test_debug_start_skips_unsupported_implicit_target(monkeypatch) -> None:
+    controller = _FakeController([_FakeTrace(debugger=object())])
+    _install_debug_env(monkeypatch, controller, [])
+    runtime = server.server_runtime
+    history_targets = []
+
+    async def outputs(session_id: str, event_id: int):
+        return [("unsupported", 0), ("usable", 1)]
+
+    async def configure(session_id: str, target: dict, *, event_id=None, sample_override=None):
+        return target["texture_id"], None, SimpleNamespace(mip=0, slice=0, sample=0)
+
+    async def history(controller_obj, resource_id, x, y, subresource):
+        history_targets.append(resource_id)
+        return [_FakeHistoryItem(11, 9)]
+
+    monkeypatch.setattr(runtime, "_output_target_resource_ids", outputs)
+    monkeypatch.setattr(runtime, "_configure_texture_output_for_target", configure)
+    monkeypatch.setattr(runtime, "_pixel_history_raw", history)
+    monkeypatch.setattr(runtime, "pixel_history_input_attachment_conflict",
+                        lambda rd, controller_obj, rid: (17, 0x10) if rid == "unsupported" else None)
+    payload = json.loads(asyncio.run(server._dispatch_shader("debug_start", {
+        "session_id": "sess_test", "event_id": 11, "params": {"x": 1, "y": 2},
+    })))
+    assert payload["success"] is True
+    assert payload["resolved_context"]["target"]["texture_id"] == "usable"
+    assert history_targets == ["usable"]
 
 
 def test_debug_start_returns_structured_error_details(monkeypatch) -> None:

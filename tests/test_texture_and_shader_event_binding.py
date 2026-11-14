@@ -509,20 +509,21 @@ def test_pixel_history_rejects_invalid_vulkan_attachment_and_restores_entry(monk
     monkeypatch.setattr(runtime, "_ensure_event", ensure_event)
     monkeypatch.setattr(runtime, "_active_event", lambda session_id: active["event"])
     monkeypatch.setattr(runtime, "_resolve_texture_id", resolve_texture)
-    monkeypatch.setattr(runtime, "_get_rd", lambda: object())
+    monkeypatch.setattr(runtime, "_get_rd", lambda: SimpleNamespace(Subresource=SimpleNamespace))
     monkeypatch.setattr(runtime, "_runtime_context_id", lambda: "owned-context")
     monkeypatch.setattr(runtime, "pixel_history_input_attachment_conflict", lambda *args: (7, 0x10))
-    monkeypatch.setattr(runtime, "_pixel_history_raw_with_timeout", forbidden_native_call)
+    monkeypatch.setattr(runtime, "_pixel_history_raw", forbidden_native_call)
     monkeypatch.setattr(runtime, "_render_service", object())
 
     payload = json.loads(asyncio.run(server._dispatch_texture("get_pixel_history", {
-        "session_id": "replay", "texture_id": "texture", "event_id": 11, "x": 1, "y": 2,
+        "session_id": "replay", "texture_id": "texture", "event_id": 5, "x": 1, "y": 2,
     })))
     assert payload["success"] is False
     assert payload["category"] == "capability"
     assert payload["code"] == "pixel_history_unsupported_input_attachment"
     assert payload["details"]["replay_state_restored"] is True
     assert payload["details"]["restored_event_id"] == active["event"] == 19
+    assert payload["details"]["usage_event_id"] == 7
 
 
 

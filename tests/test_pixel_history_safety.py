@@ -22,17 +22,16 @@ class Node:
 
 
 @pytest.mark.parametrize(
-    ("api", "flags", "input_event", "output_event", "query_event", "expected"),
+    ("api", "flags", "input_event", "output_event", "expected"),
     [
-        ("vulkan", 0x10, 7, 7, 11, (7, 0x10)),
-        ("vulkan", 0x90, 7, 7, 11, None),
-        ("vulkan", 0x10, 7, 7, 5, None),
-        ("vulkan", 0x10, 7, 8, 11, None),
-        ("other", 0x10, 7, 7, 11, None),
+        ("vulkan", 0x10, 7, 7, (7, 0x10)),
+        ("vulkan", 0x90, 7, 7, None),
+        ("vulkan", 0x10, 7, 8, None),
+        ("other", 0x10, 7, 7, None),
     ],
 )
 def test_attachment_conflict_requires_matching_usage_and_creation_flags(
-    api, flags, input_event, output_event, query_event, expected,
+    api, flags, input_event, output_event, expected,
 ):
     rd = SimpleNamespace(GraphicsAPI=SimpleNamespace(Vulkan="vulkan"),
                          ResourceUsage=SimpleNamespace(InputTarget="input", ColorTarget="color",
@@ -48,4 +47,4 @@ def test_attachment_conflict_requires_matching_usage_and_creation_flags(
         GetResources=lambda: [SimpleNamespace(resourceId="texture", initialisationChunks=[0])],
         GetStructuredFile=lambda: SimpleNamespace(chunks=[chunk]),
     )
-    assert pixel_history_input_attachment_conflict(rd, controller, "texture", query_event) == expected
+    assert pixel_history_input_attachment_conflict(rd, controller, "texture") == expected

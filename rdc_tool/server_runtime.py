@@ -5490,6 +5490,35 @@ def _pixel_history_timeout_message(timeout_s: float) -> str:
     return f"PixelHistory timed out after {timeout_s:.1f}s"
 
 
+class PixelHistoryInputAttachmentConflict(Exception):
+    def __init__(self, usage_event_id: int, image_usage_flags: int) -> None:
+        self.usage_event_id = usage_event_id
+        self.image_usage_flags = image_usage_flags
+        super().__init__("Vulkan image lacks input-attachment usage")
+
+
+async def _pixel_history_conflict_error(session_id: str, original_event: int,
+                                        conflict: PixelHistoryInputAttachmentConflict) -> str:
+    details = {"context_id": _runtime_context_id(), "session_id": session_id,
+               "failure_stage": "validate_input_attachment", "usage_event_id": conflict.usage_event_id,
+               "image_usage_flags": conflict.image_usage_flags}
+    try:
+        if original_event <= 0 or await _ensure_event(session_id, original_event) != original_event \
+                or _active_event(session_id) != original_event:
+            raise RuntimeError("Original replay event was not restored")
+    except Exception as exc:
+        return _err(f"Pixel History unavailable; replay restoration failed: {exc}",
+                    code="pixel_history_unavailable_restore_failed", category="runtime",
+                    details={**details, "replay_state_restored": False})
+    return _err(
+        "Pixel History unavailable: a Vulkan image is used as both input and output attachment "
+        "without VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT. Read the region before and after candidate "
+        "events and confirm it with draw coverage instead.",
+        code="pixel_history_unsupported_input_attachment", category="capability",
+        details={**details, "replay_state_restored": True, "restored_event_id": original_event},
+    )
+
+
 async def _pixel_history_raw_with_timeout(
     controller: Any,
     resource_id: Any,
@@ -5499,6 +5528,9 @@ async def _pixel_history_raw_with_timeout(
     *,
     timeout_s: Optional[float] = None,
 ) -> List[Any]:
+    conflict = await _offload(pixel_history_input_attachment_conflict, _get_rd(), controller, resource_id)
+    if conflict is not None:
+        raise PixelHistoryInputAttachmentConflict(*conflict)
     effective_timeout = float(PIXEL_HISTORY_TIMEOUT_S if timeout_s is None else timeout_s)
     return await asyncio.wait_for(
         _pixel_history_raw(controller, resource_id, x, y, subresource),
@@ -9334,27 +9366,6 @@ async def _dispatch_texture(action: str, args: Dict[str, Any]) -> str:
             rid, texture_desc, _, _ = await _resolve_visual_target_for_event(
                 session_id, event_id, target=target)
         rd = _get_rd()
-        conflict = await _offload(pixel_history_input_attachment_conflict, rd, controller, rid, event_id)
-        if conflict is not None:
-            conflict_event, usage_flags = conflict
-            details = {"context_id": _runtime_context_id(), "session_id": session_id,
-                       "failure_stage": "validate_input_attachment", "usage_event_id": conflict_event,
-                       "image_usage_flags": usage_flags}
-            try:
-                if original_event <= 0 or await _ensure_event(session_id, original_event) != original_event \
-                        or _active_event(session_id) != original_event:
-                    raise RuntimeError("Original replay event was not restored")
-            except Exception as exc:
-                return _err(f"Pixel History unavailable; replay restoration failed: {exc}",
-                            code="pixel_history_unavailable_restore_failed", category="runtime",
-                            details={**details, "replay_state_restored": False})
-            return _err(
-                "Pixel History unavailable: a Vulkan image is used as both input and output attachment "
-                "without VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT. Read the region before and after candidate "
-                "events and confirm it with draw coverage instead.",
-                code="pixel_history_unsupported_input_attachment", category="capability",
-                details={**details, "replay_state_restored": True, "restored_event_id": original_event},
-            )
         sub = rd.Subresource()
         sub.mip = _as_int(args.get("mip"), 0)
         sub.slice = _as_int(args.get("slice"), 0)
@@ -9367,6 +9378,8 @@ async def _dispatch_texture(action: str, args: Dict[str, Any]) -> str:
                 _as_int(args["y"]),
                 sub,
             )
+        except PixelHistoryInputAttachmentConflict as exc:
+            return await _pixel_history_conflict_error(session_id, original_event, exc)
         except asyncio.TimeoutError:
             return _err(
                 _pixel_history_timeout_message(PIXEL_HISTORY_TIMEOUT_S),
@@ -10502,7 +10515,7 @@ async def _dispatch_shader(action: str, args: Dict[str, Any]) -> str:
                         "context_preserved": True,
                     },
                 )
-    inspection_original_event = _active_event(session_id) if action in {"get_source", "get_constant_buffer_contents"} else 0
+    inspection_original_event = _active_event(session_id) if action in {"get_source", "get_constant_buffer_contents", "debug_start"} else 0
     event_id = await _ensure_event(session_id, args.get("event_id"))
     pipe = await _offload(controller.GetPipelineState)
 
@@ -10692,6 +10705,7 @@ async def _dispatch_shader(action: str, args: Dict[str, Any]) -> str:
         debugger_missing_count = 0
         matched_event_hit_seen = False
         pixel_history_timeout_count = 0
+        pixel_history_conflicts: List[PixelHistoryInputAttachmentConflict] = []
 
         for target_source, target_candidate in target_candidates:
             try:
@@ -10744,6 +10758,14 @@ async def _dispatch_shader(action: str, args: Dict[str, Any]) -> str:
                     y,
                     target_sub,
                 )
+            except PixelHistoryInputAttachmentConflict as exc:
+                pixel_history_conflicts.append(exc)
+                attempts_log.append({"target_source": target_source, "stage": "pixel_history",
+                                     "resolved_context": last_context,
+                                     "error": "pixel_history_unsupported_input_attachment",
+                                     "usage_event_id": exc.usage_event_id,
+                                     "image_usage_flags": exc.image_usage_flags})
+                continue
             except asyncio.TimeoutError:
                 pixel_history_timeout_count += 1
                 history_items = []
@@ -10965,6 +10987,8 @@ async def _dispatch_shader(action: str, args: Dict[str, Any]) -> str:
                 break
 
         if trace is None or getattr(trace, "debugger", None) is None:
+            if pixel_history_conflicts and len(pixel_history_conflicts) == configured_target_count and not target_config_failures:
+                return await _pixel_history_conflict_error(session_id, inspection_original_event, pixel_history_conflicts[0])
             failure_stage = "debug_pixel"
             failure_reason = "invalid_trace"
             error_code = "shader_debug_event_binding_unavailable"
