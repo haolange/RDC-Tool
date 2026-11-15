@@ -11908,7 +11908,7 @@ def _shader_debug_state_payload(handle: ShaderDebugHandle, detail_level: str = "
                 "column_end": positive("colEnd") if file_index >= 0 else None,
             }
     if detail_level == "full":
-        variables = list(handle.variables.values())
+        variables = list(_shader_debug_variable_snapshot(handle).values())
         stack = list(getattr(state, "callstack", None) or []) if state is not None else []
         payload.update(variables=[_bounded_debug_variable(value, 2) for value in variables[:64]],
                        variable_count=len(variables), variables_truncated=len(variables) > 64,
@@ -11916,6 +11916,13 @@ def _shader_debug_state_payload(handle: ShaderDebugHandle, detail_level: str = "
                        callstack=[str(name) for name in stack[:64]],
                        callstack_count=len(stack), callstack_truncated=len(stack) > 64)
     return payload
+
+
+def _shader_debug_variable_snapshot(handle: ShaderDebugHandle) -> Dict[str, Dict[str, Any]]:
+    """Merge immutable native trace inputs with the current mutable variables."""
+    inputs = {str(variable.name): {**_shader_variable_payload(variable), "variable_origin": "trace_input"}
+              for variable in handle.trace.inputs if variable.name}
+    return {**inputs, **handle.variables}
 
 
 async def _dispatch_debug(action: str, args: Dict[str, Any]) -> str:
@@ -12023,8 +12030,8 @@ async def _dispatch_debug(action: str, args: Dict[str, Any]) -> str:
         expand_depth = _as_int(args.get("expand_depth"), 2)
         max_variables = _as_int(args.get("max_variables"), 2048)
 
-        variables = [_bounded_debug_variable(variable, expand_depth) for name, variable in handle.variables.items()
-                     if name_filter in name]
+        variables = [_bounded_debug_variable(variable, expand_depth)
+                     for name, variable in _shader_debug_variable_snapshot(handle).items() if name_filter in name]
         return _ok(variables=variables[:max_variables], truncated=len(variables) > max_variables)
     if action == "evaluate_expression":
         _require(args, "expression")

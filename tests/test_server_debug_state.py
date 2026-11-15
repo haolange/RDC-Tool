@@ -28,7 +28,7 @@ def native_debug(monkeypatch):
     monkeypatch.setattr(runtime, '_ensure_event', ensure_event)
     async def offload(fn, *args):
         return fn(*args)
-    handle = runtime.ShaderDebugHandle('trace', 'replay', 'pixel', 42, object(), object())
+    handle = runtime.ShaderDebugHandle('trace', 'replay', 'pixel', 42, SimpleNamespace(inputs=[]), object())
     monkeypatch.setattr(runtime._runtime, 'shader_debugs', {'trace': handle})
     monkeypatch.setattr(runtime, '_get_controller', get_controller)
     monkeypatch.setattr(runtime, '_offload', offload)
@@ -130,7 +130,7 @@ def test_sparse_native_instruction_map_is_not_trace_pc_or_array_index(native_deb
     def info(instruction, line, file_index=-1):
         return SimpleNamespace(instruction=instruction, lineInfo=SimpleNamespace(
             disassemblyLine=line, fileIndex=file_index, lineStart=9, lineEnd=10, colStart=0, colEnd=4))
-    d.handle.trace = SimpleNamespace(instInfo=[info(5, 12), info(100, 20, 2)])
+    d.handle.trace = SimpleNamespace(inputs=[], instInfo=[info(5, 12), info(100, 20, 2)])
     for pc, instruction, mapped in [(300, 99, 5), (301, 100, 100), (302, 6, 5)]:
         d.handle.current_state = SimpleNamespace(stepIndex=pc, nextInstruction=instruction)
         result = shader_state(d, detail_level='summary')['state']
@@ -162,7 +162,7 @@ def test_initial_missing_metadata_and_native_pc_zero_are_distinct(native_debug):
     d.handle.current_state = SimpleNamespace(stepIndex=0)
     observed = shader_state(d)['state']
     assert observed['has_native_state'] is True and observed['next_instruction'] is None
-    d.handle.trace = SimpleNamespace(instInfo=[SimpleNamespace(instruction=0, lineInfo=SimpleNamespace())])
+    d.handle.trace = SimpleNamespace(inputs=[], instInfo=[SimpleNamespace(instruction=0, lineInfo=SimpleNamespace())])
     d.handle.current_state.nextInstruction = 0
     location = shader_state(d)['state']['source_location']
     assert location['disassembly_line'] is None and location['file_index'] is None
@@ -213,3 +213,19 @@ def test_catalog_rejects_unknown_state_detail():
         validate_operation_arguments('rd.shader.get_debug_state', {**identity, 'detail_level': detail})
     with pytest.raises(ValueError):
         validate_operation_arguments('rd.shader.get_debug_state', {**identity, 'detail_level': 'registers'})
+
+
+def test_debug_variable_snapshots_include_immutable_native_inputs(native_debug):
+    d = native_debug
+    member = SimpleNamespace(name="SV_Position", type="Float", rows=1, columns=4, members=[],
+                             value=SimpleNamespace(f32v=[10.5, 20.5, 0.3, 1.0]))
+    d.handle.trace.inputs = [SimpleNamespace(name="_IN", type="Struct", rows=0, columns=0,
+                                             members=[member], value=None)]
+    first = d.call('get_variables', name_filter='_IN', expand_depth=2)
+    assert first['truncated'] is False
+    assert first['variables'][0]['variable_origin'] == 'trace_input'
+    assert first['variables'][0]['members'][0]['value']['f32v'] == [10.5, 20.5, 0.3, 1.0]
+    assert shader_state(d)['state']['variables'][0] == first['variables'][0]
+    assert d.call('continue')['stopped_reason'] == 'finished'
+    assert d.call('get_variables', name_filter='_IN')['variables'] == first['variables']
+    assert d.call('get_variables', name_filter='x')['variables'][0]['value']['f32v'] == [3.0]

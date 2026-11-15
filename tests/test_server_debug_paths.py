@@ -13,6 +13,7 @@ from rdc_tool import server
 class _FakeTrace:
     def __init__(self, *, debugger: object | None = None) -> None:
         self.debugger = debugger
+        self.inputs = []
 
 
 class _FakeHistoryItem:
@@ -605,7 +606,7 @@ def test_invalid_debug_handle_rejected_before_any_native_effect(monkeypatch, dis
 
 def test_current_debug_handle_retains_state_and_event_contract(monkeypatch):
     runtime = server.server_runtime
-    handle = runtime.ShaderDebugHandle("trace-current", "current-replay", "pixel", 42, None, object(),
+    handle = runtime.ShaderDebugHandle("trace-current", "current-replay", "pixel", 42, SimpleNamespace(inputs=[]), object(),
                                      current_state=SimpleNamespace(stepIndex=29))
     monkeypatch.setattr(runtime._runtime, "shader_debugs", {"trace-current": handle})
     events = []
