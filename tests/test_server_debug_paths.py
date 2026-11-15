@@ -472,7 +472,7 @@ def test_texture_get_pixel_history_times_out(monkeypatch) -> None:
             self.sample = 0
 
     async def _fake_get_controller(session_id: str) -> object:
-        return object()
+        return SimpleNamespace(GetTextures=lambda: [])
 
     async def _fake_ensure_event(session_id: str, event_id: int | None) -> int:
         return int(event_id or 11)

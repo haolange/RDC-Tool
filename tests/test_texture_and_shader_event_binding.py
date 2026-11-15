@@ -493,7 +493,7 @@ def test_pixel_history_rejects_invalid_vulkan_attachment_and_restores_entry(monk
     active = {"event": 19}
 
     async def get_controller(session_id: str) -> object:
-        return object()
+        return SimpleNamespace(GetTextures=lambda: [])
 
     async def ensure_event(session_id: str, event_id: int | None) -> int:
         active["event"] = int(event_id or active["event"])

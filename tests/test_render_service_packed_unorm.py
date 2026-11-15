@@ -61,8 +61,19 @@ def test_packed_unorm_rejects_short_readback(monkeypatch):
         asyncio.run(render_service.RenderService().read_texture_array("session", 42, "texture", manager))
 
 
-@pytest.mark.parametrize("suffix", ["FLOAT", "TYPELESS"])
-def test_packed_unorm_does_not_guess_unknown_component_semantics(monkeypatch, suffix):
-    manager, _ = _manager(monkeypatch, "R10G10B10A2_" + suffix, _pack(1, 2, 3, 1) * 2)
+def test_packed_unorm_does_not_guess_unknown_component_semantics(monkeypatch):
+    manager, _ = _manager(monkeypatch, "R10G10B10A2_FLOAT", _pack(1, 2, 3, 1) * 2)
     with pytest.raises(ValueError, match="Unsupported texture readback format"):
         asyncio.run(render_service.RenderService().read_texture_array("session", 42, "texture", manager))
+
+def test_packed_typeless_without_view_keeps_raw_components(monkeypatch):
+    manager, _ = _manager(monkeypatch, "R10G10B10A2_TYPELESS", _pack(1, 2, 3, 1) * 2)
+    controller = manager.get_controller("session")
+    controller.GetPipelineState = lambda: SimpleNamespace(
+        GetOutputTargets=lambda: [], GetReadOnlyResources=lambda stage: [], GetReadWriteResources=lambda stage: [])
+    stages = SimpleNamespace(**{name: name for name in ("Vertex", "Hull", "Domain", "Geometry", "Pixel", "Compute")})
+    monkeypatch.setattr(render_service, "_get_rd", lambda: SimpleNamespace(
+        ShaderStage=stages, Subresource=lambda: SimpleNamespace(mip=0, slice=0, sample=0)))
+    values, stats = asyncio.run(render_service.RenderService().read_texture_array("session", 42, "texture", manager))
+    np.testing.assert_array_equal(values, [[[1, 2, 3, 1], [1, 2, 3, 1]]])
+    assert stats["value_interpretation"] == "raw_unsigned_integer"

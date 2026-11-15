@@ -25,9 +25,14 @@ import numpy as np
 
 from rdc_tool.core.errors import RuntimeToolError
 from rdc_tool.core.renderdoc_status import status_code_name, status_code_raw, status_text
+from rdc_tool.core.texture_view import bound_texture_view_format
 from rdc_tool.models import ArtifactRef
 
 logger = logging.getLogger(__name__)
+
+
+class TextureDecodeError(ValueError):
+    """Deterministic readback decoding failure after replay selection."""
 
 # ---------------------------------------------------------------------------
 # Lazy renderdoc import（延迟导入）
@@ -719,17 +724,25 @@ class RenderService:
         # RenderDoc 返回紧密打包的像素数据，其分量布局与资源格式一致。
         if not raw_data:
             raise ValueError("Texture readback returned no bytes")
-        # Decode declared regular components; byte count alone cannot identify a format.
+        # Decode with the actual bound view, never by guessing the typeless interpretation.
         import re
-        format_name = str(tex_desc.format.Name()).upper()
-        if format_name in {"R10G10B10A2_UNORM", "B10G10R10A2_UNORM"}:
+        source_format = str(tex_desc.format.Name()).upper()
+        view_format = None
+        if "TYPELESS" in source_format:
+            view_format = await asyncio.to_thread(bound_texture_view_format, controller, resolved_id, rd)
+        raw_typeless = "TYPELESS" in source_format and view_format is None
+        format_name = str(view_format.Name()).upper() if view_format is not None else source_format
+        if format_name in {"R10G10B10A2_TYPELESS", "B10G10R10A2_TYPELESS",
+                           "R10G10B10A2_UINT", "B10G10R10A2_UINT",
+                           "R10G10B10A2_UNORM", "B10G10R10A2_UNORM"}:
             expected_bytes = tex_width * tex_height * 4
             if len(raw_data) != expected_bytes:
                 raise ValueError(f"Texture readback size mismatch: expected {expected_bytes}, received {len(raw_data)}")
             packed = np.frombuffer(raw_data, dtype="<u4").reshape(tex_height, tex_width)
             arr = np.stack((packed & 0x3FF, (packed >> 10) & 0x3FF,
                             (packed >> 20) & 0x3FF, (packed >> 30) & 0x3), axis=-1)
-            arr = arr.astype(np.float64) / np.array([1023.0, 1023.0, 1023.0, 3.0])
+            if format_name.endswith("UNORM"):
+                arr = arr.astype(np.float64) / np.array([1023.0, 1023.0, 1023.0, 3.0])
             if format_name.startswith("B"):
                 arr = arr[..., [2, 1, 0, 3]]
         elif format_name == "R11G11B10_FLOAT":
@@ -756,16 +769,16 @@ class RenderService:
         else:
             components = re.findall(r"([RGBA])(8|16|32|64)", format_name)
             if not components or len({bits for _, bits in components}) != 1:
-                raise ValueError(f"Unsupported texture readback format: {format_name}")
+                raise TextureDecodeError(f"Unsupported texture readback format: {format_name}")
             width, count = int(components[0][1]) // 8, len(components)
             if "FLOAT" in format_name:
                 kind = "f"
             elif "SINT" in format_name or "SNORM" in format_name:
                 kind = "i"
-            elif any(token in format_name for token in ("UINT", "UNORM", "SRGB")):
+            elif raw_typeless or any(token in format_name for token in ("UINT", "UNORM", "SRGB")):
                 kind = "u"
             else:
-                raise ValueError(f"Unsupported texture component type: {format_name}")
+                raise TextureDecodeError(f"Unsupported texture component type: {format_name}")
             expected_bytes = tex_width * tex_height * count * width
             if len(raw_data) != expected_bytes:
                 raise ValueError(f"Texture readback size mismatch: expected {expected_bytes}, received {len(raw_data)}")
@@ -789,7 +802,12 @@ class RenderService:
             "texture_id": str(texture_id),
             "shape": list(arr.shape),
             "dtype": str(arr.dtype),
+            "source_format": source_format,
+            "view_format": str(view_format.Name()).upper() if view_format is not None else None,
         }
+        if raw_typeless:
+            stats["value_interpretation"] = "raw_unsigned_integer"
+            stats["interpretation_note"] = "无类型格式，视图格式未知，数值为原始整数"
 
         if np.issubdtype(arr.dtype, np.floating):
             stats["nan_count"] = int(np.isnan(arr).sum())

@@ -71,7 +71,8 @@ from rdc_tool.core.patch_engine import PatchEngine, _compiler_output_is_fatal, _
 from rdc_tool.core.perf_service import PerfService
 from rdc_tool.core.pipeline_service import PipelineService
 from rdc_tool.core.replay_facts import pixel_history_input_attachment_conflict
-from rdc_tool.core.render_service import RenderService
+from rdc_tool.core.render_service import RenderService, TextureDecodeError
+from rdc_tool.core.texture_view import bound_texture_view_format
 from rdc_tool.core.session_manager import SessionError, SessionManager
 from rdc_tool.models import PatchSpec, ShaderStage, _new_id
 from rdc_tool.remote_bootstrap import (
@@ -5464,8 +5465,11 @@ async def _refresh_pixel_context(session_id: str, x: int, y: int) -> None:
         pass
 
 
-async def _pixel_history_raw(controller: Any, resource_id: Any, x: int, y: int, subresource: Any) -> List[Any]:
+async def _pixel_history_raw(controller: Any, resource_id: Any, x: int, y: int, subresource: Any,
+                             type_cast: Any = None) -> List[Any]:
     rd = _get_rd()
+    if type_cast is not None:
+        return list(await _offload(controller.PixelHistory, resource_id, x, y, subresource, type_cast) or [])
     try:
         history_raw = await _offload(
             controller.PixelHistory,
@@ -5527,15 +5531,26 @@ async def _pixel_history_raw_with_timeout(
     subresource: Any,
     *,
     timeout_s: Optional[float] = None,
+    type_cast: Any = None,
 ) -> List[Any]:
     conflict = await _offload(pixel_history_input_attachment_conflict, _get_rd(), controller, resource_id)
     if conflict is not None:
         raise PixelHistoryInputAttachmentConflict(*conflict)
     effective_timeout = float(PIXEL_HISTORY_TIMEOUT_S if timeout_s is None else timeout_s)
     return await asyncio.wait_for(
-        _pixel_history_raw(controller, resource_id, x, y, subresource),
+        (_pixel_history_raw(controller, resource_id, x, y, subresource, type_cast) if type_cast is not None
+         else _pixel_history_raw(controller, resource_id, x, y, subresource)),
         timeout=effective_timeout,
     )
+
+
+async def _pixel_history_view(controller: Any, resource_id: Any, texture_desc: Any) -> Tuple[Any, bool]:
+    fmt = getattr(texture_desc, "format", None)
+    name = getattr(fmt, "Name", None)
+    if not callable(name) or "TYPELESS" not in str(name()).upper():
+        return None, False
+    view = await _offload(bound_texture_view_format, controller, resource_id, _get_rd())
+    return view, view is None
 
 
 def _pixel_history_color_type(texture_desc: Any) -> str:
@@ -9160,6 +9175,28 @@ def _sampled_texture_stats(arr: Any, source_stats: Dict[str, Any], stride: int) 
 
 
 async def _dispatch_texture(action: str, args: Dict[str, Any]) -> str:
+    if action not in {"get_data", "get_region_values", "get_histogram", "compute_stats", "diff"}:
+        return await _dispatch_texture_impl(action, args)
+    session_id = str(args.get("session_id", ""))
+    original_event = _active_event(session_id)
+    try:
+        return await _dispatch_texture_impl(action, args)
+    except TextureDecodeError as exc:
+        details = {"context_id": _runtime_context_id(), "session_id": session_id,
+                   "failure_stage": "decode_texture_readback"}
+        try:
+            if original_event <= 0 or await _ensure_event(session_id, original_event) != original_event \
+                    or _active_event(session_id) != original_event:
+                raise RuntimeError("Original replay event was not restored")
+        except Exception as restore_error:
+            return _err(f"Texture readback failed; replay restoration failed: {restore_error}",
+                        code="texture_readback_restore_failed", category="runtime",
+                        details={**details, "replay_state_restored": False})
+        return _err(str(exc), code="texture_readback_decode_failed", category="validation",
+                    details={**details, "replay_state_restored": True, "restored_event_id": original_event})
+
+
+async def _dispatch_texture_impl(action: str, args: Dict[str, Any]) -> str:
     _require(args, "session_id")
     session_id = str(args["session_id"])
     assert _render_service is not None
@@ -9290,7 +9327,8 @@ async def _dispatch_texture(action: str, args: Dict[str, Any]) -> str:
         arr = arr[::stride, ::stride]
         if as_type != "float" and not np.isfinite(arr).all():
             return _err("Cannot convert non-finite region to integers", code="texture_nonfinite_data")
-        arr = arr.astype({"float": np.float64, "uint": np.uint32, "int": np.int32}[as_type])
+        if stats.get("value_interpretation") != "raw_unsigned_integer":
+            arr = arr.astype({"float": np.float64, "uint": np.uint32, "int": np.int32}[as_type])
         stats = _sampled_texture_stats(arr, stats, stride)
         inline_value_limit = 256
         inline_complete = arr.size <= inline_value_limit
@@ -9360,8 +9398,7 @@ async def _dispatch_texture(action: str, args: Dict[str, Any]) -> str:
         original_event = _active_event(session_id)
         event_id = await _ensure_event(session_id, _as_int(args["event_id"]) if args.get("event_id") is not None else None)
         if args.get("texture_id") is not None:
-            rid = await _resolve_texture_id(session_id, args["texture_id"], event_id=event_id)
-            texture_desc = None
+            rid, texture_desc = await _get_texture_descriptor(session_id, args["texture_id"], event_id=event_id)
         else:
             rid, texture_desc, _, _ = await _resolve_visual_target_for_event(
                 session_id, event_id, target=target)
@@ -9370,13 +9407,17 @@ async def _dispatch_texture(action: str, args: Dict[str, Any]) -> str:
         sub.mip = _as_int(args.get("mip"), 0)
         sub.slice = _as_int(args.get("slice"), 0)
         sub.sample = _as_int(args.get("sample"), 0)
+        view_format, raw_typeless = await _pixel_history_view(controller, rid, texture_desc)
+        cast = view_format.compType if view_format is not None else (rd.CompType.UInt if raw_typeless else None)
         try:
+            history_options = {"type_cast": cast} if cast is not None else {}
             history_raw = await _pixel_history_raw_with_timeout(
                 controller,
                 rid,
                 _as_int(args["x"]),
                 _as_int(args["y"]),
                 sub,
+                **history_options,
             )
         except PixelHistoryInputAttachmentConflict as exc:
             return await _pixel_history_conflict_error(session_id, original_event, exc)
@@ -9396,9 +9437,8 @@ async def _dispatch_texture(action: str, args: Dict[str, Any]) -> str:
             )
         except Exception as exc:
             return _err(f"PixelHistory unavailable: {exc}")
-        if texture_desc is None and history_raw:
-            _, texture_desc = await _get_texture_descriptor(session_id, rid, event_id=event_id)
-        color_type = _pixel_history_color_type(texture_desc)
+        color_type = ("uint" if raw_typeless else _pixel_history_color_type(
+            SimpleNamespace(format=view_format) if view_format is not None else texture_desc))
         history = [_pixel_history_item_payload(item, color_type) for item in history_raw]
         truth_meta = await _event_truth_metadata(session_id, int(event_id))
         history_bindings = None
@@ -9406,6 +9446,9 @@ async def _dispatch_texture(action: str, args: Dict[str, Any]) -> str:
             history_bindings = await _pixel_history_writer_bindings(session_id, int(event_id), history, controller)
         return _ok(
             history=history,
+            view_format=str(view_format.Name()) if view_format is not None else None,
+            value_interpretation=("raw_unsigned_integer" if raw_typeless else "view_format" if view_format is not None else "resource_format"),
+            interpretation_note="无类型格式，视图格式未知，数值为原始整数" if raw_typeless else None,
             history_bindings=history_bindings,
             history_bindings_status=("not_requested" if history_bindings is None else
                                      "partial" if any("error" in item for item in history_bindings) else "complete"),
@@ -10749,14 +10792,18 @@ async def _dispatch_shader(action: str, args: Dict[str, Any]) -> str:
             }
             last_target_source = target_source
             history_timed_out = False
+            view_format, raw_typeless = await _pixel_history_view(controller, target_rid, target_texture_desc)
+            cast = view_format.compType if view_format is not None else (_get_rd().CompType.UInt if raw_typeless else None)
 
             try:
+                history_options = {"type_cast": cast} if cast is not None else {}
                 history_raw = await _pixel_history_raw_with_timeout(
                     controller,
                     target_rid,
                     x,
                     y,
                     target_sub,
+                    **history_options,
                 )
             except PixelHistoryInputAttachmentConflict as exc:
                 pixel_history_conflicts.append(exc)
@@ -10804,9 +10851,12 @@ async def _dispatch_shader(action: str, args: Dict[str, Any]) -> str:
                     "error": str(exc),
                 }
             else:
-                color_type = _pixel_history_color_type(target_texture_desc)
+                color_type = ("uint" if raw_typeless else _pixel_history_color_type(
+                    SimpleNamespace(format=view_format) if view_format is not None else target_texture_desc))
                 history_items = [_pixel_history_item_payload(item, color_type) for item in history_raw]
                 history_summary = _pixel_history_summary(history_items, event_id)
+                if raw_typeless:
+                    history_summary["interpretation_note"] = "无类型格式，视图格式未知，数值为原始整数"
 
             history_summary["target_source"] = target_source
             history_summary["target"] = resolved_target

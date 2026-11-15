@@ -3847,7 +3847,9 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                  'When include_shaders is true, history_bindings contains shader and output-target '
                  'bindings or an explicit error per writer event; top-level binding truth applies to '
                  'resolved_event_id. Each history item preserves native validity, format-aware '
-                 'color_rgba, depth and stencil. Non-finite channels are null and listed in '
+                 'color_rgba, depth and stencil. TYPELESS uses the unique view bound at the requested '
+                 'event; without one, value_interpretation=raw_unsigned_integer and interpretation_note '
+                 'explicitly marks the raw values. Non-finite channels are null and listed in '
                  'non_finite_channels; missing or invalid values are explicit. pre_mod is unavailable '
                  'for non-first fragments. shader_out is native fragment output, not shader input; '
                  'depth is ModificationValue.depth. Validity does not prove bit-exact FragCoord.z, '
@@ -3971,6 +3973,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'returns_raw': 'ok (bool)<br>data (dict): {values, values_status, inline_value_limit, values_path, stats, resolved_event_id, texture_id, target_metadata}<br>'
                  'values 为 stride/as_type 后完整嵌套数值数组，最多256标量；values_status=complete；超限为values=null/omitted_limit，不截断或伪造空列表。'
                  '完整同数组仍导出NPZ到values_path。stats反映同一采样数组，含shape/dtype/stride、总体与逐rgba通道有限值min/max/mean和nan/inf_count；'
+                 'TYPELESS 按查询事件绑定的唯一 view 格式解码；没有唯一 view 时保留原始无符号整数并在 stats 标注，忽略 as_type。'
+                 '确定性解码失败在恢复原事件后返回 texture_readback_decode_failed。'
                  '通道指解码数组分量，不证明纹理存在物理alpha。非有限值使用NaN/Infinity/-Infinity字符串，不转成0。<br>artifacts (list)<br>error '
                  '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
   'param_names': ['session_id',
