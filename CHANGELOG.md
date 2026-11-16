@@ -2,6 +2,16 @@
 
 ## 待发布 `Unreleased`
 
+- 新增 `rdc_tool/platform/` 平台层（host、locks、process、ipc、native、preview），每个契约一套共享逻辑加 Windows/POSIX 原语；平台包外禁止任何主机判断，由 `tests/test_platform_boundary.py` 守护。此前 HEAD 在 Linux 上无法 import。参考外部 PR #2 重新实现并署名。
+- 锁：进程内 mutex 与文件锁共用一个 monotonic deadline，文件锁只做非阻塞重试；daemon 启动等待 30 秒，持久化 context 状态与 snapshot 等待 10 秒并返回声明错误 `state_lock_timeout`。Windows 不再使用约 10 秒后静默放弃的 `LK_LOCK`。
+- 进程身份 `(pid, birth)` 成为唯一存活依据：PID 复用与僵尸判为已退出，不可读身份为 unknown，永不当作已退出、永不授权终止；POSIX daemon 领导独立进程组，停止时整组回收；内存不可测时报告 `null` 与原因而非固定 0。
+- 安全：daemon IPC 在解码任何请求前完成 HMAC 握手（此前 Windows daemon 先 unpickle 再比对 token）；IPC key 经 stdin 交给 daemon，不再出现在 argv 与任何输出中（`daemon status`/`start`、attach、`context clear` 曾打印它）；POSIX socket 位于 0700 私有目录，state 文件为 0600；握手失败不再终止 accept 循环。
+- daemon state 由 `rdc_tool/daemon/state.py` 唯一拥有，输出字段 `pipe_name` 改为 `endpoint`；删除未文档化的 `daemon start --pipe-name`、`start_daemon` 别名、`session_state*.json` 与 `context_id`/`started_at_ms` 双写双读。旧格式 state 判为无效，按恢复指引重新启动即可。
+- 原生 preview 窗口成为主机能力：非 Windows 主机返回 `preview_unsupported_platform`，`rd.core.get_capabilities` 报告 `preview_window`。
+- CLI 单入口：`cli/run_cli.py` 只定位安装并调用 `rdc_tool.cli.main`；删除第二套 version 载荷、私有 `--context-id` 别名、吞掉子命令 help 的拦截与非标准 envelope 的简化 doctor；shell 补全词表从 argparse 树与 catalog 派生；删除 `RDX_*` 退役守卫。
+- 删除约 3.8k 行死代码（6 个模块、26 个只被它们使用的 model、`jinja2` 依赖、无读取者的配置节与环境变量、约 30 个无引用函数）；`rd.core.set_config` 只接受实际生效的键，未知键报错；`RDC_TOOL_ARTIFACT_STORE` 并入 `RDC_TOOL_ARTIFACT_DIR`；删除 S3 artifact 模式与 shader encoding 静默回退（请求的 encoding 不可用时按目标不可用报错）。
+- Catalog 运行时单源：运行时、前置条件路由与 discovery 只读 `operation_definitions` 构建的不可变索引，`spec/tool_catalog.json` 仅为生成物；两个 CI job 都运行 `build_catalog --check`；doctor 报告 catalog 来源、fingerprint 与工具数。
+- `requires-python >=3.14`；CI 新增 ubuntu job；LFS filter 不再作用于捆绑 Python 的 `.pyd`/`.exe` 普通 blob（此前 LFS 检出总显示 105 个文件被修改，并阻塞正式打包的干净源码检查）。
 - 原生构建回执迁出 `binaries/windows/x64/manifest.runtime.json`，成为全目标共享的 `binaries/native_build.json`；`source` 新增必填 `repository` 与 `revision`（fork `haolange/renderdoc@dde8822`，已核验其两个 parent 即原记录的 base/upstream），主机输出角色改为平台中立的 `native_library`／`binding_module`。二进制未变，`receipt_sha256` 随回执内容变化。
 - 回执校验改为“存在即严格、缺席仅报告”：doctor 与发布脚本按场景所需目标（默认本主机 + 两个 Android helper）判定，结果新增 `targets` 与 `missing_targets`。
 - `rd.capture.open_replay` 在本地回放前检查 `LocalReplaySupport`：本主机运行库不能回放该 capture API 时返回 `local_replay_unsupported`（category `capability`），不再进入原生回放后才失败。
@@ -11,6 +21,8 @@
 - 新增 `scripts/native_source_digest.py`，按 Git 提交内容定义回执的 `tree_sha256`；本地候选只认证并携带其回执配对的目标；新增需显式开启的 `fixture_integration` 真实回放测试（`--fixture-integration`、`--fixture-root`）；删除与 `vkcube.rdc` 字节相同的 `hello_triangle.rdc`。
 - 13.5k 行的 `server_runtime.py` 按领域拆入 `rdc_tool/runtime/`：`dispatch`（执行）→ `routing`（catalog 路由、参数与前置条件、replay 健康作用域）→ `operations/<ns>.py`（每个命名空间一个 `dispatch(action, args)`）→ 服务与记录模块；删除 `server.py` 转发壳、`tool_router.py`、19 个一行 `handlers/`、`core/engine.py`、`core/operation_registry.py` 与 `replay_observation.py`（并入 `runtime/observation.py`），worker 入口移至 `rdc_tool.runtime.worker_main`。新增分层门禁：只允许 replay 服务组成环、服务层不依赖操作层、各命名空间处理的动作与 catalog 完全一致（删除了无法到达的 `remote.set_overlay_options` 分支）。
 - 发布脚本按主机布局工作：包名带主机目标，`binaries/` 只带本主机运行目录、Android helper 与共享回执；校验解压时还原权限位；原生加载核验不再依赖 Windows 专属 `PATH`。删除发布门禁与包校验中的“已删除名单”（旧别名、pre-GA 标记、MCP 标记、`rdc_tool.bat` 示例、旧路径扫描）及依赖 `rg` 的双实现扫描器；catalog 与定义完全一致的检查已覆盖多余工具。
+- 仓库与文档：删除 `.qoder/`（175 个过期生成页）、空 `policy/` 与强制跟踪的 `intermediate/` 占位；全部文档改为中文叙述（术语保留英文）；RenderDoc 基线、环境变量、脚本说明与 RDC-Agent 配对各只在一处声明并由测试守护；用户文档不再写死工具总数，`docs/tool-reference.md` 改为中文生成；`docs/tool-interface-upgrade.md` 收为已删除操作的历史处置记录；`docs/tool-convergence-tasks.md` 只保留当前 Task 清单。
+- `daemon stop` 超时时报告 daemon 的实际存活判定（`alive`/`unknown`），不可读身份与未退出可区分。
 
 ## 1.1.2 — 2026-10-29
 

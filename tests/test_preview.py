@@ -1322,11 +1322,6 @@ def test_preview_docs_and_catalog_are_synchronized() -> None:
     assert "preview" in tools["rd.session.get_context"]["returns_raw"]
     assert "framebuffer_extent" in tools["rd.session.get_context"]["returns_raw"]
 
-    frameworks_root = repo_root.parent / ("RDC-Agent-" + "Frameworks") / "debugger"
-    if frameworks_root.is_dir():
-        cli_mode = (frameworks_root / "common" / "docs" / "cli-mode-reference.md").read_text(encoding="utf-8-sig")
-        assert "session preview on|off|status" in cli_mode
-
 
 @pytest.mark.parametrize(
     "original_event, restore_fails, expected_proof",

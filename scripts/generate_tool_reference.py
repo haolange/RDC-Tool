@@ -34,7 +34,7 @@ def _schema_summary(schema: dict[str, Any]) -> str:
         if type_name == "array":
             items = spec.get("items") if isinstance(spec.get("items"), dict) else {}
             type_name = f"array[{items.get('type', 'any')}]"
-        qualifiers = ["required" if name in required else "optional"]
+        qualifiers = ["必填" if name in required else "可选"]
         if isinstance(spec.get("enum"), list):
             qualifiers.append("enum=" + ",".join(str(item) for item in spec["enum"]))
         if "default" in spec:
@@ -55,7 +55,7 @@ def _prerequisites(tool: dict[str, Any]) -> str:
         requires = str(prereq.get("requires") or "").strip()
         via = ", ".join(str(item) for item in prereq.get("via_tools") or [])
         when = str(prereq.get("when") or "").strip()
-        rows.append("; ".join(part for part in (requires, f"via {via}" if via else "", f"when {when}" if when else "") if part))
+        rows.append("; ".join(part for part in (requires, f"经由 {via}" if via else "", f"条件 {when}" if when else "") if part))
     return "<br>".join(rows) or "-"
 
 
@@ -70,21 +70,21 @@ def generate_tool_reference() -> str:
     tools = [item for item in payload.get("tools", []) if isinstance(item, dict)]
     grouped = _group_tools(payload)
     lines: list[str] = [
-        "# Tool Reference",
+        "# 工具参考",
         "",
-        "This file is generated from the structured definitions in `rdc_tool/operation_definitions.py`. Do not edit it by hand; run `python -B scripts/generate_tool_reference.py`.",
+        "本文件由 `rdc_tool/operation_definitions.py` 的结构化定义生成，不要手工编辑；更新时运行 `python -B scripts/generate_tool_reference.py`。",
         "",
-        f"- Tool count: {len(tools)}",
-        f"- Group count: {len(grouped)}",
-        f"- Catalog fingerprint: `{payload.get('fingerprint', '')}`",
-        "- Canonical transport: `rdc-tool call <rd.*> --format json`",
-        "- Discovery: `rdc-tool tools list`, `rdc-tool tools search <query>`, and `rdc-tool tools describe <rd.*>`",
+        f"- 工具数：{len(tools)}",
+        f"- 分组数：{len(grouped)}",
+        f"- Catalog fingerprint：`{payload.get('fingerprint', '')}`",
+        "- 标准调用：`rdc-tool call <rd.*> --format json`",
+        "- Discovery：`rdc-tool tools list`、`rdc-tool tools search <query>`、`rdc-tool tools describe <rd.*>`",
         "",
-        "The catalog declares what an operation accepts and what it can affect. Authorization is still enforced by the embedding host; a catalog entry does not grant access.",
+        "Catalog 声明操作接受什么、可能影响什么；授权仍由嵌入宿主执行，catalog 条目本身不授予访问权。",
         "",
-        "## Groups",
+        "## 分组",
         "",
-        "| Group | Tools |",
+        "| 分组 | 工具数 |",
         "| --- | ---: |",
     ]
     for group, members in grouped:
@@ -95,7 +95,7 @@ def generate_tool_reference() -> str:
             "",
             f"## {group}",
             "",
-            "| Tool | Summary | Input | Result | Scope and effects | Prerequisites |",
+            "| 工具 | 说明 | 输入 | 结果 | 范围与影响 | 前置条件 |",
             "| --- | --- | --- | --- | --- | --- |",
         ])
         for tool in members:
@@ -106,7 +106,7 @@ def generate_tool_reference() -> str:
                 "| " + _cell(f"`{tool.get('name', '')}`")
                 + " | " + _cell(tool.get("description"))
                 + " | " + _cell(_schema_summary(tool.get("input_schema") or {}))
-                + " | " + _cell(tool.get("returns_raw") or "Canonical envelope with operation-specific data")
+                + " | " + _cell(tool.get("returns_raw") or "标准 envelope，`data` 由该操作定义")
                 + " | " + _cell(scope_effects)
                 + " | " + _cell(_prerequisites(tool)) + " |"
             )

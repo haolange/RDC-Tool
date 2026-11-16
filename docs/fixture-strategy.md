@@ -1,27 +1,36 @@
-﻿# Capture Fixture Strategy
+﻿# Capture Fixture 策略
 
-`rdc-tool` allows small public `.rdc` captures in `tests/fixtures/` for deterministic repository tests. Release packages must not include `.rdc` captures.
+`tests/fixtures/` 可以存放小型公开 `.rdc`，供仓库测试使用；发行包不含任何 `.rdc`。
 
-Use test layers this way:
+## 测试分层
 
-- `unit` and `contract` tests use fake controllers, mock payloads, schema checks, and catalog validation.
-- Fixture-backed repository tests may use the committed public captures listed in `tests/fixtures/README.md`.
-- Full local smoke passes an explicit desktop capture to `bash scripts/smoke_cli.sh --rdc <path>` when a real RenderDoc runtime is available.
-- Android remote smoke uses CLI transport and an explicit capture path for `rd.remote.connect`, `rd.remote.ping`, and `rd.capture.open_replay`.
-- `gpu_live` checks depend on a real RenderDoc/GPU/remote environment and are not default clean-checkout gates.
+- **单元与契约测试**：在每台主机上针对 fake renderdoc binding 运行（`tests/fakes/renderdoc.py`，经 `fake_renderdoc` fixture 注入 `sys.modules`），配合 mock payload、schema 与 catalog 校验。它们不加载真实 RenderDoc，也不证明真实回放。
+- **`fixture_integration`**：经某个安装自己的 launcher 真实回放已提交的 capture，需显式开启：
 
-Rules for captures:
+  ```bash
+  python -m pytest tests/test_fixture_integration.py --fixture-integration --fixture-root <installation>
+  ```
 
-- Only small public captures with clear source and license may live in `tests/fixtures/`.
-- Do not copy local, private, customer, or large captures into this repository.
-- Do not write developer-machine absolute paths into source, docs, tests, or release metadata.
-- Record fixture file name, size, SHA256, source, and license in `tests/fixtures/README.md` and `THIRD_PARTY_NOTICES.md`.
-- Record the Android device serial and release package SHA256 in `intermediate/logs/tool_smoke_findings.md` when they are part of release validation.
-- If a capture exposes a product bug or environment blocker, keep the evidence log and open a focused follow-up task instead of weakening the release gate.
+  `--fixture-root` 默认是当前检出，也可以指向本地候选等其他安装。测试对每个 fixture 打开 capture、读取 action tree 与管线、执行无窗口 `rd.session.observe` 并关闭回放，最后清理 context 与 daemon。未开启时跳过；一旦开启，安装无法本地回放即判为失败而不是跳过。软件驱动缺少的能力必须以 `capability` 类错误出现，不能崩溃。
+- **本地完整 smoke**：有真实 RenderDoc 运行库时，用 `bash scripts/smoke_cli.sh --rdc <path>` 传入显式的桌面 capture。
+- **Android 远端 smoke**：经 CLI 传输，用显式 capture 路径执行 `rd.remote.connect`、`rd.remote.ping` 与 `rd.capture.open_replay`，流程见 [android-remote-cli-smoke-prompt.md](android-remote-cli-smoke-prompt.md)。
 
-Release behavior:
+真实 GPU、设备与远端验收依赖外部环境，不是干净检出的默认门禁。
 
-- `bash scripts/smoke_cli.sh` without `--rdc` runs entry smoke only.
-- `bash scripts/smoke_cli.sh --rdc <path>` runs the daemon-backed capture chain.
-- `python scripts/release_gate.py --require-smoke-reports` checks only that `intermediate/logs/smoke_cli.log` contains `[smoke] PASS`.
-- `scripts/package_release.py` and `scripts/verify_release_package.py` exclude `.rdc` captures and `tests/` from release packages.
+## Capture 规则
+
+- 只有来源与许可证清楚的小型公开 capture 才能放进 `tests/fixtures/`；当前集合与哈希见 `tests/fixtures/README.md`。
+- 不把本地、私有、客户或大型 capture 拷进本仓库。
+- 不在源码、文档、测试或发布元数据中写开发机绝对路径。
+- 在 `tests/fixtures/README.md` 与 `THIRD_PARTY_NOTICES.md` 记录 fixture 文件名、大小、SHA256、来源与许可证。
+- 不保留重复字节：`hello_triangle.rdc` 与 `vkcube.rdc` 字节完全相同，已删除。
+- Android 设备序列号与发行包 SHA256 属于发布验证时，记录在 `intermediate/logs/tool_smoke_findings.md`。
+- capture 暴露产品缺陷或环境阻塞时，保留证据日志并开一个聚焦的后续任务，不弱化发布门禁。
+
+## 与发布的关系
+
+- `bash scripts/smoke_cli.sh` 不带 `--rdc` 只做入口 smoke；带 `--rdc <path>` 时执行经 daemon 的 capture 链路。
+- `python scripts/release_gate.py --require-smoke-reports` 只检查 `intermediate/logs/smoke_cli.log` 含 `[smoke] PASS`。
+- `scripts/package_release.py` 与 `scripts/verify_release_package.py` 把 `.rdc` 与 `tests/` 排除在发行包之外。
+
+脚本用法见 [../scripts/README.md](../scripts/README.md)，发布资格见 [release-baseline.md](release-baseline.md)。

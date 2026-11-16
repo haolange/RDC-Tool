@@ -1,8 +1,8 @@
-﻿# Agent Integration
+﻿# Agent 集成
 
-Agents should call `rdc-tool` through their shell tool. The public user command is `rdc-tool`.
+Agent 通过自己的 shell 工具调用 `rdc-tool`，面向用户的公开命令只有 `rdc-tool`。`rdc-tool` 是 CLI-only 的，集成面就是 shell 命令与 canonical JSON envelope。
 
-Recommended probes:
+推荐的探测命令：
 
 ```bat
 rdc-tool --version
@@ -13,7 +13,7 @@ rdc-tool tools describe rd.pipeline.get_state --json
 rdc-tool vfs ls --path / --format tsv
 ```
 
-Canonical agent lifecycle:
+标准的 Agent 生命周期：
 
 ```bat
 rdc-tool --daemon-context task-123 --json doctor
@@ -28,40 +28,43 @@ rdc-tool --owner-pid %PID% --daemon-context task-123 context clear --json
 rdc-tool --owner-pid %PID% --daemon-context task-123 daemon stop
 ```
 
-`context clear` only releases that namespace's replay/preview/remote/snapshot. `daemon stop` stops that namespace's daemon and worker. Hosts must pass `--owner-pid` so a dead launcher can reap the daemon after the lease, even if a request count is stuck. Do not treat clear success as process exit.
+`context clear` 只释放该命名空间的 replay、preview、remote 与快照；`daemon stop` 停止该命名空间的 daemon 与 worker。宿主必须传 `--owner-pid`：launcher 意外退出后，即使请求计数卡住，daemon 也会在租约到期后被回收。`context clear` 成功不代表进程已经退出。
 
-After enabling preview for an opened capture, agents should inspect `preview.display` in `context status --json` for framebuffer, window, and fit geometry instead of inferring geometry from screenshots alone.
+在已打开的 capture 上启用 preview 后，Agent 应读取 `context status --json` 中的 `preview.display` 获取 framebuffer、窗口与适配几何，而不是只凭截图推断。原生 preview 窗口只在 Windows 上提供；其他主机返回 `preview_unsupported_platform`，无窗口观察使用 `rd.session.observe`。
 
-Shader edit/replace tools expose an `edit_plan` object in JSON payloads. Agents should treat it as the machine-readable usage contract: it says whether the current shader text can be edited, which edit inputs are allowed, which patch ops are safe, whether a toolchain such as `spirv-as` is required, and which tool to call next when replacement is unsupported. A `can_replace=false` plan is a safe stop, not a signal to retry with a different text encoding.
+Shader 编辑/替换工具在 JSON 结果中提供 `edit_plan` 对象，Agent 应把它当作机器可读的使用契约：它说明当前 shader 文本能否编辑、允许哪些编辑输入、哪些 patch 操作是安全的、是否需要 `spirv-as` 等工具链，以及不支持替换时下一步该调用哪个工具。`can_replace=false` 表示应当安全停止，不是换一种文本编码重试的信号。
 
-`--daemon-context <id>` selects a continuous runtime namespace. It is not a daemon-mode switch; omitting it uses the `default` namespace. JSON is the canonical protocol. TSV is an optional tabular projection for list/navigation commands; use JSON for nested runtime state.
+`--daemon-context <id>` 选择持续的运行时命名空间，不是 daemon 模式开关；省略时使用 `default` 命名空间。JSON 是 canonical 协议；TSV 只是列表/导航命令的可选表格投影，嵌套的运行时状态用 JSON。
 
-For visible smoke, use bash so every CLI command and result appears in the agent terminal:
+需要可见的 smoke 时用 bash 运行，让每条 CLI 命令及其结果都出现在 Agent 终端里：
 
 ```bash
 bash scripts/smoke_cli.sh
 ```
 
-`rdc-tool` is CLI-only. Agents should integrate through shell commands and the canonical JSON envelope.
+精确列出一个领域用 `tools list --namespace <domain>`；自由文本搜索有意返回跨领域的相关结果。生成的工具清单见 [工具参考](tool-reference.md)，任务级 SOP 见 [rdc-tool-native agent playbook](rdc-tool-native-agent-playbook.md)，旧操作的去向见 [工具接口历史处置记录](tool-interface-upgrade.md)（不是当前契约，也不是别名映射）。
 
-CLI callers should fetch the catalog from the same configured `rdc-tool` executable they invoke and freeze its fingerprint with the turn/session binding. Do not load a second catalog path or translate removed names. Use `tools list --namespace` for an exact domain; free-text search intentionally returns related cross-domain matches.
+## 与 RDC-Agent 配对
 
+本节是 RDC-Tool 与 RDC-Agent 配对契约的唯一说明，其他文档只链接到这里。
 
-The generated reader-facing tool list is [Tool reference](tool-reference.md). Migration destinations are in [Tool interface convergence](tool-interface-upgrade.md). The task-level SOP is [rdc-tool-native agent playbook](rdc-tool-native-agent-playbook.md).
+- **发现**：RDC-Agent 通过 `rdc-tool version --json` 与 `rdc-tool tools list --full --json` 读取所选安装的版本信息与完整 catalog。
+- **校验与冻结**：RDC-Agent 按内容 fingerprint 校验 catalog，并在每个 turn 内冻结它。catalog 只取自实际调用的同一安装，不加载第二份 catalog，也不翻译已删除的名称。
+- **授权**：能否调用某个操作由 catalog 定义与 fingerprint 决定；包版本号只是安装信息，不授权也不选择接口。
+- **调用**：RDC-Agent 用该安装的捆绑 Python 运行同一安装的 `cli/run_cli.py`（Windows 上为 `<installation>/binaries/windows/x64/python/python.exe`）。shell 包装器和跨安装的组合都会被拒绝；配置方式见 [安装](install.md)。
+- **证据边界**：本地 PNG 导出不能证明 Android 设备已呈现画面。
 
-## RenderDoc runtime baseline
+RenderDoc 运行库基线见 [发布基线](release-baseline.md)。
 
-The current assembled and verified baseline is **RenderDoc 1.45**. RDC-Tool does not track every upstream minor release: a newer runtime becomes the baseline only after matching runtime packaging, catalog checks, tests and release gates pass. RenderDoc 1.44 and earlier official GUI releases are not separate assembly targets. Use the replay path matching this bundled runtime. Capture-format compatibility follows upstream RenderDoc.
+## 历史验收记录：RDC-Agent 集成（2026-10-28）
 
-RDC-Agent **0.6.x** pairs with RDC-Tool **1.0.0** and the current RenderDoc **1.45** runtime. Catalog definitions and fingerprints, not package version numbers, authorize operations. Local PNG export does not prove Android device presentation.
+> 本节是 2026-10-28 的一次消费链路实测记录，只说明当时的源码与安装，不验证当前代码或之后的发行包。
 
-## RDC-Agent 集成验收（2026-10-28）
+这次实测使用 RDC-Tool 源码基线 `3c3bfff6fbaa36499c9170c81aada4142de15b6d`，冻结的 catalog 指纹记录在验收台账中。当时没有修改 Tool 的操作定义、原生实现或安装，也没有制作或发布新包，只同步了真实集成结果。
 
-本次消费者实测使用 RDC-Tool 源码基线 `3c3bfff6fbaa36499c9170c81aada4142de15b6d`，冻结 catalog 指纹 `e1e6fd9158e829d7dd4422726e47189ef3ae992c965474d11b1200a327a5d110`。本轮没有修改 Tool 的操作定义、原生实现或安装，也没有制作或发布新包；本节只同步真实集成结果。
+- RDC-Agent 在 Android 远端的同一 capture 上完成了自主定位、shader 分析、一次精度许可内的修改和一次语义不变的重建对照。两次替换都真实应用并撤销，恢复后的图像与基线一致，替换集合为空；身份、lease、签名回执与原生审批保持有效。
+- 首次独立评审因冻结的 40 次工具额度用尽而返回 partial。用户随后明确批准一次只核对三项现存材料（回执时序、两次历史替换集合、ASM 常量）的只读补审，实际用 34/48 次工具调用完成，没有重开回放或重跑实验。原结果、消费记录与期限保留，没有为绕过 Harness 门禁而修改 Tool。
+- 最终报告接受当前 capture 的局部修正、已观察区域的有限画质和真实恢复；这不代表工程源码已部署、已跨设备验证、驱动内部机制已被证明或所有像素无损。画质属于 Agent 评审，具体候选的发色方向另由用户确认。
+- 回放由正式入口关闭，随后核验自有 daemon 与 worker 已退出；保留用户 helper、原始 capture 与必要证据，删除隔离凭据和中间资产。`context clear` 成功不能代替进程退出的证明。
 
-- RDC-Agent 在 Android 远端同一 capture 上完成自主定位、shader 分析、一次精度许可修改及一次语义不变重建对照。两次替换均真实应用、撤销，恢复图与基线一致，恢复后替换集合为空。身份、lease、签名回执和原生审批保持生效。
-- 初次独审因冻结的 40 次工具额度耗尽返回 partial。用户随后明确批准一个仅核对三项现存材料的只读补审：回执时序、两次历史替换集合、ASM 常量；实际 34/48 次工具调用完成，没有重开回放或重跑实验。原结果、消费和期限保留，没有修改 Tool 来绕过 Harness 门禁。
-- 最终报告接受当前 capture 的局部修正、已观察区域的有限画质和真实恢复；不代表工程源码已部署、跨设备验证、驱动内部机制已证明或所有像素无损。画质属于 Agent 评审，具体候选的发色方向另有用户确认。
-- 回放由正式入口关闭，随后核验自有 daemon、worker 退出；保留用户 helper、原始 capture 和必要证据，删除隔离凭据及中间资产。`context clear` 成功仍不能代替进程退出证明。
-
-消费者实际 Main SHA-256 为 `952658f0484006186f974cc6afad4edcc95af8d2578a998b8b84f4d0cef8c64b`；最终报告 `invart-c7be1f318789-1793169763702`，内容 SHA-256 `d1437b485ffa0d850e2f7a1bbd607e625a286952340518b0ca2122dd4db8b9e3`。完整范围与验证记录见 [RDC-Agent Acceptance Ledger](https://github.com/haolange/RDC-Agent/blob/main/docs/product/acceptance-ledger.md)。这些是本次消费链路证据，不能代替 Tool 后续源码变更或发行包的验证。
+消费者实际 Main SHA-256 为 `952658f0484006186f974cc6afad4edcc95af8d2578a998b8b84f4d0cef8c64b`；最终报告 `invart-c7be1f318789-1793169763702`，内容 SHA-256 为 `d1437b485ffa0d850e2f7a1bbd607e625a286952340518b0ca2122dd4db8b9e3`。完整范围与验证记录见 [RDC-Agent 验收台账](https://github.com/haolange/RDC-Agent/blob/main/docs/product/acceptance-ledger.md)。这些只是当时消费链路的证据，不能代替 Tool 后续源码变更或发行包的验证。

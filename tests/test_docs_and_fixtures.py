@@ -17,9 +17,9 @@ def test_tool_reference_is_generated_from_code_owned_definitions() -> None:
     document = doc_path.read_text(encoding="utf-8-sig")
 
     assert document == generate_tool_reference()
-    assert f"- Tool count: {len(tools)}" in document
-    assert f"- Group count: {len(groups)}" in document
-    assert f"- Catalog fingerprint: `{payload['fingerprint']}`" in document
+    assert f"- 工具数：{len(tools)}" in document
+    assert f"- 分组数：{len(groups)}" in document
+    assert f"- Catalog fingerprint：`{payload['fingerprint']}`" in document
     for tool in tools:
         assert str(tool["name"]) in document
         assert str(tool["scope"]) in document

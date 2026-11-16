@@ -74,8 +74,9 @@ REQUIRED_NAV_LINKS = {
 }
 LOCAL_LINK_RE = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
 PLACEHOLDER_RE = re.compile(r"\?{4,}")
-TOOL_COUNT_RE = re.compile(r"(\d+)\s*(?:[\u4e2a]\s*)?`rd\.\*`\s*tools")
-CONTRACT_COUNT_RE = re.compile(r"\d+\s+tools contract")
+# Catalog totals live only in the generated docs/tool-reference.md.
+TOOL_TOTAL_RE = re.compile(r"\d+\s*(?:个\s*)?(?:`rd\.\*`\s*)?(?:tools|operations|工具|操作)(?:\s*contract)?", re.IGNORECASE)
+TOOL_TOTAL_DOCS = ("README.md", "docs/tools.md", "docs/stability.md", "docs/public-contract.md")
 
 
 def tools_root_path() -> Path:
@@ -146,14 +147,10 @@ def _read_text(root: Path, rel: str) -> str:
     return (root / rel).read_text(encoding="utf-8-sig")
 
 
-def _check_count_consistency(root: Path, issues: list[str], tool_count: int) -> None:
-    for rel in ("README.md", "docs/tools.md"):
-        text = _read_text(root, rel)
-        for match in TOOL_COUNT_RE.finditer(text):
-            if int(match.group(1)) != tool_count:
-                issues.append(f"{rel}: documented tool count `{match.group(1)}` does not match catalog tool_count `{tool_count}`")
-        if CONTRACT_COUNT_RE.search(text):
-            issues.append(f"{rel}: fixed-count contract wording must come from generated catalog evidence")
+def _check_no_tool_totals(root: Path, issues: list[str]) -> None:
+    for rel in TOOL_TOTAL_DOCS:
+        for match in TOOL_TOTAL_RE.finditer(_read_text(root, rel)):
+            issues.append(f"{rel}: hardcoded tool total `{match.group(0)}`; point to `rdc-tool tools list` or docs/tool-reference.md")
 
 
 def _check_session_tool_mentions(root: Path, issues: list[str], tool_names: set[str]) -> None:
@@ -219,10 +216,9 @@ def main(argv: list[str] | None = None) -> int:
                 issues.append(f"{rel}: missing required link `{target}`")
 
     catalog = _load_catalog(root)
-    tool_count = int(catalog.get("tool_count") or len(catalog.get("tools", [])))
     tool_names = {str(item.get("name", "")).strip() for item in catalog.get("tools", [])}
 
-    _check_count_consistency(root, issues, tool_count)
+    _check_no_tool_totals(root, issues)
     _check_session_tool_mentions(root, issues, tool_names)
     _check_remote_consumed_semantics(root, issues)
     _check_agent_self_test_guidance(root, issues)
