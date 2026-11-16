@@ -684,9 +684,7 @@ def _stop_daemon_locked(context: Optional[str]) -> Tuple[bool, str]:
 
     daemon = daemon_process(st)
     worker = worker_process(st)
-    stopped = _shutdown_stateful_daemon(daemon, st, chosen_ctx)
-
-    if not stopped or (daemon.pid > 0 and process.is_alive(daemon)):
+    if not _shutdown_stateful_daemon(daemon, st, chosen_ctx):
         # An unreadable identity is reported as such: it never authorizes a kill.
         return False, f"daemon stop timed out: pid {daemon.pid} is {process.probe(daemon).value}"
 

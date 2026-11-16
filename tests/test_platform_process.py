@@ -34,6 +34,24 @@ def test_exited_child_is_exited_before_reaping():
     child.wait(timeout=10)
 
 
+@pytest.mark.skipif(host.IS_WINDOWS, reason="procfs is POSIX-only")
+def test_a_process_reaped_while_its_stat_is_read_is_exited(monkeypatch):
+    from rdc_tool.platform import _posix
+
+    class _ReapedDuringRead:
+        def __truediv__(self, part):
+            return self
+
+        def is_file(self):
+            return True
+
+        def read_text(self, *args, **kwargs):
+            raise ProcessLookupError(3, "No such process")
+
+    monkeypatch.setattr(_posix, "_PROC", _ReapedDuringRead())
+    assert process.probe(process.ProcessIdentity(4242, "linux-start-ticks:boot:1")) is process.Liveness.EXITED
+
+
 def test_kill_tree_reaps_the_daemon_group():
     code = "import subprocess, sys, time; c = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); print(c.pid, flush=True); time.sleep(60)"
     parent = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True,

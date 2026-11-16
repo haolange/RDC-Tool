@@ -73,7 +73,8 @@ def process_birth(pid: int) -> str | None:
         raise OSError("process birth requires /proc")
     try:
         stat = (_PROC / str(pid) / "stat").read_text(encoding="utf-8", errors="replace")
-    except FileNotFoundError:
+    except (FileNotFoundError, ProcessLookupError):
+        # ESRCH: the process was reaped between open and read. It is gone, not unreadable.
         return None
     fields = stat[stat.rindex(")") + 2:].split()
     if fields[0] in {"Z", "X"}:

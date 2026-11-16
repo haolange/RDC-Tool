@@ -23,7 +23,7 @@
 - 发布脚本按主机布局工作：包名带主机目标，`binaries/` 只带本主机运行目录、Android helper 与共享回执；校验解压时还原权限位；原生加载核验不再依赖 Windows 专属 `PATH`。删除发布门禁与包校验中的“已删除名单”（旧别名、pre-GA 标记、MCP 标记、`rdc_tool.bat` 示例、旧路径扫描）及依赖 `rg` 的双实现扫描器；catalog 与定义完全一致的检查已覆盖多余工具。
 - 操作结果改为类型化的 `Success`/`Failure`：构造时一次性转成 JSON 安全数据，`dispatch` 只做类型分派，其他返回值一律为 `internal_error`；删除 `_ok`/`_err` 的 JSON 字符串往返、五种结果形状嗅探与“未知结构判成功”，操作间组合不再解析字符串。修复 `rd.util.list_artifacts` 的 `data.artifacts` 被丢弃（契约声明了该字段）；`rd.debug.evaluate_expression` 在读取变量失败时返回该失败，而不是当作空变量表。
 - 仓库与文档：删除 `.qoder/`（175 个过期生成页）、空 `policy/` 与强制跟踪的 `intermediate/` 占位；全部文档改为中文叙述（术语保留英文）；RenderDoc 基线、环境变量、脚本说明与 RDC-Agent 配对各只在一处声明并由测试守护；用户文档不再写死工具总数，`docs/tool-reference.md` 改为中文生成；`docs/tool-interface-upgrade.md` 收为已删除操作的历史处置记录；`docs/tool-convergence-tasks.md` 只保留当前 Task 清单。
-- `daemon stop` 超时时报告 daemon 的实际存活判定（`alive`/`unknown`），不可读身份与未退出可区分。
+- 修复 POSIX 上 `daemon stop` 偶发误报超时：读取正在被 init 回收的进程的 `/proc/<pid>/stat` 会在 `open` 成功后以 ESRCH 失败（立即回收的环境下约四成概率），此前被当作“身份不可读”而判为仍存活；现在 ESRCH 判为已退出，停止流程也不再在确认退出后重复探测。超时消息报告实际存活判定（`alive`/`unknown`）。
 
 ## 1.1.2 — 2026-10-29
 

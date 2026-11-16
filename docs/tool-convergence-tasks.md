@@ -32,4 +32,3 @@
 | Linux 正式产物 | 尚无 Linux 发行包 | 下一轮：同源构建、老 glibc 基线构建环境、`package_runtime --host linux-x64`、包校验 |
 | Windows 捆绑依赖早于哈希锁 | 已提交的 Windows `python/` 中仍有 MCP 时代的多余包，`bundle == lock` 校验未启用 | 下一轮用 `package_runtime --host windows-x64` 按锁重建并启用该校验 |
 | Windows 与 Android 真机验收 | 本轮无 GPU 与设备，只有 CI | 发布前在 Windows 机器运行 `bash scripts/smoke_cli.sh --rdc tests/fixtures/vkcube.rdc` 与 [Android 验收](android-remote-cli-smoke-prompt.md) |
-| Linux CI 偶发 daemon 停止超时 | `test_slow_real_daemon_is_reused_across_processes` 偶发 `daemon stop timed out`，本地复现不出 | 停止超时消息已带存活判定（`alive`/`unknown`），据下一次失败的判定定位根因 |
