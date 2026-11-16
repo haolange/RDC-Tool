@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import tomllib
 import json
 import os
@@ -25,6 +24,7 @@ from scripts.release_runtime import isolated_release_runtime
 from rdc_tool import __version__ as TOOL_VERSION
 from rdc_tool.platform import process
 from rdc_tool.runtime_identity import native_manifest_status
+from rdc_tool.io_utils import sha256_file
 
 
 PUBLIC_COMMAND = "rdc-tool"
@@ -187,7 +187,7 @@ def _verify_release_identity(root: Path, source: Path = SCRIPT_ROOT,
         file = (root / item["path"]).resolve()
         if not file.is_relative_to(root.resolve()) or not file.is_file():
             raise RuntimeError("manifest path is missing or outside package")
-        if file.stat().st_size != item["size"] or _sha256(file) != item["sha256"]:
+        if file.stat().st_size != item["size"] or sha256_file(file) != item["sha256"]:
             raise RuntimeError(f"package bytes do not match manifest: {item['path']}")
     if manifest_name == "CANDIDATE_MANIFEST.json":
         from scripts.package_release import source_file_digest
@@ -208,15 +208,10 @@ def _verify_release_identity(root: Path, source: Path = SCRIPT_ROOT,
         raise RuntimeError(f"Package paired native runtime is not verified: {native}")
 
 
-def _sha256(file: Path) -> str:
-    with file.open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
-
-
 def _verify_archive_checksum(zip_path: Path) -> None:
     rows = (zip_path.parent / "SHA256SUMS").read_text(encoding="utf-8").splitlines()
     expected = [line.split()[0] for line in rows if len(line.split()) == 2 and line.split()[1] == zip_path.name]
-    if len(expected) != 1 or expected[0] != _sha256(zip_path):
+    if len(expected) != 1 or expected[0] != sha256_file(zip_path):
         raise RuntimeError("release archive checksum mismatch")
 
 

@@ -12,6 +12,7 @@ Artifacts 通过 ``rdc-tool://`` URI 引用，并由 :class:`rdc_tool.models.Art
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import time
@@ -22,6 +23,7 @@ import aiofiles
 import aiofiles.os
 
 from rdc_tool.models import ArtifactRef
+from rdc_tool.io_utils import sha256_file
 
 logger = logging.getLogger(__name__)
 
@@ -50,18 +52,6 @@ def _build_uri(sha256: str) -> str:
 def _sha256_bytes(data: bytes) -> str:
     """计算 *data* 的 SHA256（hex 编码）。"""
     return hashlib.sha256(data).hexdigest()
-
-
-async def _sha256_file(path: Path) -> str:
-    """计算 *path* 文件的 SHA256（hex 编码），避免一次性读入内存。"""
-    h = hashlib.sha256()
-    async with aiofiles.open(path, "rb") as fh:
-        while True:
-            chunk = await fh.read(_CHUNK_SIZE)
-            if not chunk:
-                break
-            h.update(chunk)
-    return h.hexdigest()
 
 
 # ---------------------------------------------------------------------------
@@ -189,7 +179,7 @@ class ArtifactStore:
         if not path.is_file():
             raise FileNotFoundError(f"Source file does not exist: {path}")
 
-        sha = await _sha256_file(path)
+        sha = await asyncio.to_thread(sha256_file, path)
         dest = _shard_path(self._root, sha)
         file_size = path.stat().st_size
 

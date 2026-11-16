@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
 from rdc_tool import __version__ as _TOOL_VERSION
+from rdc_tool.io_utils import sha256_file
 
 SCHEMA_VERSION = "3.0.0"
 TSV_FORMAT_VERSION = "1.0.0"
@@ -25,17 +26,6 @@ def tool_version() -> str:
 def _guess_mime(path: Path) -> str:
     guessed, _ = mimetypes.guess_type(str(path))
     return guessed or "application/octet-stream"
-
-
-def _sha256_file(path: Path) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as fh:
-        while True:
-            chunk = fh.read(1 << 20)
-            if not chunk:
-                break
-            h.update(chunk)
-    return h.hexdigest()
 
 
 def _artifact_id(seed: str) -> str:
@@ -56,7 +46,7 @@ def make_artifact_from_path(
     mime = "application/octet-stream"
     if p.exists() and p.is_file():
         size_bytes = int(p.stat().st_size)
-        sha256 = _sha256_file(p)
+        sha256 = sha256_file(p)
         mime = _guess_mime(p)
     return {
         "artifact_id": _artifact_id(url or str(p)),
@@ -76,7 +66,7 @@ def make_artifact_from_url(
     *,
     artifact_type: str = "file",
     metadata: Optional[Dict[str, Any]] = None,
-    storage_backend: str = "s3",
+    storage_backend: str = "external",
     mime: str = "application/octet-stream",
     size_bytes: int = 0,
     sha256: str = "",

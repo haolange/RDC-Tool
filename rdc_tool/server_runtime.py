@@ -6933,7 +6933,7 @@ async def _dispatch_session(action: str, args: Dict[str, Any]) -> str:
         )
 
     if action == "create_context":
-        requested_context = normalize_context_id(args.get("new_context_id") or args.get("target_context_id") or args.get("context_id") or context_id)
+        requested_context = normalize_context_id(args["new_context_id"])
         _ensure_context_capacity(requested_context)
         state = _context_state(requested_context)
         _store_context_state(state, requested_context)

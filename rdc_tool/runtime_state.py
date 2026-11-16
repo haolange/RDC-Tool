@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 
-from rdc_tool.context_snapshot import default_preview_state, normalize_context_id, normalize_preview_state
+from rdc_tool.context_snapshot import context_file_token, default_preview_state, normalize_context_id, normalize_preview_state
 from rdc_tool.io_utils import atomic_append_jsonl, atomic_write_json, state_file_lock
 from rdc_tool.runtime_paths import cli_runtime_dir
 
@@ -16,18 +16,13 @@ def _now_ms() -> int:
     return int(time.time() * 1000)
 
 
-def _sanitize_context(context: Optional[str]) -> str:
-    ctx = normalize_context_id(context)
-    return "".join(ch if ch.isalnum() or ch in ("-", "_", ".") else "_" for ch in ctx)
-
-
 def context_state_path(context: Optional[str] = "default") -> Path:
     state_dir = cli_runtime_dir()
     state_dir.mkdir(parents=True, exist_ok=True)
     ctx = normalize_context_id(context)
     if ctx == "default":
         return state_dir / "runtime_state.json"
-    return state_dir / f"runtime_state_{_sanitize_context(ctx)}.json"
+    return state_dir / f"runtime_state_{context_file_token(ctx)}.json"
 
 
 def context_log_path(context: Optional[str] = "default") -> Path:
@@ -36,7 +31,7 @@ def context_log_path(context: Optional[str] = "default") -> Path:
     ctx = normalize_context_id(context)
     if ctx == "default":
         return state_dir / "runtime_logs.jsonl"
-    return state_dir / f"runtime_logs_{_sanitize_context(ctx)}.jsonl"
+    return state_dir / f"runtime_logs_{context_file_token(ctx)}.jsonl"
 
 
 def _context_state_lock_path(context: Optional[str] = "default") -> Path:

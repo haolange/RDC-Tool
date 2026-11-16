@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
-from rdc_tool.context_snapshot import normalize_context_id
+from rdc_tool.context_snapshot import context_file_token, normalize_context_id
 from rdc_tool.daemon.ownership import DaemonOwnerUnavailable, OwnerLease, locked_publication, owner_is_busy
 from rdc_tool.io_utils import atomic_write_json
 from rdc_tool.platform.process import ProcessIdentity
@@ -64,13 +64,9 @@ def normalize_timeout(value: Any, *, default: int) -> int:
     return parsed if parsed > 0 else int(default)
 
 
-def _file_token(context: str) -> str:
-    return "".join(ch if ch.isalnum() or ch in ("-", "_", ".") else "_" for ch in context)
-
-
 def state_path(context: Optional[str]) -> Path:
     ctx = normalize_context_id(context)
-    name = _DEFAULT_STATE_FILE if ctx == "default" else f"daemon_state_{_file_token(ctx)}.json"
+    name = _DEFAULT_STATE_FILE if ctx == "default" else f"daemon_state_{context_file_token(ctx)}.json"
     return cli_runtime_dir() / name
 
 

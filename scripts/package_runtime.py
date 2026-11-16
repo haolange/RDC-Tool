@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import shutil
 import struct
@@ -24,6 +23,7 @@ from rdc_tool.runtime_requirements import should_bundle_site_package
 from rdc_tool import runtime_identity
 from scripts.distribution_metadata import write_distribution_metadata
 from scripts._shared import ensure_within_root, resolve_repo_path, task_directory, tools_root, write_text
+from rdc_tool.io_utils import sha256_file
 
 
 DENY_SUFFIXES = {".pdb", ".lib", ".exp", ".ilk", ".h"}
@@ -69,17 +69,6 @@ def _iter_allowed_files(src: Path) -> Iterable[Path]:
             for p in sorted(pymod.glob(pattern)):
                 if p.is_file():
                     yield p
-
-
-def _sha256(path: Path) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as f:
-        while True:
-            chunk = f.read(1024 * 1024)
-            if not chunk:
-                break
-            h.update(chunk)
-    return h.hexdigest()
 
 
 def _copy_tree_filtered(src: Path, dst: Path, *, skip_top_level: set[str] | None = None) -> None:
@@ -281,7 +270,7 @@ def _manifest_entry(path: Path, out_root: Path) -> dict[str, object]:
     return {
         "path": rel,
         "size": int(path.stat().st_size),
-        "sha256": _sha256(path),
+        "sha256": sha256_file(path),
     }
 
 

@@ -12,6 +12,7 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict
 
+from rdc_tool.context_snapshot import normalize_context_id
 from rdc_tool.io_utils import safe_json_text, safe_stream_write
 from rdc_tool.platform import process
 from rdc_tool.platform.process import ProcessIdentity
@@ -42,7 +43,7 @@ class _WorkerProgressSink(ProgressSink):
 
 
 def _context_id() -> str:
-    return str(os.environ.get("RDC_TOOL_CONTEXT_ID") or "default").strip() or "default"
+    return normalize_context_id(os.environ.get("RDC_TOOL_CONTEXT_ID"))
 
 
 def _watch_parent_daemon() -> None:

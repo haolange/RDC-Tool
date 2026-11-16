@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -39,6 +40,11 @@ def state_file_lock(lock_path: Path, context: str) -> Iterator[None]:
                          "recovery_hint": "Retry after the concurrent state writer finishes; do not remove the lock file."},
             ) from exc
         yield
+
+
+def sha256_file(path: Path) -> str:
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
 def _sanitize_json_value(payload: Any) -> Any:

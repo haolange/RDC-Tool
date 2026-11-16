@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import re
@@ -26,6 +25,7 @@ from scripts import package_release as release_packager
 from scripts._shared import run_subprocess, tools_root, write_text
 from scripts.generate_tool_reference import generate_tool_reference
 from scripts.release_runtime import isolated_release_runtime
+from rdc_tool.io_utils import sha256_file
 
 
 REQUIRED_DIRS = [
@@ -121,17 +121,6 @@ def _launcher_env(root: Path | None = None) -> dict[str, str]:
         if ".CMD" not in pathext.upper().split(";"):
             env["PATHEXT"] = pathext + (";" if pathext else "") + ".CMD"
     return env
-
-
-def _sha256(path: Path) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as f:
-        while True:
-            chunk = f.read(1024 * 1024)
-            if not chunk:
-                break
-            h.update(chunk)
-    return h.hexdigest()
 
 
 def _run(cmd: list[str], cwd: Path, *, env: dict[str, str] | None = None) -> tuple[bool, str]:
@@ -271,7 +260,7 @@ def _check_manifest(root: Path) -> tuple[bool, str]:
             return False, f"missing runtime file: {rel}"
         if int(p.stat().st_size) != int(size):
             return False, f"size mismatch for {rel}"
-        if _sha256(p) != sha:
+        if sha256_file(p) != sha:
             return False, f"sha256 mismatch for {rel}"
     return True, f"validated {len(files)} runtime files"
 
@@ -477,7 +466,7 @@ def _release_source_manifest(root: Path) -> list[dict[str, object]]:
             {
                 "path": rel.as_posix(),
                 "size": int(path.stat().st_size),
-                "sha256": _sha256(path),
+                "sha256": sha256_file(path),
             }
         )
     return entries

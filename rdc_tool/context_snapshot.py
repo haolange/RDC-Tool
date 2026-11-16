@@ -172,7 +172,8 @@ def normalize_context_id(context: Optional[str]) -> str:
     return text
 
 
-def _sanitize_context(context: Optional[str]) -> str:
+def context_file_token(context: Optional[str]) -> str:
+    """File-name-safe form of a context id."""
     ctx = normalize_context_id(context)
     return "".join(ch if ch.isalnum() or ch in ("-", "_", ".") else "_" for ch in ctx)
 
@@ -201,7 +202,7 @@ def context_snapshot_path(context: Optional[str] = "default") -> Path:
     ctx = normalize_context_id(context)
     if ctx == "default":
         return state_dir / "context_snapshot.json"
-    return state_dir / f"context_snapshot_{_sanitize_context(ctx)}.json"
+    return state_dir / f"context_snapshot_{context_file_token(ctx)}.json"
 
 
 def _context_snapshot_lock_path(context: Optional[str] = "default") -> Path:

@@ -112,7 +112,6 @@ class CoreEngine:
                 }
                 artifacts = await self.artifact_publisher.publish_candidates(
                     collect_artifact_candidates(raw),
-                    remote=ctx.remote,
                 )
                 source_meta = raw.get("meta")
                 if not isinstance(source_meta, dict):
@@ -174,7 +173,6 @@ class CoreEngine:
                 if not artifacts:
                     artifacts = await self.artifact_publisher.publish_candidates(
                         collect_artifact_candidates(raw.get("data") or {}),
-                        remote=ctx.remote,
                     )
                 return canonical_success(
                     result_kind=str(raw.get("result_kind") or operation),
@@ -200,7 +198,6 @@ class CoreEngine:
 
         artifacts = await self.artifact_publisher.publish_candidates(
             collect_artifact_candidates(raw),
-            remote=ctx.remote,
         )
         return canonical_success(
             result_kind=str(operation),

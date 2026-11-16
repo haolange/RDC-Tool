@@ -20,6 +20,7 @@ if str(SCRIPT_ROOT) not in sys.path:
 from rdc_tool import __version__ as TOOL_VERSION
 from rdc_tool.runtime_identity import native_manifest_status
 from scripts._shared import task_directory, tools_root, write_text
+from rdc_tool.io_utils import sha256_file
 
 
 PACKAGE_PLATFORM = "windows-x64"
@@ -63,17 +64,6 @@ def _tools_root() -> Path:
     return tools_root(__file__)
 
 
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        while True:
-            chunk = handle.read(1024 * 1024)
-            if not chunk:
-                break
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def _should_skip(path: Path, root: Path) -> bool:
     rel = path.relative_to(root)
     if rel.as_posix() == 'docs/tool-convergence-tasks.md':
@@ -109,7 +99,7 @@ def _copy_release_tree(root: Path, staging_root: Path, *, runtime_root: Path | N
             {
                 "path": rel.as_posix(),
                 "size": int(target.stat().st_size),
-                "sha256": _sha256(target),
+                "sha256": sha256_file(target),
             }
         )
     return copied
@@ -192,7 +182,7 @@ def _write_release_metadata(staging_root: Path, files: list[dict[str, object]], 
     write_text(staging_root / "SBOM.json", json.dumps(sbom, ensure_ascii=False, indent=2) + "\n")
     if candidate_source is not None:
         manifest["files"] = [*files, *[{"path": name, "size": (staging_root / name).stat().st_size,
-                                      "sha256": _sha256(staging_root / name)}
+                                      "sha256": sha256_file(staging_root / name)}
                                      for name in ("LICENSE_INVENTORY.json", "SBOM.json")]]
         manifest["file_count"] = len(manifest["files"])
     write_text(staging_root / manifest_name, json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
@@ -223,7 +213,7 @@ def _build_candidate(root: Path, raw_destination: str, *, runtime_root: Path | N
         for item in files:
             source_root = runtime_root if runtime_root is not None and str(item["path"]).startswith("binaries/") else root
             path = source_root / str(item["path"])
-            if path.stat().st_size != item["size"] or _sha256(path) != item["sha256"]:
+            if path.stat().st_size != item["size"] or sha256_file(path) != item["sha256"]:
                 raise RuntimeError(f"Source input changed while packaging: {item['path']}")
         source = {**before, "shipped_source_sha256": source_file_digest(files)}
         _write_release_metadata(staged, files, before["base_revision"], candidate_source=source)
@@ -327,14 +317,14 @@ def main(argv: list[str] | None = None) -> int:
         _write_release_metadata(staging_root, files, revision)
         staged_zip = Path(staging) / package_name
         _zip_dir(staging_root, staged_zip)
-        sha = _sha256(staged_zip)
+        sha = sha256_file(staged_zip)
         write_text(Path(staging) / "SHA256SUMS", f"{sha}  {package_name}\n")
         _qualify_package(staged_zip)
         if _source_revision(root) != revision:
             raise RuntimeError("Release source changed while packaging")
         for item in files:
             source = root / item["path"]
-            if source.stat().st_size != item["size"] or _sha256(source) != item["sha256"]:
+            if source.stat().st_size != item["size"] or sha256_file(source) != item["sha256"]:
                 raise RuntimeError(f"Release input changed while packaging: {item['path']}")
         report = [
             "# rdc-tool Release Report", "",

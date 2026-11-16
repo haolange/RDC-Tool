@@ -362,7 +362,7 @@ def test_release_gate_accepts_zero_byte_files_in_release_manifest(tmp_path: Path
     source.write_bytes(b"")
     package = tmp_path / "dist" / "rdc-tool-1.0.0-windows-x64.zip"
     package.parent.mkdir(parents=True, exist_ok=True)
-    source_sha = release_gate._sha256(source)
+    source_sha = release_gate.sha256_file(source)
     manifest = {
         "name": "rdc-tool",
         "version": "1.0.0",
@@ -397,7 +397,7 @@ def test_native_runtime_manifest_uses_file_integrity_without_release_revision(tm
     runtime.mkdir(parents=True)
     file = runtime / 'renderdoc.dll'
     file.write_bytes(b'fixture runtime')
-    (runtime / 'manifest.runtime.json').write_text(json.dumps({'files': [{'path': file.name, 'size': file.stat().st_size, 'sha256': release_gate._sha256(file)}]}))
+    (runtime / 'manifest.runtime.json').write_text(json.dumps({'files': [{'path': file.name, 'size': file.stat().st_size, 'sha256': release_gate.sha256_file(file)}]}))
     ok, detail = release_gate._check_manifest(tmp_path)
     assert ok and 'validated 1 runtime files' in detail
     file.write_bytes(b'changed')

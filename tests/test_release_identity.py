@@ -48,14 +48,14 @@ def test_replaced_zip_license_fails_even_with_recomputed_manifest_and_checksum(t
     package = identity_fixture(tmp_path)
     (package / 'LICENSE').write_bytes(b'replaced license')
     manifest = json.loads((package / 'RELEASE_MANIFEST.json').read_text(encoding='utf-8'))
-    manifest['files'] = [{'path': 'LICENSE', 'size': 16, 'sha256': verify._sha256(package / 'LICENSE')}]
+    manifest['files'] = [{'path': 'LICENSE', 'size': 16, 'sha256': verify.sha256_file(package / 'LICENSE')}]
     (package / 'RELEASE_MANIFEST.json').write_text(json.dumps(manifest), encoding='utf-8')
     archive = tmp_path / 'candidate.zip'
     with zipfile.ZipFile(archive, 'w') as zipped:
         for file in package.rglob('*'):
             if file.is_file():
                 zipped.write(file, file.relative_to(package))
-    (tmp_path / 'SHA256SUMS').write_text(f'{verify._sha256(archive)}  candidate.zip\n', encoding='utf-8')
+    (tmp_path / 'SHA256SUMS').write_text(f'{verify.sha256_file(archive)}  candidate.zip\n', encoding='utf-8')
     verify._verify_archive_checksum(archive)
     extracted = tmp_path / 'extracted'
     with zipfile.ZipFile(archive) as zipped:
