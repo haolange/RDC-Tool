@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Dict, Optional
 
 from rdc_tool.core.errors import CoreError
-from rdc_tool.runtime import live_state
+from rdc_tool.runtime import live_state, shader_values
 
 
 def _require_shader_debug_handle(session_id: str, debug_id: str) -> live_state.ShaderDebugHandle:
@@ -66,7 +66,7 @@ def _shader_debug_state_payload(handle: live_state.ShaderDebugHandle, detail_lev
                 "column_end": positive("colEnd") if file_index >= 0 else None,
             }
     if detail_level == "full":
-        variables = list(handle.variables.values())
+        variables = list(_shader_debug_variable_snapshot(handle).values())
         stack = list(getattr(state, "callstack", None) or []) if state is not None else []
         payload.update(variables=[_bounded_debug_variable(value, 2) for value in variables[:64]],
                        variable_count=len(variables), variables_truncated=len(variables) > 64,
@@ -74,3 +74,10 @@ def _shader_debug_state_payload(handle: live_state.ShaderDebugHandle, detail_lev
                        callstack=[str(name) for name in stack[:64]],
                        callstack_count=len(stack), callstack_truncated=len(stack) > 64)
     return payload
+
+
+def _shader_debug_variable_snapshot(handle: live_state.ShaderDebugHandle) -> Dict[str, Dict[str, Any]]:
+    """Merge the immutable native trace inputs with the current mutable variables."""
+    inputs = {str(variable.name): {**shader_values._shader_variable_payload(variable), "variable_origin": "trace_input"}
+              for variable in handle.trace.inputs if variable.name}
+    return {**inputs, **handle.variables}

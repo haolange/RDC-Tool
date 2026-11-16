@@ -725,7 +725,7 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'path_inputs': []},
  {'name': 'rd.debug.get_variables',
   'group': '3.9，Shader Debugger 与像素/顶点级调试 (Shader Debugging)',
-  'description': '读取当前调试步的累积原生变量快照；按 before/after 更新，不只返回最后一条变化。值保留原生类型/数值视图，结构成员可限定展开深度。',
+  'description': '读取原生 trace 输入和当前调试步的累积可变变量；输入标记 variable_origin=trace_input，可变变量按 before/after 更新。值保留原生类型/数值视图，结构成员可限定展开深度。',
   'parameter_raw': 'session_id (string): session_id (str)<br>shader_debug_id (string): '
                    'shader_debug_id (str), current owning replay only; stale/foreign handles fail before native effects<br>name_filter (string, optional): name_filter (str, '
                    '可选): literal name substring<br>expand_depth (integer, optional): expand_depth (int, '
@@ -3295,7 +3295,7 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'path_inputs': []},
  {'name': 'rd.shader.get_debug_state',
   'group': '3.9，Shader Debugger 与像素/顶点级调试 (Shader Debugging)',
-  'description': '获取原生 debugger 状态。PC 为动态 trace stepIndex；next_instruction 为原生下一指令，非 SPIR-V ID。summary 返回原生稀疏位置映射（未知为 null），其 1-based disassembly_line 仅属于 RenderDoc debug disassembly，不等于 raw SPIR-V ASM 行号。full 另含最多64项当前 mutable 变量（成员深度2）和64层原生调用栈及截断计数；不伪造寄存器、SSA 或未暴露变量。',
+  'description': '获取原生 debugger 状态。PC 为动态 trace stepIndex；next_instruction 为原生下一指令，非 SPIR-V ID。summary 返回原生稀疏位置映射（未知为 null），其 1-based disassembly_line 仅属于 RenderDoc debug disassembly，不等于 raw SPIR-V ASM 行号。full 另含最多64项原生 trace 输入及当前 mutable 变量（成员深度2）和64层原生调用栈及截断计数；输入标记 variable_origin=trace_input；不伪造寄存器、SSA 或未暴露变量。',
   'parameter_raw': 'session_id (string): session_id (str)<br>shader_debug_id (string): '
                    'shader_debug_id (str), current owning replay only; stale/foreign handles fail before native effects<br>detail_level (string, optional): detail_level (str, '
                    "可选, 默认 'full'): 'summary' | 'full'<br>event_id (integer, optional): Replay "

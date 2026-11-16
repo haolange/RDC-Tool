@@ -122,8 +122,8 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
         expand_depth = coerce._as_int(args.get("expand_depth"), 2)
         max_variables = coerce._as_int(args.get("max_variables"), 2048)
 
-        variables = [shader_debug._bounded_debug_variable(variable, expand_depth) for name, variable in handle.variables.items()
-                     if name_filter in name]
+        variables = [shader_debug._bounded_debug_variable(variable, expand_depth)
+                     for name, variable in shader_debug._shader_debug_variable_snapshot(handle).items() if name_filter in name]
         return envelope.success(variables=variables[:max_variables], truncated=len(variables) > max_variables)
     if action == "evaluate_expression":
         coerce._require(args, "expression")
