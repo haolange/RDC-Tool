@@ -10,11 +10,13 @@
 | 异常 worker 后清理 | 无 | 通过 | Android 实机受控终止自有 worker 后，产品隔离 lease，再清理 context、forward、helper、daemon 与 worker；独立的 helper 断连也触发产品隔离并完成清理。真实 native crash 尚未实测 |
 | shader 产物字节 | 无 | 通过 | Android 实际 shader 产物与 artifact store 字节一致，Agent `read_file` 按内容 SHA-256 审计通过；隔离测试另覆盖 LF、CRLF 与非 ASCII |
 | 错误分类 | 无 | 通过 | 对提交中的 36 处逐项核对；产品实测不存在的事件返回保全证明并保留 lease，未知结果继续隔离 |
-| 集成验收与本地交付 | 上述任务 | 执行中 | 最终 Windows 全量测试 1319 passed、12 skipped、2 subtests passed，pytest 缓存有 1 条写入警告；Agent 相关测试 131 passed、guide fingerprint 一致。正式包复核进行中 |
+| 集成验收与本地交付 | 上述任务 | 通过 | 最终 Windows 全量测试 1319 passed、12 skipped、2 subtests passed，pytest 缓存有 1 条写入警告；Agent 相关测试 131 passed、guide fingerprint 一致。干净源码提交 `61b4c51` 的正式 Windows 包通过源码门禁与完整包校验，SHA-256 为 `9dbf91d6752ce1a99b84cd7d9bad563a826ff4ece24c1ea29fc078db35fab314` |
 
 错误分类核对：20 处是 catalog 路由不支持操作的兜底，另 3 处已被参数校验或更早的调试参数检查拦截。其余分支中，capture 缺失、事件索引未命中、表达式未找到和可提前确认的格式错误按实际阶段提供保全信息；图像依赖缺失是 capability 错误，当前 Agent 尚不将该类别的一般保全证明用于保留 lease。healthcheck 会触及文件、debug 超时可能已推进调试状态、Pixel History 可能已进入原生调用，均保留不确定分类；自动选择格式后才能判断的失败也不虚报前置保全。
 
 实机边界：两次 Android 故障分别是受控终止自有 worker 与停止自有 helper 造成的远端断连，并非真实 native crash。设备配置哈希和属性未变；原始 capture 与既有 helper/forward 未修改。PC 节点测试在完成清理后因没有 Electron 窗口日志对象报错，已独立核实空登记和所属进程退出；shader 调用的节点测试误要求结果带 context 字段，但产物已生成，随后用产品 `read_file` 单独完成字节审计。
+
+产品实测使用此前经正式校验的源码提交 `62fd738` 的隔离包；随后补充的损坏旧登记与不可读进程身份保护单独通过测试并重新正式打包。两包的实际运行文件只有 `daemon/client.py` 与 `platform/process.py` 不同，故不重复同条件实机操作。shader 源码产物与 store 的字节 SHA-256 均为 `9df46a8ce5b9d74384789c4bcb7ab629272c41eceae35568a32a56fcfbabae47`。
 
 ## 上轮：跨平台收敛与架构升级
 
