@@ -61,52 +61,6 @@ def _write_stdout(text: str) -> None:
     safe_stream_write(text + "\n", sys.stdout)
 
 
-def _print_launcher_help() -> None:
-    for line in (
-        "usage: rdc-tool [--json] [--daemon-context <id>] <command> ...",
-        "commands:",
-        "  version",
-        "  doctor",
-        "  tools list|search|describe",
-        "  daemon start|stop|status",
-        "  context status|update|list|clear",
-        "  session preview on|off|status",
-        "  completion powershell|bash|zsh|fish",
-        "  call <operation> [--args-json ... | --args-file ...] [--format json|tsv] [--remote]",
-        "  batch <jsonl> [--remote]",
-        "  capture open|status",
-        "  vfs ls|cat|tree|resolve",
-        "  event list|show",
-        "  pipeline show|section",
-        "  shader source|disasm|constants",
-        "  export screenshot|texture|buffer|mesh",
-        "  pixel value|history",
-        "  resource list|show|usage",
-        "  diff pipeline|image",
-        "  assert pipeline|image",
-        "",
-        "examples:",
-        "  rdc-tool --version",
-        "  rdc-tool version --json",
-        "  rdc-tool --json doctor",
-        "  rdc-tool completion powershell",
-        "  rdc-tool tools search pipeline --json",
-        "  rdc-tool daemon start --daemon-context local",
-        "  rdc-tool context status --daemon-context local --json",
-        "  rdc-tool context update --daemon-context local --key notes --value triaged --json",
-        "  rdc-tool context clear --daemon-context local",
-        "  rdc-tool capture open --file D:\\path\\capture.rdc --frame-index 0 --preview",
-        "  rdc-tool session preview on",
-        "  rdc-tool call rd.session.get_context --args-file .\\args.json --format json",
-        "  rdc-tool vfs ls --path / --format tsv",
-        "  rdc-tool event list --format tsv",
-        "  rdc-tool pipeline show --event-id 42",
-        "  rdc-tool shader source --event-id 42 --stage ps",
-        "  rdc-tool export screenshot --event-id 42 --out .\\frame.png",
-    ):
-        _write_stdout(line)
-
-
 def _exception_error_payload(result_kind: str, exc: Exception, *, transport: str = "cli") -> Dict[str, Any]:
     code = str(getattr(exc, "code", "") or "runtime_error")
     category = str(getattr(exc, "category", "") or "runtime")
@@ -576,81 +530,21 @@ def _cmd_version(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _parser_words(parser: argparse.ArgumentParser) -> set[str]:
+    words: set[str] = set()
+    for action in parser._actions:
+        words.update(option for option in action.option_strings if option.startswith("--"))
+        if isinstance(action, argparse._SubParsersAction):
+            for name, subparser in action.choices.items():
+                words.add(name)
+                words |= _parser_words(subparser)
+    return words
+
+
 def _completion_words() -> list[str]:
-    static_words = [
-        "doctor",
-        "version",
-        "tools",
-        "list",
-        "search",
-        "daemon",
-        "start",
-        "stop",
-        "status",
-        "context",
-        "clear",
-        "session",
-        "preview",
-        "on",
-        "off",
-        "capture",
-        "open",
-        "call",
-        "vfs",
-        "event",
-        "show",
-        "pipeline",
-        "section",
-        "shader",
-        "source",
-        "disasm",
-        "constants",
-        "export",
-        "screenshot",
-        "texture",
-        "buffer",
-        "mesh",
-        "pixel",
-        "value",
-        "history",
-        "resource",
-        "ls",
-        "cat",
-        "tree",
-        "resolve",
-        "diff",
-        "pipeline",
-        "image",
-        "assert",
-        "completion",
-        "powershell",
-        "bash",
-        "zsh",
-        "fish",
-        "--json",
-        "--daemon-context",
-        "--version",
-        "--help",
-        "--file",
-        "--frame-index",
-        "--args-json",
-        "--args-file",
-        "--format",
-        "--remote",
-        "--session-id",
-        "--event-id",
-        "--stage",
-        "--resource-id",
-        "--out",
-        "--slot",
-        "--x",
-        "--y",
-    ]
-    try:
-        tool_names = [str(item.get("name") or "") for item in load_tool_catalog()]
-    except Exception:
-        tool_names = []
-    return sorted({word for word in [*static_words, *tool_names] if word})
+    """Every subcommand and long option the parser accepts, plus operation names."""
+    tool_names = {str(item["name"]) for item in load_tool_catalog()}
+    return sorted(_parser_words(_build_parser()) | tool_names)
 
 
 def _completion_script(shell: str) -> str:
@@ -686,10 +580,10 @@ def _completion_script(shell: str) -> str:
         return "\n".join(
             [
                 "#compdef rdc-tool",
-                "_rdx() {",
+                "_rdc_tool() {",
                 f"  compadd -- {joined}",
                 "}",
-                "_rdx \"$@\"",
+                "_rdc_tool \"$@\"",
                 "",
             ]
         )
@@ -1771,12 +1665,8 @@ async def _main_async(args: argparse.Namespace) -> int:
 
 
 def main() -> None:
-    from rdc_tool.environment import validate_environment
-    try:
-        validate_environment()
-    except ValueError as exc:
-        _print_json(canonical_error(result_kind="rdc_tool.cli", code="setup_failure", category="validation", message=str(exc), transport="cli"))
-        raise SystemExit(2)
+    for stream in (sys.stdout, sys.stderr):
+        stream.reconfigure(encoding="utf-8")
     parser = _build_parser()
     args = parser.parse_args()
     logging.getLogger().setLevel(getattr(logging, os.environ.get("RDC_TOOL_LOG_LEVEL", "WARNING").upper(), logging.WARNING))

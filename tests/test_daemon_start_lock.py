@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from rdc_tool import cli, environment
+from rdc_tool import cli
 from rdc_tool.daemon import client
 from rdc_tool.platform import locks
 
@@ -159,7 +159,6 @@ def test_body_lock_timeout_is_not_reported_as_start_contention(monkeypatch):
 
 def test_cli_start_timeout_does_not_clean_state(monkeypatch, capsys):
     cleaned = []
-    monkeypatch.setattr(environment, 'validate_environment', lambda: None)
     monkeypatch.setattr(cli, 'cleanup_stale_daemon_states', lambda **kw: cleaned.append(kw))
     def timeout(**kw):
         raise client.DaemonStartLockTimeout('cli-busy', 'file_lock', 30.0, 30)
