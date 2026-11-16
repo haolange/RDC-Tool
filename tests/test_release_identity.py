@@ -10,6 +10,11 @@ import pytest
 from scripts import package_release, verify_release_package as verify
 
 
+@pytest.fixture(autouse=True)
+def _windows_package(pin_host):
+    pin_host("windows-x64")  # these fixtures build windows-x64 packages
+
+
 def identity_fixture(root: Path) -> Path:
     source = root / 'source'
     package = root / 'package'
@@ -164,19 +169,15 @@ def test_sbom_revision_must_match_manifest(tmp_path):
 
 def candidate_source_fixture(root, monkeypatch):
     from scripts import package_runtime
-    from rdc_tool import runtime_identity
     from test_runtime_identity import native_inputs
     inputs = native_inputs(root)
     monkeypatch.setattr(package_runtime, 'tools_root', lambda: root)
-    # The fixture is a windows-x64 package whatever host runs the test.
-    monkeypatch.setattr(runtime_identity, 'host_target', lambda: 'windows-x64')
-    monkeypatch.setattr(package_runtime, 'host_target', lambda: 'windows-x64')
     assert package_runtime.main(inputs) == 0
     for name in ('LICENSE', 'README.md'):
         (root / name).write_text('fixture\n', encoding='utf-8')
     (root / 'CHANGELOG.md').write_text(f'## {verify.TOOL_VERSION}\n', encoding='utf-8')
     (root / 'pyproject.toml').write_text(f'[project]\nversion="{verify.TOOL_VERSION}"\n', encoding='utf-8')
-    for name in verify.EXPECTED_ENTRYPOINTS:
+    for name in package_release.ENTRYPOINTS:
         path = root / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text('fixture', encoding='utf-8')

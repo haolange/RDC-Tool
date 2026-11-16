@@ -42,7 +42,7 @@ RDC-Tool 不自动跟随上游每个版本；新运行库只有在完成同源�
 
 ## 发布资格与交付
 
-正式发布打包使用干净的已提交检出与仓库根 `binaries/`。`python scripts/package_release.py` 要求原生回执 `verified`，运行源码/仓库运行库门禁，构建完整 ZIP，再校验暂存归档及其身份后才接受输出。脏源码、过期或不完整的运行库身份、包内容不匹配或任何检查失败都会拒绝；不得向包内单独拷贝二进制或混入早期构建产物。
+发行包按主机构建：`rdc-tool-<version>-<host_target>.zip` 的源码部分对所有主机相同，`binaries/` 只带本主机运行目录、两个 Android helper 与共享回执；ZIP 记录每个文件的权限位，校验时按记录还原，launcher 与解释器保持可执行。正式发布打包使用干净的已提交检出与仓库根 `binaries/`。`python scripts/package_release.py` 要求原生回执 `verified`，运行源码/仓库运行库门禁，构建完整 ZIP，再校验暂存归档及其身份后才接受输出。脏源码、过期或不完整的运行库身份、包内容不匹配或任何检查失败都会拒绝；不得向包内单独拷贝二进制或混入早期构建产物。
 
 必需的发布 CI 须通过全量测试、catalog/文档与源码门禁、正式打包和完整包校验，然后把校验过的 ZIP 与其 SHA256 作为 GitHub Actions artifact 上传。该 artifact 只是交接物：CI 不创建也不发布 GitHub Release。之后经授权的 Release 必须使用同一个已校验 ZIP 与校验和，CI 校验后不得重建、重打包或重组二进制。发布仍需明确授权。
 

@@ -7,6 +7,7 @@
 - `rd.capture.open_replay` 在本地回放前检查 `LocalReplaySupport`：本主机运行库不能回放该 capture API 时返回 `local_replay_unsupported`（category `capability`），不再进入原生回放后才失败。
 - `package_runtime` 跨平台：`--host` 组装本主机运行目录；捆绑 Python 来自 `scripts/python-runtimes.json` 钉住的官方归档（Windows NuGet 3.14.3、Linux python-build-standalone 3.14.6），依赖按哈希锁 `scripts/runtime-dependencies.lock` 安装，不再复制开发机 `.venv`；新增 `--host-tools` 输入；运行目录中无归属的文件直接拒绝。解释器路径改由主机布局声明，manifest 的 `bundled_python` 只记录来源（Windows 清单按既有回执事实补齐，二进制未变）。
 - `bin/rdc-tool` 按主机选择捆绑解释器（Linux x86_64 → `binaries/linux/x64/python/bin/python3.14`，MSYS/Cygwin → Windows 解释器），未知主机与缺失解释器以退出码 2 明确拒绝；两个 launcher 清除 `PYTHONHOME`/`PYTHONPATH`、以 `python -s` 启动，不再导出任何 `RDC_TOOL_*` 变量。preview 几何 smoke 改经公开 launcher 运行，adb 只走主机工具契约，删除 PATH/SDK 搜索。
+- 发布脚本按主机布局工作：包名带主机目标，`binaries/` 只带本主机运行目录、Android helper 与共享回执；校验解压时还原权限位；原生加载核验不再依赖 Windows 专属 `PATH`。删除发布门禁与包校验中的“已删除名单”（旧别名、pre-GA 标记、MCP 标记、`rdc_tool.bat` 示例、旧路径扫描）及依赖 `rg` 的双实现扫描器；catalog 与定义完全一致的检查已覆盖多余工具。
 
 ## 1.1.2 — 2026-10-29
 

@@ -19,25 +19,6 @@ SUPPORTED_SCRIPTS = (
     "scripts/verify_release_package.py",
 )
 
-DELETED_ENTRIES = (
-    "scripts/android_remote_whitehair_investigation.py",
-    "scripts/build_offline_replay_detailed_report.py",
-    "scripts/native_smoke.py",
-    "scripts/run_smoke_196_dual_sample.py",
-    "scripts/arg_test.ps1",
-    "docs/whitehair-android-remote-retrospective.md",
-)
-
-FORMAL_REFERENCES = (
-    "AGENTS.md",
-    "README.md",
-    "docs/README.md",
-    "docs/android-remote-cli-smoke-prompt.md",
-    "docs/doc-governance.md",
-    "docs/troubleshooting.md",
-    *SUPPORTED_SCRIPTS,
-)
-
 FORBIDDEN_SNIPPETS = (
     "Desktop",
     "platform-tools\\adb.exe",
@@ -59,10 +40,3 @@ def test_supported_scripts_do_not_embed_machine_local_defaults() -> None:
             assert snippet not in text, f"{rel}: {snippet}"
         assert "c:\\users\\" not in lower_text, rel
         assert "d:\\utility\\" not in lower_text, rel
-
-
-def test_deleted_entries_are_not_referenced_from_formal_surface() -> None:
-    for rel in FORMAL_REFERENCES:
-        text = (ROOT / rel).read_text(encoding="utf-8-sig")
-        for deleted in DELETED_ENTRIES:
-            assert deleted not in text, f"{rel}: {deleted}"

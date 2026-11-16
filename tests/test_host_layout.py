@@ -17,8 +17,8 @@ def test_tools_root_is_the_installation():
 
 
 @pytest.mark.parametrize("target", sorted(HOST_LAYOUTS))
-def test_runtime_paths_follow_the_host_layout(monkeypatch, target):
-    monkeypatch.setattr(runtime_paths, "host_target", lambda: target)
+def test_runtime_paths_follow_the_host_layout(pin_host, target):
+    pin_host(target)
     layout = HOST_LAYOUTS[target]
     assert runtime_paths.binaries_root() == ROOT / layout.runtime_dir
     assert runtime_paths.native_library_path() == ROOT / layout.runtime_dir / layout.native_library
@@ -26,8 +26,8 @@ def test_runtime_paths_follow_the_host_layout(monkeypatch, target):
     assert set(layout.host_tools) == {"adb", "spirv_as", "spirv_dis"}
 
 
-def test_unknown_host_is_rejected_by_name(monkeypatch):
-    monkeypatch.setattr(runtime_paths, "host_target", lambda: "plan9-mips")
+def test_unknown_host_is_rejected_by_name(pin_host):
+    pin_host("plan9-mips")
     with pytest.raises(UnsupportedHost, match="plan9-mips"):
         runtime_paths.binaries_root()
 

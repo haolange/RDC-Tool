@@ -8,7 +8,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Mapping
 
-from rdc_tool.platform.host import host_target
+from rdc_tool.platform import host as platform_host
 
 
 @dataclass(frozen=True)
@@ -81,7 +81,7 @@ def tools_root() -> Path:
 
 
 def host_layout(target: str | None = None) -> HostLayout:
-    chosen = target or host_target()
+    chosen = target or platform_host.host_target()
     try:
         return HOST_LAYOUTS[chosen]
     except KeyError:

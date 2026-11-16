@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import json
 
 import pytest
 
 from scripts import package_release as package, verify_release_package as verify
+
+
+@pytest.fixture(autouse=True)
+def _windows_package(pin_host):
+    pin_host("windows-x64")  # these fixtures build windows-x64 packages
 
 
 def archive_fixture(root: Path, monkeypatch) -> None:
@@ -184,8 +190,8 @@ def test_native_loader_requires_actual_import_and_same_installation(
     assert command[0] == str(tmp_path / "binaries/windows/x64/python/python.exe")
     assert cwd == tmp_path
     env = kwargs["env"]
-    assert env["PATH"].lower().endswith("system32")
-    assert "PYTHONPATH" not in env and "JAVA_HOME" not in env
+    assert env["PATH"] == os.defpath
+    assert not {"PYTHONPATH", "JAVA_HOME", "LD_LIBRARY_PATH"} & set(env)
 
 
 def test_foreign_loaded_runtime_cannot_certify_package_loader(tmp_path, monkeypatch):

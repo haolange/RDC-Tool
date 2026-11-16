@@ -16,7 +16,7 @@ import zipfile
 
 from rdc_tool.android_apk_identity import read_apk_identity
 from rdc_tool.platform import native as platform_native
-from rdc_tool.platform.host import host_target
+from rdc_tool.platform import host as platform_host
 from rdc_tool.runtime_paths import HOST_LAYOUTS, binding_module_name, native_library_name
 
 
@@ -65,7 +65,7 @@ def native_runtime_files(directory: Path) -> dict[str, Path]:
 
 def required_native_targets() -> tuple[str, ...]:
     """What this host needs certified: its own runtime and both Android helpers."""
-    return (host_target(), *ANDROID_TARGETS)
+    return (platform_host.host_target(), *ANDROID_TARGETS)
 
 
 def _elf_build_id(data: bytes) -> str:

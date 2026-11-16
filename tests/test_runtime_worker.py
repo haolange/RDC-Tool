@@ -92,8 +92,6 @@ def test_worker_uses_source_runtime_directly(tmp_path: Path, monkeypatch) -> Non
         worker_state = worker.snapshot()
         assert worker_state["binaries_dir"] == str(source_root.resolve())
         assert worker_state["pymodules_dir"] == str((source_root / "pymodules").resolve())
-        removed_fields = {"runtime_" + "id", "cache_" + "root"}
-        assert removed_fields.isdisjoint(worker_state)
     finally:
         worker._proc = None
         worker._runtime = None

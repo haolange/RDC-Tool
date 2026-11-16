@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a self-contained Windows x64 release zip for rdc-tool."""
+"""Build a self-contained release zip of rdc-tool for this host."""
 
 from __future__ import annotations
 
@@ -18,14 +18,15 @@ if str(SCRIPT_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPT_ROOT))
 
 from rdc_tool import __version__ as TOOL_VERSION
-from rdc_tool.runtime_identity import native_manifest_status
-from scripts._shared import task_directory, write_text
 from rdc_tool.io_utils import sha256_file
-from rdc_tool.runtime_paths import tools_root
+from rdc_tool.platform import host as platform_host
+from rdc_tool.runtime_identity import ANDROID_TARGETS, RECEIPT_PATH, native_manifest_status
+from rdc_tool.runtime_paths import host_layout, tools_root
+from scripts._shared import task_directory, write_text
 
 
-PACKAGE_PLATFORM = "windows-x64"
 PACKAGE_PREFIX = "rdc-tool"
+ENTRYPOINTS = ["bin/rdc-tool.cmd", "bin/rdc-tool", "cli/run_cli.py", "install.cmd"]
 EXCLUDE_DIRS = {
     ".git",
     ".mypy_cache",
@@ -64,47 +65,54 @@ RELEASE_DIRS = {
 def _should_skip(path: Path, root: Path) -> bool:
     rel = path.relative_to(root)
     if rel.as_posix() == 'docs/tool-convergence-tasks.md':
-        return True  # Maintainer history contains local evidence, not installation documentation.
+        return True  # Maintainer task list, not installation documentation.
     if any(part in EXCLUDE_DIRS for part in rel.parts):
         return True
     if path.is_file() and path.suffix.lower() in EXCLUDE_FILE_SUFFIXES:
         return True
-    if rel.parts and rel.parts[0] == "tests":
-        return True
-    return False
+    return bool(rel.parts) and rel.parts[0] == "tests"
+
+
+def _ships_runtime(rel: Path) -> bool:
+    """A package carries this host's runtime, the Android helpers and the shared receipt, nothing else from binaries/."""
+    shipped = (host_layout().runtime_dir, *(str(Path(output["helper_apk"]).parent) for output in ANDROID_TARGETS.values()))
+    return rel.as_posix() == RECEIPT_PATH or any(rel.is_relative_to(directory) for directory in shipped)
+
+
+def release_inputs(root: Path, *, runtime_root: Path | None = None) -> list[tuple[Path, Path]]:
+    """Every (source file, package path) a release of this host contains; the gate compares against the same list."""
+    allowed_roots = RELEASE_ROOT_FILES | RELEASE_DIRS
+    sources = [(root, path) for path in sorted(root.rglob("*"))
+               if runtime_root is None or not path.relative_to(root).parts or path.relative_to(root).parts[0] != "binaries"]
+    if runtime_root is not None:
+        sources.extend((runtime_root, path) for path in sorted((runtime_root / "binaries").rglob("*")))
+    selected = []
+    for source_root, path in sources:
+        if path.is_dir() or _should_skip(path, source_root):
+            continue
+        rel = path.relative_to(source_root)
+        if not rel.parts or rel.parts[0] not in allowed_roots or (rel.parts[0] == "binaries" and not _ships_runtime(rel)):
+            continue
+        if path.is_symlink() or path.is_junction():
+            raise RuntimeError(f"Package source file must not be a link: {path}")
+        selected.append((path, rel))
+    return selected
 
 
 def _copy_release_tree(root: Path, staging_root: Path, *, runtime_root: Path | None = None) -> list[dict[str, object]]:
     copied: list[dict[str, object]] = []
-    allowed_roots = RELEASE_ROOT_FILES | RELEASE_DIRS
-    inputs = [(root, path) for path in sorted(root.rglob("*"))
-              if runtime_root is None or not path.relative_to(root).parts or path.relative_to(root).parts[0] != "binaries"]
-    if runtime_root is not None:
-        inputs.extend((runtime_root, path) for path in sorted((runtime_root / "binaries").rglob("*")))
-    for source_root, path in inputs:
-        if path.is_dir() or _should_skip(path, source_root):
-            continue
-        rel = path.relative_to(source_root)
-        if not rel.parts or rel.parts[0] not in allowed_roots:
-            continue
-        if path.is_symlink() or path.is_junction():
-            raise RuntimeError(f"Package source file must not be a link: {path}")
+    for path, rel in release_inputs(root, runtime_root=runtime_root):
         target = staging_root / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(path, target)
-        copied.append(
-            {
-                "path": rel.as_posix(),
-                "size": int(target.stat().st_size),
-                "sha256": sha256_file(target),
-            }
-        )
+        copied.append({"path": rel.as_posix(), "size": int(target.stat().st_size), "sha256": sha256_file(target)})
     return copied
 
 
 def _license_inventory(staging_root: Path) -> list[dict[str, str]]:
     rows = [{"name": "rdc-tool", "version": TOOL_VERSION, "license": "Apache-2.0", "path": "LICENSE"}]
-    site_packages = staging_root / "binaries" / "windows" / "x64" / "python" / "Lib" / "site-packages"
+    layout = host_layout()
+    site_packages = staging_root / layout.runtime_dir / layout.python["site_packages"]
     if not site_packages.is_dir():
         return rows
     for meta in sorted(site_packages.glob("*.dist-info/METADATA")):
@@ -149,22 +157,22 @@ def _write_release_metadata(staging_root: Path, files: list[dict[str, object]], 
     manifest = {
         "name": PACKAGE_PREFIX,
         "version": TOOL_VERSION,
-        "platform": PACKAGE_PLATFORM,
+        "platform": platform_host.host_target(),
         "source_revision": revision,
         "public_commands": ["rdc-tool"],
-        "entrypoints": ["bin/rdc-tool.cmd", "bin/rdc-tool", "cli/run_cli.py", "install.cmd"],
+        "entrypoints": ENTRYPOINTS,
         "file_count": len(files),
         "files": files,
     }
     licenses = _license_inventory(staging_root)
-    runtime_manifest = json.loads((staging_root / "binaries/windows/x64/manifest.runtime.json").read_text(encoding="utf-8"))
+    runtime_manifest = json.loads((staging_root / host_layout().runtime_dir / "manifest.runtime.json").read_text(encoding="utf-8"))
     for name, tool in runtime_manifest.get("bundled_tools", {}).items():
         licenses.append({"name": name, **tool})
     sbom = {
         "schema": "rdc-tool.sbom.v1",
         "name": PACKAGE_PREFIX,
         "version": TOOL_VERSION,
-        "platform": PACKAGE_PLATFORM,
+        "platform": platform_host.host_target(),
         "source_revision": revision,
         "components": licenses,
     }
@@ -224,6 +232,7 @@ def _build_candidate(root: Path, raw_destination: str, *, runtime_root: Path | N
 
 
 def _zip_dir(staging_root: Path, zip_path: Path) -> None:
+    # ZipFile.write records each file's mode, so launchers and interpreters stay executable where the host has modes.
     with zipfile.ZipFile(zip_path, "x", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
         for path in sorted(staging_root.rglob("*")):
             if path.is_file():
@@ -303,7 +312,7 @@ def main(argv: list[str] | None = None) -> int:
         raise RuntimeError("Release source changed during qualification")
     out_dir = (root / str(args.out_dir)).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
-    package_name = f"{PACKAGE_PREFIX}-{TOOL_VERSION}-{PACKAGE_PLATFORM}.zip"
+    package_name = f"{PACKAGE_PREFIX}-{TOOL_VERSION}-{platform_host.host_target()}.zip"
     package_path = out_dir / package_name
     if package_path.exists():
         raise FileExistsError(f"Refusing to overwrite an existing release candidate: {package_path}")
@@ -325,7 +334,7 @@ def main(argv: list[str] | None = None) -> int:
                 raise RuntimeError(f"Release input changed while packaging: {item['path']}")
         report = [
             "# rdc-tool Release Report", "",
-            f"- version: {TOOL_VERSION}", f"- platform: {PACKAGE_PLATFORM}",
+            f"- version: {TOOL_VERSION}", f"- platform: {platform_host.host_target()}",
             f"- package: {package_path}", f"- sha256: {sha}",
             f"- files: {len(files)}", "",
         ]

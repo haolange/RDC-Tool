@@ -38,18 +38,18 @@ def _renderdoc(capture: _Capture) -> SimpleNamespace:
     )
 
 
-def _open(capture: _Capture, monkeypatch) -> sm.SessionState:
+def _open(capture: _Capture, monkeypatch, pin_host) -> sm.SessionState:
     monkeypatch.setattr(sm, "_get_rd", lambda: _renderdoc(capture))
-    monkeypatch.setattr(sm, "host_target", lambda: "linux-x64")
+    pin_host("linux-x64")
     state = sm.SessionState(session_id="s1", backend_type=sm.BackendType.LOCAL)
     asyncio.run(sm.SessionManager()._open_local_capture(state, "/captures/frame.rdc"))
     return state
 
 
-def test_unsupported_local_api_fails_before_any_replay_is_created(monkeypatch):
+def test_unsupported_local_api_fails_before_any_replay_is_created(monkeypatch, pin_host):
     capture = _Capture("unsupported")
     with pytest.raises(CoreError) as raised:
-        _open(capture, monkeypatch)
+        _open(capture, monkeypatch, pin_host)
     error = raised.value
     assert (error.code, error.category) == ("local_replay_unsupported", "capability")
     assert error.details["capture_api"] == "D3D11"
@@ -59,8 +59,8 @@ def test_unsupported_local_api_fails_before_any_replay_is_created(monkeypatch):
 
 
 @pytest.mark.parametrize("support", ["supported", "suggest_remote"])
-def test_locally_replayable_capture_opens(monkeypatch, support):
+def test_locally_replayable_capture_opens(monkeypatch, pin_host, support):
     capture = _Capture(support)
-    state = _open(capture, monkeypatch)
+    state = _open(capture, monkeypatch, pin_host)
     assert capture.opened_replay
     assert state.capture_file is capture and state.output == "output"

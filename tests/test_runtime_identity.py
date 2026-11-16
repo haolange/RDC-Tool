@@ -175,11 +175,11 @@ def test_absent_listed_target_is_reported_and_required_absence_is_unavailable(tm
     assert linux["missing_targets"] == ["linux-x64"]
 
 
-def test_host_default_requires_this_hosts_runtime(tmp_path, monkeypatch):
+def test_host_default_requires_this_hosts_runtime(tmp_path, pin_host):
     native_manifest_fixture(tmp_path, None)
-    monkeypatch.setattr(identity, "host_target", lambda: "windows-x64")
+    pin_host("windows-x64")
     assert identity.native_manifest_status(tmp_path)["status"] == "verified"
-    monkeypatch.setattr(identity, "host_target", lambda: "linux-x64")
+    pin_host("linux-x64")
     status = identity.native_manifest_status(tmp_path)
     assert status["status"] == "unavailable" and status["missing_targets"] == ["linux-x64"]
 

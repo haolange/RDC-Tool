@@ -28,7 +28,7 @@ from rdc_tool import runtime_identity  # noqa: E402
 from rdc_tool.host_tools import bundled_host_files  # noqa: E402
 from rdc_tool.io_utils import sha256_file  # noqa: E402
 from rdc_tool.platform import process  # noqa: E402
-from rdc_tool.platform.host import host_target  # noqa: E402
+from rdc_tool.platform import host as platform_host  # noqa: E402
 from rdc_tool.runtime_paths import HOST_LAYOUTS, HostLayout, tools_root  # noqa: E402
 from scripts._shared import ensure_within_root, resolve_repo_path, task_directory, write_text  # noqa: E402
 from scripts.distribution_metadata import write_distribution_metadata  # noqa: E402
@@ -316,7 +316,7 @@ def _assemble_runtime(root: Path, staged_root: Path, args: argparse.Namespace, w
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Assemble this host's rdc-tool runtime")
-    parser.add_argument("--host", default=host_target(), choices=sorted(HOST_LAYOUTS),
+    parser.add_argument("--host", default=platform_host.host_target(), choices=sorted(HOST_LAYOUTS),
                         help="Runtime layout to assemble; must be this host, whose interpreter installs the dependencies")
     parser.add_argument("--source", dest="renderdoc_source", default="",
                         help="Repo-relative staging directory with this host's native set")
@@ -333,8 +333,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
-    if args.host != host_target():
-        print(f"[pack] --host {args.host} differs from this host ({host_target()}); assemble each runtime on its own host")
+    if args.host != platform_host.host_target():
+        print(f"[pack] --host {args.host} differs from this host ({platform_host.host_target()}); assemble each runtime on its own host")
         return 1
     if bool(args.renderdoc_source) != bool(args.build_receipt) or ((args.arm32_apk or args.arm64_apk) and not args.renderdoc_source):
         print("[pack] Native replacement requires --source with --build-receipt (and the APKs the receipt pairs)")

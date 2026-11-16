@@ -11,6 +11,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from collections.abc import Iterator
 
+from rdc_tool.platform import process
+from rdc_tool.runtime_paths import host_layout
 from scripts._shared import extract_json_payload
 
 
@@ -23,14 +25,13 @@ def _cleanup(root: Path, state: Path) -> None:
         if not isinstance(context, str) or not context:
             raise RuntimeError(f"Invalid verification daemon state: {file}")
         contexts.add(context)
-    python = root / "binaries/windows/x64/python/python.exe"
+    launcher = process.launcher_argv(str(root / host_layout().launcher))
     for context in sorted(contexts):
         # Even a failed clear must not skip stopping this owned daemon.
         for command in (["context", "clear"], ["daemon", "stop"]):
             try:
                 result = subprocess.run(
-                    [str(python), str(root / "cli/run_cli.py"), "--json",
-                     "--daemon-context", context, *command],
+                    [*launcher, "--json", "--daemon-context", context, *command],
                     cwd=root, env=os.environ.copy(), stdin=subprocess.DEVNULL,
                     capture_output=True, text=True, encoding="utf-8", errors="replace",
                     timeout=30, check=False,

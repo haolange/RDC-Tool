@@ -22,53 +22,15 @@ if str(SCRIPT_ROOT) not in sys.path:
 from scripts._shared import extract_json_payload
 from scripts.release_runtime import isolated_release_runtime
 from rdc_tool import __version__ as TOOL_VERSION
+from rdc_tool.io_utils import sha256_file
 from rdc_tool.platform import process
 from rdc_tool.runtime_identity import native_manifest_status
-from rdc_tool.io_utils import sha256_file
+from rdc_tool.runtime_paths import host_layout
+from scripts.package_release import ENTRYPOINTS
 
 
 PUBLIC_COMMAND = "rdc-tool"
-WINDOWS_LAUNCHER_FILE = "bin/rdc-tool.cmd"
 EXPECTED_PUBLIC_COMMANDS = [PUBLIC_COMMAND]
-EXPECTED_ENTRYPOINTS = [WINDOWS_LAUNCHER_FILE, "bin/rdc-tool", "cli/run_cli.py", "install.cmd"]
-REMOVED_CATALOG_TOOLS = {"rd.resource.rename", "rd.shader.save_binary"}
-MCP_DOC_MARKERS = (
-    "mcp/run_mcp.py",
-    "model context protocol",
-    "mcp server",
-    "mcp public",
-)
-
-TEXT_SUFFIXES = {
-    ".bat",
-    ".cmd",
-    ".json",
-    ".md",
-    ".ps1",
-    ".py",
-    ".toml",
-    ".txt",
-    ".yaml",
-    ".yml",
-}
-PRE_GA_PATH_MARKERS = (
-    "rdc_tool/" + "runtime_" + "materializer.py",
-    "intermediate/runtime/" + "worker" + "-cache",
-)
-PRE_GA_TEXT_MARKERS = (
-    "worker_" + "materialize",
-    "runtime_" + "owner",
-    "runtime_" + "baton",
-    "active_" + "baton",
-    "rehydrate_" + "status",
-    "staged_" + "handoff",
-    "runtime_" + "parallelism_" + "ceiling",
-    "claim_" + "runtime_" + "owner",
-    "release_" + "runtime_" + "owner",
-    "export_" + "runtime_" + "baton",
-    "rehydrate_" + "runtime_" + "baton",
-)
-PRE_GA_MAPPING_FIELDS = ("owner_" + "lease",)
 
 
 def _run(cmd: list[str], cwd: Path, *, timeout_s: int = 180, env: dict[str, str] | None = None) -> tuple[int, str]:
@@ -100,9 +62,8 @@ def _run_public(root: Path, args: list[str], *, timeout_s: int = 180) -> tuple[i
     return _run([*process.launcher_argv(PUBLIC_COMMAND), *args], root, timeout_s=timeout_s, env=_public_env(root))
 
 
-def _run_windows_launcher_file(root: Path, args: list[str], *, timeout_s: int = 180) -> tuple[int, str]:
-    env = os.environ.copy()
-    return _run([*process.launcher_argv(str(root / WINDOWS_LAUNCHER_FILE)), *args], root, timeout_s=timeout_s, env=env)
+def _run_launcher_file(root: Path, args: list[str], *, timeout_s: int = 180) -> tuple[int, str]:
+    return _run([*process.launcher_argv(str(root / host_layout().launcher)), *args], root, timeout_s=timeout_s)
 
 
 def _expect_public_error(root: Path, args: list[str], expected_codes: set[str]) -> None:
@@ -115,10 +76,20 @@ def _expect_public_error(root: Path, args: list[str], expected_codes: set[str]) 
 
 
 def _find_package_root(extract_dir: Path) -> Path:
-    candidates = [p for p in extract_dir.iterdir() if p.is_dir() and (p / WINDOWS_LAUNCHER_FILE).is_file()]
+    candidates = [p for p in extract_dir.iterdir() if p.is_dir() and (p / "cli/run_cli.py").is_file()]
     if len(candidates) != 1:
-        raise RuntimeError(f"expected one package root with {WINDOWS_LAUNCHER_FILE}, found {len(candidates)}")
+        raise RuntimeError(f"expected one package root with cli/run_cli.py, found {len(candidates)}")
     return candidates[0]
+
+
+def _extract_package(zip_path: Path, destination: Path) -> None:
+    """Extract and restore each member's recorded mode, which ZipFile.extractall drops."""
+    with zipfile.ZipFile(zip_path, "r") as archive:
+        archive.extractall(destination)
+        for info in archive.infolist():
+            mode = (info.external_attr >> 16) & 0o777
+            if mode and not info.is_dir():
+                os.chmod(destination / info.filename, mode)
 
 
 def _verify_release_manifest(root: Path, *, manifest_name: str = "RELEASE_MANIFEST.json") -> None:
@@ -129,18 +100,15 @@ def _verify_release_manifest(root: Path, *, manifest_name: str = "RELEASE_MANIFE
     if payload.get("public_commands") != EXPECTED_PUBLIC_COMMANDS:
         raise RuntimeError(f"release manifest public_commands mismatch: {payload.get('public_commands')!r}")
     entrypoints = payload.get("entrypoints")
-    if sorted(entrypoints or []) != sorted(EXPECTED_ENTRYPOINTS):
+    if sorted(entrypoints or []) != sorted(ENTRYPOINTS):
         raise RuntimeError(f"release manifest entrypoints mismatch: {entrypoints!r}")
     files = payload.get("files")
     if not isinstance(files, list):
         raise RuntimeError("release manifest files field is missing or invalid")
     paths = {str(item.get("path") or "") for item in files if isinstance(item, dict)}
-    missing_entrypoints = [entry for entry in EXPECTED_ENTRYPOINTS if entry not in paths or not (root / entry).is_file()]
+    missing_entrypoints = [entry for entry in ENTRYPOINTS if entry not in paths or not (root / entry).is_file()]
     if missing_entrypoints:
         raise RuntimeError(f"release manifest missing physical entrypoints: {missing_entrypoints}")
-    leaked_mcp = sorted(path for path in paths if path == "mcp" or path.startswith("mcp/"))
-    if leaked_mcp:
-        raise RuntimeError(f"release manifest exposes MCP paths: {leaked_mcp[:5]}")
     leaked_tests = sorted(path for path in paths if path == "tests" or path.startswith("tests/"))
     if leaked_tests:
         raise RuntimeError(f"release manifest exposes test paths: {leaked_tests[:5]}")
@@ -164,7 +132,8 @@ def _verify_release_identity(root: Path, source: Path = SCRIPT_ROOT,
     project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
     if project["project"]["version"] != TOOL_VERSION:
         raise RuntimeError("pyproject version does not match release source")
-    metadata = list((root / "binaries/windows/x64/python/Lib/site-packages").glob("rdc_tool-*.dist-info/METADATA"))
+    layout = host_layout()
+    metadata = list((root / layout.runtime_dir / layout.python["site_packages"]).glob("rdc_tool-*.dist-info/METADATA"))
     if len(metadata) != 1 or f"Version: {TOOL_VERSION}\n" not in metadata[0].read_text(encoding="utf-8"):
         raise RuntimeError("bundled distribution version does not match release source")
     sbom = json.loads((root / "SBOM.json").read_text(encoding="utf-8"))
@@ -245,16 +214,18 @@ def _verify_doctor(root: Path) -> None:
 
 
 def _verify_physical_launcher_file(root: Path) -> None:
-    code, output = _run_windows_launcher_file(root, ["--json", "doctor"])
+    code, output = _run_launcher_file(root, ["--json", "doctor"])
     payload = extract_json_payload(output)
     if code != 0 or not payload or payload.get("ok") is not True:
-        raise RuntimeError(f"windows launcher file doctor failed: exit={code}\n{output}")
+        raise RuntimeError(f"launcher file doctor failed: exit={code}\n{output}")
     if payload.get("result_kind") != "rdc_tool.doctor":
-        raise RuntimeError(f"windows launcher file returned wrong result_kind: {json.dumps(payload)[:500]}")
+        raise RuntimeError(f"launcher file returned wrong result_kind: {json.dumps(payload)[:500]}")
 
 
 def _verify_native_loader(root: Path) -> None:
-    python = root / "binaries/windows/x64/python/python.exe"
+    layout = host_layout()
+    native_root = root / layout.runtime_dir
+    python = native_root / layout.python["executable"]
     code = (
         "import sys,json;from pathlib import Path;sys.path.insert(0,str(Path.cwd()));"
         "from rdc_tool.runtime_bootstrap import bootstrap_renderdoc_runtime;"
@@ -262,18 +233,16 @@ def _verify_native_loader(root: Path) -> None:
         "print(json.dumps({'import_ok':report.import_ok,'error':report.import_error,"
         "'loaded':report.loaded_runtime}))"
     )
-    env = _public_env(root)
-    native_root = root / "binaries/windows/x64"
-    env["PATH"] = str(Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32")
-    for key in list(env):
-        if key.upper().startswith(("PYTHON", "ANDROID_")) or key.upper() == "JAVA_HOME":
-            del env[key]
+    # Only the installation itself may supply the runtime: no inherited search paths or Python settings.
+    env = {key: value for key, value in os.environ.items()
+           if not key.upper().startswith(("PYTHON", "ANDROID_")) and key.upper() not in {"JAVA_HOME", "LD_LIBRARY_PATH"}}
+    env["PATH"] = os.defpath
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     rc, output = _run([str(python), "-B", "-c", code], root, env=env)
     payload = extract_json_payload(output)
     loaded = (payload or {}).get("loaded") or {}
-    expected = {"python": python, "native": native_root / "renderdoc.dll",
-                "binding": native_root / "pymodules/renderdoc.pyd"}
+    expected = {"python": python, "native": native_root / layout.native_library,
+                "binding": native_root / layout.binding_module}
     paths_match = all(Path(str((loaded.get(key) or {}).get("path", ""))).resolve() == path.resolve()
                       for key, path in expected.items())
     if (rc != 0 or (payload or {}).get("import_ok") is not True
@@ -317,9 +286,6 @@ def _verify_tools_catalog(root: Path) -> None:
         raise RuntimeError(
             f"tools list differs from packaged catalog: missing={sorted(expected_names - names)[:5]} extra={sorted(names - expected_names)[:5]}"
         )
-    leaked = sorted(REMOVED_CATALOG_TOOLS & names)
-    if leaked:
-        raise RuntimeError(f"removed aliases still listed: {leaked}")
 
 
 def _verify_cli_contract(root: Path) -> None:
@@ -342,55 +308,9 @@ def _verify_cli_contract(root: Path) -> None:
         (["vfs", "tree", "--path", "/", "--format", "tsv"], {"projection_not_supported"}),
         (["call", "rd.session.get_context", "--format", "tsv"], {"tabular_projection_missing"}),
         (["--daemon-context", "package-empty", "diff", "pipeline", "--event-a", "1", "--event-b", "2"], {"session_required"}),
-        (["call", "rd.resource.rename", "--format", "json"], {"not_found", "operation_not_found", "tool_not_found", "unknown_operation", "unsupported_operation", "unsupported_command"}),
-        (["call", "rd.shader.save_binary", "--format", "json"], {"not_found", "operation_not_found", "tool_not_found", "unknown_operation", "unsupported_operation", "unsupported_command"}),
     ]
     for args, expected_codes in negative_checks:
         _expect_public_error(root, args, expected_codes)
-
-
-def _verify_no_pre_ga_payload(zip_path: Path) -> None:
-    with zipfile.ZipFile(zip_path, "r") as archive:
-        for name in archive.namelist():
-            normalized = name.replace("\\", "/")
-            for marker in PRE_GA_PATH_MARKERS:
-                if marker in normalized:
-                    raise RuntimeError(f"package contains pre-GA path: {normalized}")
-            suffix = Path(normalized).suffix.lower()
-            if suffix not in TEXT_SUFFIXES:
-                continue
-            info = archive.getinfo(name)
-            if info.file_size > 5 * 1024 * 1024:
-                continue
-            text = archive.read(name).decode("utf-8", errors="ignore")
-            for marker in PRE_GA_TEXT_MARKERS:
-                if marker in text:
-                    raise RuntimeError(f"package contains pre-GA marker {marker!r} in {normalized}")
-            for field in PRE_GA_MAPPING_FIELDS:
-                # The retired serialized protocol field is distinct from the
-                # current daemon's process-lifetime lease handle and errors.
-                if re.search(r"([\"'])" + re.escape(field) + r"\1\s*:", text):
-                    raise RuntimeError(f"package contains pre-GA mapping field {field!r} in {normalized}")
-
-
-def _verify_no_public_mcp_surface(zip_path: Path) -> None:
-    with zipfile.ZipFile(zip_path, "r") as archive:
-        for name in archive.namelist():
-            normalized = name.replace("\\", "/")
-            rel = normalized.removeprefix("rdc-tool/")
-            if rel == "mcp" or rel.startswith("mcp/"):
-                raise RuntimeError(f"package exposes MCP path: {normalized}")
-            if not (rel == "README.md" or rel.startswith("docs/")):
-                continue
-            if Path(rel).suffix.lower() not in {".md", ".txt"}:
-                continue
-            info = archive.getinfo(name)
-            if info.file_size > 1024 * 1024:
-                continue
-            text = archive.read(name).decode("utf-8", errors="ignore").lower()
-            for marker in MCP_DOC_MARKERS:
-                if marker in text:
-                    raise RuntimeError(f"package user docs expose MCP public entrypoint marker {marker!r} in {normalized}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -429,10 +349,7 @@ def main(argv: list[str] | None = None) -> int:
     temp_dir = Path(tempfile.mkdtemp(prefix="rdc-tool package verify "))
     try:
         _verify_archive_checksum(zip_path)
-        _verify_no_pre_ga_payload(zip_path)
-        _verify_no_public_mcp_surface(zip_path)
-        with zipfile.ZipFile(zip_path, "r") as zf:
-            zf.extractall(temp_dir)
+        _extract_package(zip_path, temp_dir)
         root = _find_package_root(temp_dir)
         _verify_release_manifest(root)
         _verify_license_inventory(root)

@@ -17,10 +17,19 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from rdc_tool.context_snapshot import clear_context_snapshot
+from rdc_tool.platform import host as platform_host
 from rdc_tool.runtime_paths import cli_runtime_dir
 from rdc_tool.runtime_state import clear_context_state
 
 os.environ.setdefault("RDC_TOOL_ARTIFACT_DIR", str(TEST_ROOT / "artifacts"))
+
+
+@pytest.fixture
+def pin_host(monkeypatch):
+    """Make every host-dependent decision see one target, e.g. a windows-x64 package built by a test on Linux."""
+    def pin(target: str) -> None:
+        monkeypatch.setattr(platform_host, "host_target", lambda: target)
+    return pin
 
 
 @pytest.fixture(autouse=True)

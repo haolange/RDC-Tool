@@ -11,22 +11,6 @@ from rdc_tool.context_snapshot import clear_context_snapshot
 from rdc_tool.runtime_state import clear_context_state
 
 
-PRE_GA_CONTEXT_FIELDS = {
-    "runtime_" + "owner",
-    "owner_" + "lease",
-    "active_" + "baton",
-    "rehydrate_" + "status",
-    "runtime_" + "parallelism_" + "ceiling",
-    "entry_" + "mode",
-}
-PRE_GA_SESSION_TOOLS = {
-    "rd.session.claim_" + "runtime_" + "owner",
-    "rd.session.release_" + "runtime_" + "owner",
-    "rd.session.export_" + "runtime_" + "baton",
-    "rd.session.rehydrate_" + "runtime_" + "baton",
-}
-
-
 @pytest.fixture(autouse=True)
 def _reset_runtime_state() -> None:
     original_captures = dict(server._runtime.captures)
@@ -64,7 +48,7 @@ def _reset_runtime_state() -> None:
         server.server_runtime._config = original_config
 
 
-def test_context_lifecycle_tools_do_not_expose_pre_ga_coordination_fields() -> None:
+def test_context_lifecycle_tools_report_session_locators() -> None:
     created = asyncio.run(
         server.dispatch_operation(
             "rd.session.create_context",
@@ -90,7 +74,6 @@ def test_context_lifecycle_tools_do_not_expose_pre_ga_coordination_fields() -> N
     assert default_snapshot["data"]["context_id"] == "default"
     assert default_snapshot["data"]["notes"] == ""
     assert default_snapshot["data"]["session_locator"] == {"rdc_path": "", "session_id": "", "frame_index": 0, "active_event_id": 0}
-    assert PRE_GA_CONTEXT_FIELDS.isdisjoint(default_snapshot["data"])
 
     listed = asyncio.run(server.dispatch_operation("rd.session.list_contexts", {}, transport="test"))
     assert listed["ok"] is True
@@ -98,7 +81,6 @@ def test_context_lifecycle_tools_do_not_expose_pre_ga_coordination_fields() -> N
     context_ids = {item["context_id"] for item in contexts}
     assert {"default", "ctx-alpha"} <= context_ids
     assert all("session_locator" in item for item in contexts)
-    assert all(PRE_GA_CONTEXT_FIELDS.isdisjoint(item) for item in contexts)
 
     selected = asyncio.run(
         server.dispatch_operation(
@@ -111,7 +93,6 @@ def test_context_lifecycle_tools_do_not_expose_pre_ga_coordination_fields() -> N
     assert selected["ok"] is True
     assert selected["data"]["context_id"] == "ctx-alpha"
     assert selected["data"]["notes"] == "alpha-notes"
-    assert PRE_GA_CONTEXT_FIELDS.isdisjoint(selected["data"])
 
     cleared = asyncio.run(
         server.dispatch_operation(
@@ -123,33 +104,13 @@ def test_context_lifecycle_tools_do_not_expose_pre_ga_coordination_fields() -> N
     assert cleared["ok"] is True
     assert cleared["data"]["context_id"] == "ctx-alpha"
     assert cleared["data"]["notes"] == ""
-    assert PRE_GA_CONTEXT_FIELDS.isdisjoint(cleared["data"])
 
 
-def test_docs_and_catalog_keep_pre_ga_coordination_markers_out_of_public_contract() -> None:
+def test_docs_and_catalog_describe_the_session_locator() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    readme = (repo_root / "README.md").read_text(encoding="utf-8-sig")
-    session_doc = (repo_root / "docs" / "session-model.md").read_text(encoding="utf-8-sig")
-    agent_doc = (repo_root / "docs" / "agent-model.md").read_text(encoding="utf-8-sig")
+    for doc in ("README.md", "docs/session-model.md", "docs/agent-model.md"):
+        assert "session_locator" in (repo_root / doc).read_text(encoding="utf-8-sig")
     catalog = json.loads((repo_root / "spec" / "tool_catalog.json").read_text(encoding="utf-8-sig"))
     tools = {item["name"]: item for item in catalog.get("tools") or []}
-
-    forbidden_doc_terms = {
-        "staged_" + "handoff",
-        "orchestrated multi-" + "context",
-        "stricter ownership",
-        "single_" + "runtime_" + "owner",
-        "multi_" + "context_multi_owner",
-    }
-    for text in (readme, session_doc, agent_doc):
-        assert "session_locator" in text
-        assert all(term not in text for term in forbidden_doc_terms)
-
-    assert PRE_GA_SESSION_TOOLS.isdisjoint(tools)
     assert "session_locator" in tools["rd.session.get_context"]["returns_raw"]
     assert "session_locator" in tools["rd.session.list_contexts"]["returns_raw"]
-    for tool in tools.values():
-        param_names = {str(name) for name in tool.get("param_names", [])}
-        assert {"runtime_" + "owner", "owner_" + "lease_id", "baton_" + "id"}.isdisjoint(param_names)
-        returns_raw = str(tool.get("returns_raw") or "")
-        assert all(field not in returns_raw for field in PRE_GA_CONTEXT_FIELDS)

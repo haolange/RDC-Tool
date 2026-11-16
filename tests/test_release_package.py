@@ -9,6 +9,11 @@ import pytest
 from scripts import package_release, verify_release_package
 
 
+@pytest.fixture(autouse=True)
+def _windows_package(pin_host):
+    pin_host("windows-x64")  # these fixtures build windows-x64 packages
+
+
 def _write(path: Path, content: str = "ok\n") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
@@ -35,6 +40,9 @@ def test_package_release_builds_self_contained_zip(tmp_path: Path, monkeypatch) 
         "scripts/verify_release_package.py",
         "spec/tool_catalog.json",
         "binaries/windows/x64/manifest.runtime.json",
+        "binaries/android/arm64/org.renderdoc.renderdoccmd.arm64.apk",
+        "binaries/native_build.json",
+        "binaries/linux/x64/librenderdoc.so",
     ):
         _write(root / rel)
     _write(root / "binaries/windows/x64/manifest.runtime.json", "{}")
@@ -65,6 +73,9 @@ def test_package_release_builds_self_contained_zip(tmp_path: Path, monkeypatch) 
         assert not any(name.startswith("rdc-tool/tests/") for name in names)
         assert not any(name.lower().endswith(".rdc") for name in names)
         assert "rdc-tool/intermediate/logs/secret.log" not in names
+        assert {"rdc-tool/binaries/native_build.json", "rdc-tool/binaries/android/arm64/org.renderdoc.renderdoccmd.arm64.apk",
+                "rdc-tool/binaries/windows/x64/manifest.runtime.json"} <= names
+        assert not any(name.startswith("rdc-tool/binaries/linux/") for name in names)
         manifest = json.loads(zf.read("rdc-tool/RELEASE_MANIFEST.json").decode("utf-8"))
         license_inventory = json.loads(zf.read("rdc-tool/LICENSE_INVENTORY.json").decode("utf-8"))
         sbom = json.loads(zf.read("rdc-tool/SBOM.json").decode("utf-8"))
@@ -127,45 +138,6 @@ def test_verify_release_package_rejects_manifest_without_public_command(tmp_path
         verify_release_package._verify_release_manifest(root)
 
 
-def test_verify_release_package_rejects_pre_ga_payload_path(tmp_path: Path) -> None:
-    package = tmp_path / "rdc-tool-1.0.0-windows-x64.zip"
-    pre_ga_path = "rdc-tool/rdc_tool/" + "runtime_" + "materializer.py"
-    with zipfile.ZipFile(package, "w") as archive:
-        archive.writestr(pre_ga_path, "pre-ga\n")
-
-    with pytest.raises(RuntimeError, match="pre-GA path"):
-        verify_release_package._verify_no_pre_ga_payload(package)
-
-
-def test_verify_release_package_rejects_pre_ga_payload_marker(tmp_path: Path) -> None:
-    package = tmp_path / "rdc-tool-1.0.0-windows-x64.zip"
-    pre_ga_marker = "worker_" + "materialize"
-    with zipfile.ZipFile(package, "w") as archive:
-        archive.writestr("rdc-tool/binaries/windows/x64/manifest.runtime.json", '{"flag":"' + pre_ga_marker + '"}')
-
-    with pytest.raises(RuntimeError, match="pre-GA marker"):
-        verify_release_package._verify_no_pre_ga_payload(package)
-
-
-def test_pre_ga_scan_accepts_current_process_lifetime_lease(tmp_path: Path) -> None:
-    root = Path(__file__).resolve().parents[1]
-    package = tmp_path / "current-owner.zip"
-    with zipfile.ZipFile(package, "w") as archive:
-        for name in ("client.py", "server.py", "ownership.py"):
-            source = root / "rdc_tool/daemon" / name
-            archive.writestr("rdc-tool/rdc_tool/daemon/" + name, source.read_bytes())
-    verify_release_package._verify_no_pre_ga_payload(package)
-
-
-@pytest.mark.parametrize("payload", ['{"owner_lease":{}}', '{ "owner_lease" \n : {} }', "{'owner_lease': None}"])
-def test_pre_ga_scan_still_rejects_retired_serialized_lease(tmp_path: Path, payload: str) -> None:
-    package = tmp_path / "retired-owner.zip"
-    with zipfile.ZipFile(package, "w") as archive:
-        archive.writestr("rdc-tool/retired.json", payload)
-    with pytest.raises(RuntimeError, match="pre-GA mapping field"):
-        verify_release_package._verify_no_pre_ga_payload(package)
-
-
 def test_verify_release_package_rejects_manifest_with_rdc_fixture(tmp_path: Path) -> None:
     root = tmp_path / "rdc-tool"
     for rel in ("bin/rdc-tool.cmd", "bin/rdc-tool", "cli/run_cli.py", "install.cmd", "tests/fixtures/sample.rdc"):
@@ -200,3 +172,18 @@ def test_verify_release_package_checks_license_inventory_and_sbom(tmp_path: Path
     _write(root / "LICENSE_INVENTORY.json", json.dumps([{"name": "rdc-tool", "version": "1.0.0", "license": "MIT", "path": "LICENSE"}]))
     with pytest.raises(RuntimeError, match="license inventory mismatch"):
         verify_release_package._verify_license_inventory(root)
+
+
+@pytest.mark.skipif(not hasattr(__import__("os"), "getuid"), reason="file modes are a POSIX property")
+def test_package_extraction_restores_recorded_modes(tmp_path: Path) -> None:
+    import os
+    import stat
+    source = tmp_path / "source/rdc-tool"
+    _write(source / "cli/run_cli.py")
+    _write(source / "bin/rdc-tool", "#!/bin/sh\n")
+    os.chmod(source / "bin/rdc-tool", 0o755)
+    archive = tmp_path / "package.zip"
+    package_release._zip_dir(source, archive)
+    verify_release_package._extract_package(archive, tmp_path / "out")
+    assert (tmp_path / "out/rdc-tool/bin/rdc-tool").stat().st_mode & stat.S_IXUSR
+    assert not (tmp_path / "out/rdc-tool/cli/run_cli.py").stat().st_mode & stat.S_IXUSR

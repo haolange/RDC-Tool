@@ -37,9 +37,9 @@ LINUX_ARCHIVE = {
 
 
 @pytest.fixture(autouse=True)
-def windows_host(monkeypatch):
+def windows_host(pin_host):
     # Native fixtures are windows-x64 packages; Linux-specific tests switch the host explicitly.
-    monkeypatch.setattr(package_runtime, "host_target", lambda: "windows-x64")
+    pin_host("windows-x64")
 
 
 def _write(path: Path, content: bytes | str) -> None:
@@ -115,8 +115,8 @@ def test_windows_interpreter_is_assembled_from_its_pinned_archive(tmp_path, monk
     assert ok, failures
 
 
-def test_linux_interpreter_keeps_regular_files_and_points_site_at_the_installation(tmp_path, monkeypatch):
-    monkeypatch.setattr(package_runtime, "host_target", lambda: "linux-x64")
+def test_linux_interpreter_keeps_regular_files_and_points_site_at_the_installation(tmp_path, monkeypatch, pin_host):
+    pin_host("linux-x64")
     archive = _pin_archive(tmp_path, monkeypatch, "linux-x64")
     _write(tmp_path / "pyproject.toml", (ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     monkeypatch.setattr(package_runtime, "tools_root", lambda: tmp_path)
