@@ -27,7 +27,7 @@
 | 项 | 影响 | 解除条件 |
 |---|---|---|
 | lavapipe 上原生回放崩溃 | X 的真实回放：候选 `librenderdoc.so` 打开 `vkcube.rdc` 后在 `ReplayController::PostCreateInit` → `WrappedVulkan::Serialise_vkCreateSwapchainKHR` 段错误，`fixture_integration` 按设计失败 | 在有真实 Vulkan 驱动的 Linux 主机复测；或在 fork 中定位 swapchain 序列化对无 surface 软件驱动的处理 |
-| fork 的 GCC 编译补丁 | dde8822 在 GCC 下缺少 `#include <vector>` 无法编译；补丁只在本地 fork 克隆中，未推送 | 由仓库所有者决定是否推送到 `haolange/renderdoc`；推送后源码树与现有 Windows/APK 回执不同，需按 [release-baseline](release-baseline.md) 整套重建配对 |
+| fork 的 GCC 编译补丁 | dde8822 的 `renderdoc/driver/vulkan/vk_pixelhistory.cpp` 在 GCC 下缺少 `#include <vector>`（加在 `#include <float.h>` 之后即可编译）；补丁未推送，本地克隆已随清理删除 | 由仓库所有者决定是否推送到 `haolange/renderdoc`；推送后源码树与现有 Windows/APK 回执不同，需按 [release-baseline](release-baseline.md) 整套重建配对 |
 | 候选未配对 Android helper | 候选源码树含 GCC 补丁，与 APK 回执的 `tree_sha256` 不同，候选只认证 `linux-x64` | 同一冻结源码重建 Linux `.so`、Windows DLL/PYD 与双 APK，写入同一份回执 |
 | Linux 正式产物 | 尚无 Linux 发行包 | 下一轮：同源构建、老 glibc 基线构建环境、`package_runtime --host linux-x64`、包校验 |
 | Windows 捆绑依赖早于哈希锁 | 已提交的 Windows `python/` 中仍有 MCP 时代的多余包，`bundle == lock` 校验未启用 | 下一轮用 `package_runtime --host windows-x64` 按锁重建并启用该校验 |
