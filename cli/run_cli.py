@@ -43,6 +43,7 @@ TOOLS_ROOT = _bootstrap_tools_root()
 
 from rdc_tool import __version__ as TOOL_VERSION
 from rdc_tool.io_utils import safe_json_text, safe_stream_write
+from rdc_tool.platform.host import host_target
 from rdc_tool.runtime_requirements import missing_dependencies
 
 
@@ -176,7 +177,7 @@ def _emit_version(argv: list[str]) -> None:
             "data": {
                 "tool_version": TOOL_VERSION,
                 "schema_version": "3.0.0",
-                "platform": "windows-x64" if os.name == "nt" else sys.platform,
+                "platform": host_target(),
                 "tools_root": str(root),
                 "public_commands": ["rdc-tool"],
                 "entrypoints": {

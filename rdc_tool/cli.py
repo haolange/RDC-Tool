@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from rdc_tool.platform import process
+from rdc_tool.platform.host import host_target
 from rdc_tool.core.assert_service import AssertService
 from rdc_tool import __version__ as TOOL_VERSION
 from rdc_tool.core.contracts import SCHEMA_VERSION, canonical_error, canonical_success
@@ -550,7 +551,7 @@ def _version_payload() -> Dict[str, Any]:
         data={
             "tool_version": TOOL_VERSION,
             "schema_version": SCHEMA_VERSION,
-            "platform": "windows-x64" if os.name == "nt" else sys.platform,
+            "platform": host_target(),
             "tools_root": str(root),
             "public_commands": ["rdc-tool"],
             "entrypoints": {

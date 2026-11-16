@@ -397,3 +397,27 @@ class PreviewWindowHost:
                     self.on_closed(closed_by_user)
                 except Exception:
                     pass
+
+
+def find_window_rect(title_prefix: str, title_fragment: str) -> tuple[int, int, int, int] | None:
+    matches: list[int] = []
+
+    @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+    def visit(hwnd, lparam):  # type: ignore[no-untyped-def]
+        if not _user32.IsWindowVisible(hwnd):
+            return True
+        length = _user32.GetWindowTextLengthW(hwnd)
+        if length <= 0:
+            return True
+        buffer = ctypes.create_unicode_buffer(length + 1)
+        _user32.GetWindowTextW(hwnd, buffer, length + 1)
+        title = buffer.value or ""
+        if title.startswith(title_prefix) and title_fragment in title:
+            matches.append(int(hwnd))
+        return True
+
+    _user32.EnumWindows(visit, 0)
+    rect = RECT()
+    if not matches or not _user32.GetWindowRect(matches[-1], ctypes.byref(rect)):
+        return None
+    return (int(rect.left), int(rect.top), int(rect.right), int(rect.bottom))

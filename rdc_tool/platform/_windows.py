@@ -169,3 +169,8 @@ def memory_bytes() -> int | None:
 
 def raw_command_line() -> str | None:
     return str(_kernel32().GetCommandLineW() or "")
+
+
+def launcher_argv(launcher: str) -> list[str]:
+    system_root = os.environ.get("SystemRoot") or os.environ.get("WINDIR") or r"C:\Windows"
+    return [str(Path(system_root) / "System32" / "cmd.exe"), "/c", launcher]

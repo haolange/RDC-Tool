@@ -112,3 +112,7 @@ def memory_bytes() -> int | None:
 
 def raw_command_line() -> str | None:
     return None
+
+
+def launcher_argv(launcher: str) -> list[str]:
+    return [launcher]

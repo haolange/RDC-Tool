@@ -18,6 +18,7 @@ SCRIPT_ROOT = Path(__file__).resolve().parents[1]
 if str(SCRIPT_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPT_ROOT))
 
+from rdc_tool.platform import process
 from rdc_tool.python_runtime import validate_bundled_python_layout
 from rdc_tool.runtime_catalog import catalog_payload
 from rdc_tool.runtime_identity import native_manifest_status
@@ -111,11 +112,6 @@ def _tools_root() -> Path:
     return tools_root(__file__)
 
 
-def _cmd_exe() -> str:
-    system_root = str(os.environ.get("SystemRoot") or r"C:\Windows")
-    return str(Path(system_root) / "System32" / "cmd.exe")
-
-
 def _launcher_env(root: Path | None = None) -> dict[str, str]:
     env = os.environ.copy()
     env.pop("RDC_TOOL_PYTHON", None)
@@ -146,11 +142,11 @@ def _run(cmd: list[str], cwd: Path, *, env: dict[str, str] | None = None) -> tup
 
 
 def _run_public_command(args: list[str], cwd: Path) -> tuple[bool, str]:
-    return _run([_cmd_exe(), "/c", PUBLIC_COMMAND, *args], cwd, env=_launcher_env(cwd))
+    return _run([*process.launcher_argv(PUBLIC_COMMAND), *args], cwd, env=_launcher_env(cwd))
 
 
 def _run_public_command_expect_error(args: list[str], cwd: Path, *, expected_codes: set[str]) -> tuple[bool, str]:
-    code, out, err = run_subprocess([_cmd_exe(), "/c", PUBLIC_COMMAND, *args], cwd=cwd, env=_launcher_env(cwd))
+    code, out, err = run_subprocess([*process.launcher_argv(PUBLIC_COMMAND), *args], cwd=cwd, env=_launcher_env(cwd))
     detail = ((out or "") + (err or "")).strip()
     try:
         from scripts._shared import extract_json_payload
@@ -166,7 +162,7 @@ def _run_public_command_expect_error(args: list[str], cwd: Path, *, expected_cod
 
 
 def _run_windows_launcher_file(args: list[str], cwd: Path) -> tuple[bool, str]:
-    return _run([_cmd_exe(), "/c", str(cwd / WINDOWS_LAUNCHER_FILE), *args], cwd, env=_launcher_env())
+    return _run([*process.launcher_argv(str(cwd / WINDOWS_LAUNCHER_FILE)), *args], cwd, env=_launcher_env())
 
 
 def _bundled_python_for_gate(root: Path) -> str:

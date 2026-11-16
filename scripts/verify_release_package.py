@@ -23,6 +23,7 @@ if str(SCRIPT_ROOT) not in sys.path:
 from scripts._shared import extract_json_payload
 from scripts.release_runtime import isolated_release_runtime
 from rdc_tool import __version__ as TOOL_VERSION
+from rdc_tool.platform import process
 from rdc_tool.runtime_identity import native_manifest_status
 
 
@@ -70,11 +71,6 @@ PRE_GA_TEXT_MARKERS = (
 PRE_GA_MAPPING_FIELDS = ("owner_" + "lease",)
 
 
-def _cmd_exe() -> str:
-    system_root = str(os.environ.get("SystemRoot") or r"C:\Windows")
-    return str(Path(system_root) / "System32" / "cmd.exe")
-
-
 def _run(cmd: list[str], cwd: Path, *, timeout_s: int = 180, env: dict[str, str] | None = None) -> tuple[int, str]:
     proc = subprocess.run(
         cmd,
@@ -103,14 +99,14 @@ def _public_env(root: Path) -> dict[str, str]:
 
 
 def _run_public(root: Path, args: list[str], *, timeout_s: int = 180) -> tuple[int, str]:
-    return _run([_cmd_exe(), "/c", PUBLIC_COMMAND, *args], root, timeout_s=timeout_s, env=_public_env(root))
+    return _run([*process.launcher_argv(PUBLIC_COMMAND), *args], root, timeout_s=timeout_s, env=_public_env(root))
 
 
 def _run_windows_launcher_file(root: Path, args: list[str], *, timeout_s: int = 180) -> tuple[int, str]:
     env = os.environ.copy()
     env.pop("RDC_TOOL_PYTHON", None)
     env["RDC_TOOL_ROOT"] = str(root)
-    return _run([_cmd_exe(), "/c", str(root / WINDOWS_LAUNCHER_FILE), *args], root, timeout_s=timeout_s, env=env)
+    return _run([*process.launcher_argv(str(root / WINDOWS_LAUNCHER_FILE)), *args], root, timeout_s=timeout_s, env=env)
 
 
 def _expect_public_error(root: Path, args: list[str], expected_codes: set[str]) -> None:

@@ -10,7 +10,6 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextvars
-import ctypes
 import csv
 import difflib
 import hashlib

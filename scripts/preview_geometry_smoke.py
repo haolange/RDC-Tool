@@ -14,6 +14,7 @@ SCRIPT_ROOT = Path(__file__).resolve().parents[1]
 if str(SCRIPT_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPT_ROOT))
 
+from rdc_tool.platform import preview as platform_preview
 from rdc_tool.runtime_paths import artifacts_dir, logs_dir
 
 
@@ -210,36 +211,7 @@ def _capture_desktop_image(path: Path) -> Optional[str]:
 
 
 def _find_preview_window_rect(context_id: str) -> Optional[tuple[int, int, int, int]]:
-    try:
-        import ctypes
-
-        user32 = ctypes.windll.user32
-        rect = ctypes.wintypes.RECT()
-        titles: List[tuple[int, str]] = []
-
-        @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
-        def _enum_windows(hwnd, lparam):  # type: ignore[no-untyped-def]
-            if not user32.IsWindowVisible(hwnd):
-                return True
-            length = user32.GetWindowTextLengthW(hwnd)
-            if length <= 0:
-                return True
-            buffer = ctypes.create_unicode_buffer(length + 1)
-            user32.GetWindowTextW(hwnd, buffer, length + 1)
-            title = buffer.value or ""
-            if title.startswith("RDC-Tool Preview [") and f"[{context_id}]" in title:
-                titles.append((int(hwnd), title))
-            return True
-
-        user32.EnumWindows(_enum_windows, 0)
-        if not titles:
-            return None
-        hwnd = titles[-1][0]
-        if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
-            return None
-        return (int(rect.left), int(rect.top), int(rect.right), int(rect.bottom))
-    except Exception:
-        return None
+    return platform_preview.find_window_rect("RDC-Tool Preview [", f"[{context_id}]")
 
 
 def _capture_preview_window(context_id: str, path: Path) -> Optional[str]:

@@ -40,6 +40,15 @@ def preview_window_supported() -> bool:
     return host.IS_WINDOWS
 
 
+def find_window_rect(title_prefix: str, title_fragment: str) -> tuple[int, int, int, int] | None:
+    """Screen rectangle of the newest visible preview window whose title matches."""
+    if not host.IS_WINDOWS:
+        return None
+    from rdc_tool.platform._windows_preview import find_window_rect as find
+
+    return find(title_prefix, title_fragment)
+
+
 def create_preview_window(*, title: str, on_closed: Callable[[bool], None]) -> PreviewWindow:
     if not host.IS_WINDOWS:
         raise PreviewWindowUnsupported(host.host_target())

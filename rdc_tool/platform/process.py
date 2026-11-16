@@ -99,6 +99,11 @@ def run_tool(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
     return subprocess.run(command, **kwargs)
 
 
+def launcher_argv(launcher: str) -> list[str]:
+    """Command prefix that runs a launcher script or a command on PATH."""
+    return _os.launcher_argv(launcher)
+
+
 def memory_bytes() -> int | None:
     """Resident memory of this process, or ``None`` when the host cannot report it."""
     return _os.memory_bytes()
