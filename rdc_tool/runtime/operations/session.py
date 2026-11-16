@@ -8,6 +8,8 @@ from rdc_tool import remote_bootstrap
 from rdc_tool.context_snapshot import normalize_context_id, update_user_context
 from rdc_tool.core.errors import CoreError
 from rdc_tool.core.session_manager import SessionError
+from rdc_tool.platform import process
+from rdc_tool.platform.process import ProcessIdentity
 from rdc_tool.remote_bootstrap import AndroidBootstrapResult
 from rdc_tool.runtime import (
     coerce,
@@ -105,6 +107,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
         # Release live resources before discarding the only ownership record.
         current = context_records._context_state(requested_context)
         cleanup_errors = []
+        lost_remote_sessions = set()
         for sid, record in list(current.get("sessions", {}).items()):
             try:
                 try:
@@ -113,21 +116,33 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
                     # Recovery can leave a remote session deferred or degraded after
                     # closing its native handle. Keep the durable ownership record
                     # until all remaining remote resources are verified and released.
+                    recovery = record.get("recovery") or {} if isinstance(record, dict) else {}
+                    worker_exit = recovery.get("worker_exit") if isinstance(recovery, dict) else None
+                    restart_exit_confirmed = (
+                        isinstance(worker_exit, dict)
+                        and type(worker_exit.get("pid")) is int and worker_exit["pid"] > 0
+                        and isinstance(worker_exit.get("birth"), str)
+                        and process.probe(ProcessIdentity(worker_exit["pid"], worker_exit["birth"])) is process.Liveness.EXITED
+                    )
                     if not (
                         exc.detail.code == "session_not_found"
                         and isinstance(record, dict)
                         and record.get("backend_type") == "remote"
                         and record.get("is_live") is False
-                        and (record.get("recovery") or {}).get("status") in {"deferred", "degraded"}
+                        and recovery.get("status") in {"deferred", "degraded", "requires_restart"}
                         and (
-                            (record.get("recovery") or {}).get("status") != "degraded"
+                            recovery.get("status") == "deferred"
                             or record.get("state") == "degraded"
                         )
+                        and (recovery.get("status") != "requires_restart" or restart_exit_confirmed)
                         and not record.get("shader_replacements")
+                        and not live_state._runtime.shader_replacements.get(sid)
                         and sid not in live_state._runtime.replays
                         and sid not in live_state._runtime.session_owned_remotes
                     ):
                         raise
+                    if recovery.get("status") == "requires_restart":
+                        lost_remote_sessions.add(sid)
                 else:
                     await live_state._session_manager.close_session(sid)
                 remote_session._release_remote_session_lease(sid, context_id=requested_context)
@@ -151,7 +166,16 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
         # bootstrap cleanup, which verifies the current forward identity.
         remote = dict(context_records._context_snapshot(requested_context).get("remote") or {})
         bootstrap = dict(remote.get("bootstrap") or {})
-        if remote.get("state") == "expired" and remote.get("transport") == "adb_android":
+        remote_state = remote.get("state")
+        if lost_remote_sessions:
+            recorded_sessions = set(remote.get("active_session_ids") or [])
+            consumed = str(remote.get("consumed_by_session_id") or "")
+            if (remote_state not in {"expired", "session_owned"} or remote.get("transport") != "adb_android"
+                    or remote.get("origin_context_id") != requested_context
+                    or not recorded_sessions.issubset(lost_remote_sessions)
+                    or (consumed and consumed not in lost_remote_sessions)):
+                cleanup_errors.append("Lost remote session ownership or release is unconfirmed")
+        if remote_state in {"expired", "session_owned"} and remote.get("transport") == "adb_android" and not cleanup_errors:
             if bootstrap.get("started_activity") or bootstrap.get("created_forward"):
                 serial = str(bootstrap.get("device_serial") or "")
                 port = coerce._as_int(bootstrap.get("port"), 0)

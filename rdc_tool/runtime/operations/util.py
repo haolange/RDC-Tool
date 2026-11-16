@@ -23,7 +23,9 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
         try:
             from PIL import Image
         except Exception as exc:
-            return envelope.failure(f"Image diff dependencies missing: {exc}", code="runtime_error")
+            return envelope.failure(f"Image diff dependencies missing: {exc}", code="image_diff_dependency_unavailable",
+                                    category="capability", details={"failure_stage": "load_image_dependency",
+                                        "effects_attempted": False, "context_preserved": True})
         with Image.open(str(args["image_a_path"])) as image:
             a = np.asarray(image.convert("RGBA"), dtype="float32") / 255.0
         with Image.open(str(args["image_b_path"])) as image:

@@ -11,7 +11,6 @@ import threading
 from multiprocessing import AuthenticationError
 from typing import Any, Dict
 
-from rdc_tool.context_snapshot import clear_context_snapshot
 from rdc_tool.context_snapshot import normalize_context_id
 from rdc_tool.daemon.client import context_has_unreleased_resources, owner_lost_should_stop
 from rdc_tool.daemon.state import (
@@ -23,7 +22,7 @@ from rdc_tool.daemon.worker import RuntimeWorkerProcess
 from rdc_tool.platform import ipc, process
 from rdc_tool.platform.ipc import Endpoint
 from rdc_tool.progress import ProgressEvent, ProgressSink
-from rdc_tool.runtime_state import clear_context_state, load_context_state, save_context_state
+from rdc_tool.runtime_state import load_context_state, save_context_state
 from rdc_tool.runtime_worker_state import load_worker_state
 from rdc_tool.timeout_policy import worker_exec_timeout_s
 
@@ -305,19 +304,29 @@ class DaemonRuntime(ProgressSink):
         if self._worker is None:
             self._worker = RuntimeWorkerProcess(context_id=self.daemon_context)
         if not self._worker.is_running():
-            self._mark_replay_requires_restart("Replay worker changed; close and reopen the capture through its owning lifecycle")
+            prior = self._worker.previous_identity()
+            if prior.pid and process.probe(prior) is not process.Liveness.EXITED:
+                raise RuntimeError("Previous worker identity is still live or unavailable; preserve context for recovery")
+            self._mark_replay_requires_restart(
+                "Replay worker changed; close and reopen the capture through its owning lifecycle", prior)
         self._worker.ensure_started()
         return self._worker
 
-    def _mark_replay_requires_restart(self, message: str) -> None:
+    def _mark_replay_requires_restart(self, message: str, exited_worker: process.ProcessIdentity | None = None) -> None:
         state = load_context_state(self.daemon_context)
         sessions = state.get("sessions") or {}
         for record in sessions.values():
+            previous_recovery = dict(record.get("recovery") or {})
+            previous_exit = (previous_recovery.get("worker_exit")
+                             if previous_recovery.get("status") == "requires_restart" and record.get("is_live") is False
+                             else None)
             record["state"] = "degraded"
             record["is_live"] = False
             record["last_error"] = message
-            record["recovery"] = {**dict(record.get("recovery") or {}),
-                "status": "requires_restart", "last_error": message}
+            record["recovery"] = {**previous_recovery,
+                "status": "requires_restart", "last_error": message,
+                "worker_exit": ({"pid": exited_worker.pid, "birth": exited_worker.birth}
+                                if exited_worker is not None and exited_worker.pid > 0 else previous_exit)}
         if sessions:
             state["recovery"] = {**dict(state.get("recovery") or {}),
                 "status": "degraded", "last_error": message,
@@ -337,11 +346,13 @@ class DaemonRuntime(ProgressSink):
             # A lost response can follow an applied mutation. Never resubmit it
             # to a fresh worker or recover the old controller implicitly.
             message = f"Replay worker request failed; outcome unknown; clear context before retrying: {exc}"
+            prior = worker.previous_identity()
             try:
                 worker.stop()
             except Exception as cleanup_error:
                 message += f"; worker cleanup failed: {cleanup_error}"
-            self._mark_replay_requires_restart(message)
+            confirmed = prior if prior.pid > 0 and process.probe(prior) is process.Liveness.EXITED else None
+            self._mark_replay_requires_restart(message, confirmed)
             raise RuntimeError(message) from exc
 
     def _handle_attach_client(self, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -472,29 +483,31 @@ class DaemonRuntime(ProgressSink):
                 self.state["active_request_count"] = int(self.state.get("active_request_count") or 0) + 1
                 self.state["last_activity_at"] = utc_now_iso()
                 self._set_active_operation_locked(
-                    operation="rd.core.shutdown",
+                    operation="rd.session.clear_context",
                     stage="starting",
                     message="Clearing daemon context",
                 )
             self._persist_state()
             released: Dict[str, Any] = {}
+            cleared = False
             try:
-                if self._worker is not None and self._worker.is_running():
-                    response = self._request_worker("clear_context", {"context_id": self.daemon_context}, timeout=15.0)
-                    result = response.get("result")
-                    if isinstance(result, dict):
-                        data = result.get("data")
-                        if isinstance(data, dict):
-                            released = dict(data.get("released") or {})
-                else:
-                    clear_context_snapshot(self.daemon_context)
-                    clear_context_state(self.daemon_context)
+                response = self._request_worker("clear_context", {"context_id": self.daemon_context}, timeout=15.0)
+                result = response.get("result")
+                if not isinstance(result, dict) or result.get("ok") is not True:
+                    error = result.get("error") if isinstance(result, dict) else None
+                    return {"ok": False, "error": error if isinstance(error, dict) else
+                            {"code": "context_cleanup_failed", "message": "Worker did not confirm context cleanup"}}
+                data = result.get("data")
+                if isinstance(data, dict):
+                    released = dict(data.get("released") or {})
+                cleared = True
             except Exception as exc:
                 return {"ok": False, "error": {"code": "worker_error", "message": str(exc)}}
             finally:
                 with self._state_lock:
                     self._refresh_state_from_runtime_locked()
-                    self._clear_context_snapshot_locked()
+                    if cleared:
+                        self._clear_context_snapshot_locked()
                     self.state["active_request_count"] = max(
                         0,
                         int(self.state.get("active_request_count") or 0) - 1,

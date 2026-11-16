@@ -2260,15 +2260,20 @@ def test_build_input_artifact_write_failure_never_becomes_success(monkeypatch):
     assert len(engine.calls) == 1
 
 
-def test_text_artifact_newlines_remain_distinct_from_exact_build_bytes(monkeypatch, tmp_path):
-    import os
+@pytest.mark.parametrize('source', ['first\nsecond\n', 'first\r\nsecond\r\n', '颜色\n', '混合\r\n内容\n'])
+def test_text_artifact_saved_bytes_match_content_addressed_store(monkeypatch, tmp_path, source):
+    import hashlib
     from pathlib import Path
-    monkeypatch.setattr(live_state, '_artifact_store', None)
+    from rdc_tool.utils.artifact_store import ArtifactStore
+    monkeypatch.setattr(live_state, '_artifact_store', ArtifactStore(tmp_path / 'store'))
     text = asyncio.run(artifact_payloads._store_text_artifact_payload(
-        'first\nsecond\n', stem='source', suffix='.txt', output_dir=str(tmp_path)))
+        source, stem='source', suffix='.txt', output_dir=str(tmp_path)))
     binary = asyncio.run(artifact_payloads._store_bytes_artifact_payload(
         b'first\nsecond\n', stem='build', suffix='.spv', output_dir=str(tmp_path)))
-    assert Path(text['saved_path']).read_bytes() == ('first' + os.linesep + 'second' + os.linesep).encode()
+    saved = Path(text['saved_path']).read_bytes()
+    stored = Path(text['artifact_path']).read_bytes()
+    assert saved == stored == source.encode('utf-8')
+    assert hashlib.sha256(saved).hexdigest() == hashlib.sha256(stored).hexdigest()
     assert Path(binary['saved_path']).read_bytes() == b'first\nsecond\n'
 
 

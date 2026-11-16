@@ -47,6 +47,8 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
     if action == "get_variables" and (type(args.get("expand_depth", 2)) is not int or args.get("expand_depth", 2) < 0
             or type(args.get("max_variables", 2048)) is not int or args.get("max_variables", 2048) < 1):
         return envelope.failure("Variable depth must be non-negative and count positive", code="validation_error", category="validation", details=validation_details)
+    replay_before = live_state._runtime.replays.get(session_id)
+    event_before = replay_before.active_event_id if replay_before is not None else None
     controller = await replay_access._get_controller(session_id)
 
     async def continue_once() -> Optional[Any]:
@@ -140,7 +142,14 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
             literal = None
         else:
             return envelope.success(value=literal)
-        return envelope.failure(f"Unknown expression or variable: {expr}", code="runtime_error")
+        preserved = (replay_before is not None and live_state._runtime.replays.get(session_id) is replay_before
+                     and replay_before.active_event_id == event_before
+                     and live_state._runtime.shader_debugs.get(debug_id) is handle)
+        details = {"session_id": session_id, "shader_debug_id": debug_id}
+        if preserved:
+            details.update({"failure_stage": "evaluate_expression", "effects_attempted": False, "context_preserved": True})
+        return envelope.failure(f"Unknown expression or variable: {expr}", code="expression_not_found",
+                                category="validation" if preserved else "runtime", details=details)
     if action == "get_callstack":
         state = handle.current_state
         callstack = [] if state is None else [

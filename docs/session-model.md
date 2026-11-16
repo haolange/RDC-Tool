@@ -101,6 +101,8 @@ session-context 操作使用 60 秒 worker 预算；CLI daemon 传输再加共�
 
 远端回放使用所属运行时连接完成传输与 OpenCapture。`clear_context` 只关闭属于所请求 context 的 session 与 remote，再重置其快照；清理失败时保留恢复身份并返回失败。
 
+worker 改变后，daemon 只在确认旧进程退出时记录其身份。`requires_restart` 的非 live 远端 session 需再次核实该身份，并确认没有活动 replay、remote lease 或 replacement，才可进入所属 remote 与 ADB 清理。session 原生关闭失败时保留会话和未确认的句柄；daemon 的 context clear 与核心 shutdown 复用同一清理检查。
+
 worker 中的操作阶段通过 request 绑定的 `ProgressEvent` 转发到 daemon `active_operation`，设备准备的检查、安装、启动与验证因此使用同一真实阶段。事件必须匹配当前 request 与 operation/trace，迟到事件不得污染后续请求；进度发布失败不替代操作的最终回执。取消后已提交的安装事实仍保留在所属 context 的操作历史中。
 
 原生远端 server 在用户空闲时等待下一个数据包；接收截止时间从数据包到达后才开始计算，不覆盖 CLI 操作之间的间隔。server 关闭仍可中断。

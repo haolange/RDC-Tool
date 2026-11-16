@@ -154,6 +154,14 @@ async def _save_texture_export(
 async def _export_texture_file(args: Dict[str, Any]) -> envelope.Outcome:
     coerce._require(args, "session_id", "texture_id", "output_path")
     session_id = str(args["session_id"])
+    requested_formats = texture_naming._parse_requested_formats(args.get("file_format", "png"))
+    uses_display_controls = _texture_export_uses_display_controls(args)
+    if uses_display_controls and any(fmt not in {"png", "jpg", "exr", "hdr", "auto", "smart", "all", "*"}
+                                     for fmt in requested_formats):
+        return envelope.failure("Display-mapped texture export only supports png, jpg, exr, hdr when channels/remap/flip_y are requested",
+                                code="texture_export_format_unsupported", category="validation",
+                                details={"session_id": session_id, "failure_stage": "validate_format",
+                                         "effects_attempted": False, "context_preserved": True})
     event_id = coerce._as_int(args.get("event_id"), replay_access._active_event(session_id))
     if event_id <= 0:
         event_id = await replay_access._ensure_event(session_id, None)
@@ -190,7 +198,6 @@ async def _export_texture_file(args: Dict[str, Any]) -> envelope.Outcome:
     base_name_stem = texture_naming._safe_name_token(f"ev{event_id}_{name_info['name_stem']}{dim_token}")
     base_output_path = str(args["output_path"])
     multi_export = len(selected_formats) > 1
-    uses_display_controls = _texture_export_uses_display_controls(args)
     view_config = _texture_export_view_config(args, subresource=normalized_subresource)
     view_config["requested_remap"] = coerce._as_dict(args.get("remap"), default={})
     exports: List[Dict[str, Any]] = []

@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
+import pytest
+
 from rdc_tool.context_snapshot import clear_context_snapshot
 from rdc_tool.runtime_state import clear_context_state
 from rdc_tool.runtime import action_index, live_state, preview_sync, renderdoc_api, visual_target
@@ -26,6 +28,19 @@ class _FakeCaptureFile:
 
     def CloseFile(self) -> None:
         self.calls.append("CloseFile")
+
+
+@pytest.mark.parametrize('action', ['open_file', 'close_file', 'get_info', 'open_replay'])
+def test_missing_capture_rejected_before_effects(monkeypatch, tmp_path, action):
+    monkeypatch.setattr(live_state._runtime, 'captures', {})
+    args = {'file_path': str(tmp_path / 'missing.rdc')} if action == 'open_file' else {'capture_file_id': 'missing'}
+    result = asyncio.run(capture_ops.dispatch(action, args))
+    assert not result.ok
+    assert result.code == 'capture_file_not_found'
+    assert result.category == 'validation'
+    assert result.details['effects_attempted'] is False
+    assert result.details['context_preserved'] is True
+    assert not live_state._runtime.captures
 
 
 def test_dispatch_capture_open_file_does_not_open_replay(monkeypatch, tmp_path) -> None:

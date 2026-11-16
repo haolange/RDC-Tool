@@ -194,6 +194,9 @@ def _normalize_session_record(session_id: str, value: Any) -> Dict[str, Any]:
     item = dict(value or {}) if isinstance(value, dict) else {}
     recovery = item.get("recovery") if isinstance(item.get("recovery"), dict) else {}
     remote = item.get("remote") if isinstance(item.get("remote"), dict) else {}
+    worker_exit = recovery.get("worker_exit")
+    verified_exit = (isinstance(worker_exit, dict) and type(worker_exit.get("pid")) is int
+                     and worker_exit["pid"] > 0 and isinstance(worker_exit.get("birth"), str))
     return {
         "session_id": str(item.get("session_id") or session_id or "").strip(),
         "capture_file_id": str(item.get("capture_file_id") or "").strip(),
@@ -215,6 +218,7 @@ def _normalize_session_record(session_id: str, value: Any) -> Dict[str, Any]:
             "last_success_ms": _normalize_int(recovery.get("last_success_ms")),
             "attempt_count": _normalize_int(recovery.get("attempt_count")),
             "last_error": str(recovery.get("last_error") or item.get("last_error") or "").strip(),
+            **({"worker_exit": {"pid": worker_exit["pid"], "birth": worker_exit["birth"]}} if verified_exit else {}),
         },
     }
 

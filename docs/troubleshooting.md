@@ -14,6 +14,8 @@ VFS、facade 命令、`diff pipeline` 或 `assert pipeline` 报告 `session_requ
 
 `rd.session.clear_context` 返回 `context_cleanup_failed`：读取 `details.cleanup_reason_code` 与 `details.cleanup_errors`。session、连接或重启后过期 remote 的清理失败会保留 context；不要删除状态文件，也不要先停 daemon。Android helper 记录的 `owned_pids` 必须与当前进程一致才可停止；旧快照没有该证明且进程仍在时保持隔离。确认原 helper 已退出后，仍须让 Tool 验证并移除自己创建的 ADB forward，再取得成功的 `clear_context` 与 `daemon stop` 回执。
 
+worker 退出后的 `requires_restart` 会话只有在旧 worker 退出身份可核实、没有活动 replacement 且远程归属可确认时才允许继续清理。原生清理失败时保留会话和未确认的句柄；不要把重试或进程身份不可读当作释放证明。
+
 ### session 操作超时
 
 `rd.session.*` 的 worker 预算与 65 秒传输截止时间见 [session-model.md](session-model.md)，它们与宿主应用的外层进程超时相互独立。宿主在 65 秒之前就报告超时时，确认它使用的是当前打包的 RDC-Tool，且外层 CLI 截止时间大于 65 秒。不要添加单次调用的超时覆盖，也不要原地修改已安装的包；更新并重新安装 RDC-Tool，让策略与测试保持唯一真源。
@@ -25,6 +27,8 @@ VFS、facade 命令、`diff pipeline` 或 `assert pipeline` 报告 `session_requ
 `state_lock_timeout`：另一写入方在 10 秒内仍持有 context 状态或快照文件的锁。等并发写入完成后重试，不要删除锁文件。
 
 `daemon_owner_unavailable`：无法确认该 context 的 owner，`details.reason` 给出原因。保留 owner 及其状态并重试 `daemon status`；确需替换时，先显式 clear/stop 已识别的 owner 并确认进程退出，再启动新的 daemon。
+
+`legacy_state_identity_unconfirmed` 或 `legacy_state_resources_unconfirmed` 表示旧状态的进程或资源尚不能安全退役。保留该状态及关联 context、worker 登记，按记录核对后再恢复；不清空整个运行目录，也不暴露状态中的认证信息。
 
 ## 回放
 

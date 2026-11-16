@@ -10,6 +10,8 @@
 
 所有命令与操作都返回 canonical JSON 信封（`schema_version` 为 `3.0.0`）：`tool_version`、`result_kind`、`ok`、`data`、`artifacts`、`error`（`code`、`category`、`message`、`details`）、`meta` 与 `projections`。操作集变化时信封保持不变。
 
+在有证明的前置拒绝中，`details.effects_attempted=false` 与 `context_preserved=true` 表明请求没有执行其效果且回放身份未改变；消费者仍须核验自己的 context 与 lease。事件索引查询仅在同一 replay、事件及 replacement 身份保持不变时提供该证明。超时、原生故障或清理结果不明不能推断为已保全。
+
 canonical JSON 不输出非标准裸数值 `NaN`、`Infinity`、`-Infinity`。原生着色器或 capture 数据中的非有限浮点值保留为字符串 `"NaN"`、`"Infinity"`、`"-Infinity"`，有限值仍是数字。这些标记描述观察到的原生值，不是替代的零值或成功测量；解读数值数组时须把它们当作非有限数据。
 
 ## 操作集
@@ -39,6 +41,8 @@ canonical JSON 不输出非标准裸数值 `NaN`、`Infinity`、`-Infinity`。�
 | `daemon_owner_unavailable` | 无法确认 daemon 所有权 | `context_id`、`state_path`、`reason`、`recovery_hint` |
 
 这些上限没有对应的 CLI 选项。`daemon_owner_unavailable` 覆盖：owner 锁仍被持有而状态文件缺失或无效、存活 owner 的 status 探测失败、状态发布或响应处理期间 owner 身份改变，以及启动失败后无法确认进程退出。它保留现有回放与恢复状态，从不授权自动替换或重试回放。非争用错误走各自的错误路径。诊断、daemon 响应与 CLI 输出都不包含 daemon IPC 密钥。
+
+容量扫描可以退役旧 `pipe_name` 状态，前提是持有该 context 的启动、owner 和发布锁，并确认记录一致、相关进程已退出且没有未释放资源。其他旧状态继续报告无法确认的身份或资源，不据此删除现场。
 
 ## 回放与主机能力
 
@@ -121,6 +125,8 @@ Pixel History 保留原生报告的值，不承诺可执行的逐片元混合账
 成功的 `rd.shader.edit_and_replace` 结果保留 `replacement.compile.build_input`：本次调用传给 `BuildTargetShader` 的确切字节、其 SHA-256 与大小、编码、原着色器 ID，以及返回并传给 `ReplaceResource` 的目标着色器 ID。这是构建输入来源，不是着色器读回或设备 ISA 证明（`device_binary_observed: false`）。对二进制 SPIR-V 输入，只有存在完整、对齐、可识别的文件头时，`spirv_header` 才暴露实际的头字（含 `id_bound`），且不校验指令语义；文本输入、畸形文件头与空操作构建不会合成二进制 bound。构建失败不报告已应用目标的证明。前后源码哈希与构建输入字节哈希相互独立。请求 patch artifact 时，同一字节序列保存为 `artifacts.build_input`（SPIR-V 模块输入为 .spv，源码输入为 .txt），否则不额外写字节 artifact；原始字节不进入普通模型 JSON 序列化。没有该来源信息的历史结果不会被追认。事件绑定的 `extract_binary` 继续检查绑定的反射，不会静默选择替换目标。
 
 `rd.shader.edit_and_replace` 的 diff 被拒绝时仍是 `shader_patch_diff_failed` 校验失败。文本 diff 在编译或替换之前应用失败时，Tool 明确报告 `failure_stage: apply_patch`、`replacement_attempted: false` 与 `context_preserved: true`。回放可能已导航到请求的事件，因此这不是无副作用声明，也不是恢复证明、干预或回滚。未知、原生或替换失败不继承这一证明；消费者在允许下一个请求前仍要核验冻结的所属 lease。
+
+源码文本 artifact 以 UTF-8 字节同时写入保存路径与 artifact store，不按主机换行规则转换。文件审计对实际字节求哈希；源码语义哈希与构建输入字节哈希仍分别解释，不用文本归一化代替文件审计。
 
 SPIR-V 精度 patch 的目标是 ID 操作数：`variables` 接受 `%7` 或 ID 记号 `7`，两者解析为同一精确操作数，同时用于匹配报告与编辑应用。操作数两侧空白被忽略；畸形或空操作数被拒绝，绝不变成全局编辑。显式的空 `variables` 数组保留文档规定的全部 decoration 范围。该操作不会根据大小写、着色器阶段或变量编号前缀推断目标。
 

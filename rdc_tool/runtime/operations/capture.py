@@ -31,7 +31,8 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
         read_only = coerce._as_bool(args.get("read_only"), True)
         path = Path(file_path)
         if not path.is_file():
-            return envelope.failure(f"Capture file not found: {file_path}", code="runtime_error")
+            return envelope.failure(f"Capture file not found: {file_path}", code="capture_file_not_found", category="validation",
+                                    details={"failure_stage": "validate_capture_file", "effects_attempted": False, "context_preserved": True})
         state = context_records._context_state(live_state._runtime_context_id())
         limits = dict(state.get("limits") or {})
         file_meta = context_records._capture_file_metadata(str(path))
@@ -104,7 +105,8 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
         coerce._require(args, "capture_file_id")
         capture_file_id = str(args["capture_file_id"])
         if capture_file_id not in live_state._runtime.captures:
-            return envelope.failure(f"Unknown capture_file_id: {capture_file_id}", code="runtime_error")
+            return envelope.failure(f"Unknown capture_file_id: {capture_file_id}", code="capture_file_not_found", category="validation",
+                                    details={"failure_stage": "validate_capture_id", "effects_attempted": False, "context_preserved": True})
         dependent_session_ids = replay_access._capture_dependent_session_ids(capture_file_id)
         if dependent_session_ids:
             return envelope.failure(
@@ -149,7 +151,8 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
         coerce._require(args, "capture_file_id")
         handle = live_state._runtime.captures.get(str(args["capture_file_id"]))
         if handle is None:
-            return envelope.failure(f"Unknown capture_file_id: {args['capture_file_id']}", code="runtime_error")
+            return envelope.failure(f"Unknown capture_file_id: {args['capture_file_id']}", code="capture_file_not_found", category="validation",
+                                    details={"failure_stage": "validate_capture_id", "effects_attempted": False, "context_preserved": True})
         path = Path(handle.file_path)
         metadata = {
             "path": str(path),
@@ -166,7 +169,8 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
         capture_file_id = str(args["capture_file_id"])
         handle = live_state._runtime.captures.get(capture_file_id)
         if handle is None:
-            return envelope.failure(f"Unknown capture_file_id: {capture_file_id}", code="runtime_error")
+            return envelope.failure(f"Unknown capture_file_id: {capture_file_id}", code="capture_file_not_found", category="validation",
+                                    details={"failure_stage": "validate_capture_id", "effects_attempted": False, "context_preserved": True})
         state = context_records._context_state(live_state._runtime_context_id())
         for existing_session_id, replay in list(live_state._runtime.replays.items()):
             if str(getattr(replay, "capture_file_id", "") or "") == capture_file_id:

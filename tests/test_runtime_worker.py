@@ -49,6 +49,8 @@ def _prepare_runtime_source(tmp_path: Path) -> Path:
 
 
 def test_worker_uses_source_runtime_directly(tmp_path: Path, monkeypatch) -> None:
+    from rdc_tool.platform import host
+    host.host_target()  # Resolve the actual host before replacing subprocess.Popen.
     source_root = _prepare_runtime_source(tmp_path)
     monkeypatch.setattr(daemon_worker, "tools_root", lambda: source_root.parents[2])
     monkeypatch.setattr(daemon_worker, "binaries_root", lambda: source_root)
@@ -100,6 +102,8 @@ def test_worker_uses_source_runtime_directly(tmp_path: Path, monkeypatch) -> Non
 
 def test_worker_rejects_declared_but_invalid_native_set_before_spawn(tmp_path, monkeypatch):
     import pytest
+    from rdc_tool.platform import host
+    host.host_target()
     source = _prepare_runtime_source(tmp_path)
     (source.parents[1] / "native_build.json").write_text(json.dumps({"source": {}, "builds": []}), encoding="utf-8")
     monkeypatch.setattr(daemon_worker, "tools_root", lambda: source.parents[2])
@@ -114,6 +118,7 @@ def test_worker_rejects_declared_but_invalid_native_set_before_spawn(tmp_path, m
 def test_mixed_loaded_runtime_rejects_new_work_but_keeps_cleanup_available(monkeypatch):
     from rdc_tool import runtime_identity
     from rdc_tool.runtime import worker_main
+    monkeypatch.setenv("RDC_TOOL_CONTEXT_ID", "default")
     called = []
     async def dispatch(operation, *args, **kwargs):
         called.append(operation)
@@ -134,7 +139,7 @@ def test_mixed_loaded_runtime_rejects_new_work_but_keeps_cleanup_available(monke
     assert worker_main.main(["--context-id", "mixed-runtime"]) == 0
     assert outputs[1]["ok"] is False
     assert "configured runtime" in outputs[1]["error"]["message"]
-    assert called == ["rd.core.shutdown", "shutdown"]
+    assert called == ["rd.session.clear_context", "shutdown"]
 
 
 def test_worker_keeps_loop_and_native_thread_across_requests_and_shutdown(monkeypatch):

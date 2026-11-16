@@ -22,6 +22,24 @@ def compare(tmp_path: Path, a: np.ndarray, b: np.ndarray, metrics=None) -> envel
     return asyncio.run(util_ops.dispatch('diff_images', args))
 
 
+def test_missing_image_dependency_is_reported_before_read_or_write(monkeypatch, tmp_path):
+    import builtins
+    original_import = builtins.__import__
+    def reject_pillow(name, *args, **kwargs):
+        if name == 'PIL':
+            raise ImportError('fixture dependency unavailable')
+        return original_import(name, *args, **kwargs)
+    monkeypatch.setattr(builtins, '__import__', reject_pillow)
+    result = asyncio.run(util_ops.dispatch('diff_images', {'image_a_path': 'left', 'image_b_path': 'right',
+        'output_path': str(tmp_path / 'output.png')}))
+    assert not result.ok
+    assert result.code == 'image_diff_dependency_unavailable'
+    assert result.category == 'capability'
+    assert result.details['effects_attempted'] is False
+    assert result.details['context_preserved'] is True
+    assert not (tmp_path / 'output.png').exists()
+
+
 def test_diff_is_visible_for_opaque_inputs_and_alpha_only_changes(tmp_path: Path) -> None:
     a = np.zeros((16, 16, 4), dtype=np.uint8)
     a[:, :, 3] = 255

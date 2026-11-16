@@ -25,7 +25,6 @@ async def _store_bytes_artifact_payload(
     output_dir: str = "",
     title: str = "",
     mime: str = "text/plain",
-    text_mode: bool = False,
 ) -> Dict[str, Any]:
     if not data:
         return {}
@@ -34,10 +33,7 @@ async def _store_bytes_artifact_payload(
         out_dir = Path(str(output_dir))
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / f"{texture_naming._safe_name_token(stem)}{suffix}"
-        if text_mode:
-            out_path.write_text(data.decode("utf-8"), encoding="utf-8")
-        else:
-            out_path.write_bytes(data)
+        out_path.write_bytes(data)
         saved_path = str(out_path)
     artifact_path = ""
     if live_state._artifact_store is not None:
@@ -66,5 +62,4 @@ async def _store_text_artifact_payload(
 ) -> Dict[str, Any]:
     return await _store_bytes_artifact_payload(
         text.encode("utf-8"), stem=stem, suffix=suffix, output_dir=output_dir, title=title, mime=mime,
-        text_mode=True,
     )

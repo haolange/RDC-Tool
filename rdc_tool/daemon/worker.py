@@ -12,12 +12,13 @@ import threading
 import time
 from typing import Any, Dict, Optional
 
+from rdc_tool.daemon.state import load_json_with_status
 from rdc_tool.io_utils import safe_json_text
 from rdc_tool.platform import process
-from rdc_tool.platform.process import SpawnProfile
+from rdc_tool.platform.process import ProcessIdentity, SpawnProfile
 from rdc_tool.progress import ProgressEvent, ProgressSink
 from rdc_tool.runtime_paths import binaries_root, child_python_argv, child_python_env, pymodules_dir, tools_root
-from rdc_tool.runtime_worker_state import clear_worker_state, save_worker_state
+from rdc_tool.runtime_worker_state import clear_worker_state, save_worker_state, worker_state_path
 from rdc_tool.runtime_identity import native_manifest_status
 
 
@@ -54,6 +55,18 @@ class RuntimeWorkerProcess:
 
     def is_running(self) -> bool:
         return self._proc is not None and self._proc.poll() is None
+
+    def previous_identity(self) -> ProcessIdentity:
+        if self._proc is not None:
+            return ProcessIdentity(self._proc.pid, self._birth)
+        status, record = load_json_with_status(worker_state_path(self.context_id))
+        if status == "missing":
+            return ProcessIdentity(0)
+        if (status != "ok" or record.get("context_id") != self.context_id
+                or type(record.get("pid")) is not int or record["pid"] <= 0
+                or not isinstance(record.get("birth", ""), str)):
+            raise RuntimeError("Worker identity record is invalid; preserve it for recovery")
+        return ProcessIdentity(record["pid"], record.get("birth", ""))
 
     def snapshot(self) -> Dict[str, Any]:
         runtime = self._runtime
@@ -230,16 +243,19 @@ class RuntimeWorkerProcess:
                     proc.kill()
                     proc.wait(timeout=3.0)
         finally:
-            try:
-                if proc.stdin:
-                    proc.stdin.close()
-            except Exception:
-                pass
-            try:
-                if proc.stdout:
-                    proc.stdout.close()
-            except Exception:
-                pass
-            self._proc = None
-            self._runtime = None
-            clear_worker_state(self.context_id)
+            # A failed stop must retain the handle and registration while the
+            # old worker could still own a native replay.
+            if proc.poll() is not None:
+                try:
+                    if proc.stdin:
+                        proc.stdin.close()
+                except Exception:
+                    pass
+                try:
+                    if proc.stdout:
+                        proc.stdout.close()
+                except Exception:
+                    pass
+                self._proc = None
+                self._runtime = None
+                clear_worker_state(self.context_id)

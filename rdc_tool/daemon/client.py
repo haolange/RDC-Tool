@@ -15,7 +15,7 @@ from rdc_tool.daemon.ownership import DaemonOwnerUnavailable, owner_is_busy, wai
 from rdc_tool.daemon.state import (
     DEFAULT_IDLE_TIMEOUT_S, DEFAULT_LEASE_TIMEOUT_S, clear_state, context_from_state_path, daemon_process,
     is_complete, iso_to_ms, list_daemon_context_ids, load_json_with_status, load_state, normalize_attached_clients,
-    normalize_state, normalize_timeout, epoch_ms, owner_identity, owner_process, process_identity, state_path,
+    normalize_state, normalize_timeout, epoch_ms, owner_identity, owner_process, process_identity, retire_incomplete_state, state_path,
     utc_now_iso, worker_process,
 )
 from rdc_tool.platform import ipc, process
@@ -100,13 +100,96 @@ def _daemon_state_excerpt(state: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def context_occupies_capacity(context: Optional[str] = None) -> bool:
-    if owner_is_busy(state_path(context), normalize_context_id(context)):
+    ctx = normalize_context_id(context)
+    if owner_is_busy(state_path(ctx), ctx):
         return True
-    state = load_state(context=context)
+    try:
+        state = load_state(context=ctx)
+    except DaemonOwnerUnavailable as exc:
+        if exc.details.get("reason") != "invalid_state":
+            raise
+        _retire_unused_pipe_state(ctx)
+        return False
     if not state:
         return False
     return any(identity.pid > 0 and process.is_alive(identity)
                for identity in (daemon_process(state), owner_process(state), worker_process(state)))
+
+
+def _retire_unused_pipe_state(context: str) -> None:
+    """Remove a pre-endpoint state only when its entire ownership is settled."""
+    path = state_path(context)
+    with _locked_daemon_start(context):
+        status, expected = load_json_with_status(path)
+        if status == "missing":
+            return
+        if status != "ok":
+            raise DaemonOwnerUnavailable(context, path, "invalid_state")
+
+        def verify(raw: Dict[str, Any]) -> None:
+            def reject(reason: str) -> None:
+                raise DaemonOwnerUnavailable(context, path, reason)
+
+            if (raw.get("context_id") != context or raw.get("daemon_context", context) != context
+                    or not isinstance(raw.get("pipe_name"), str) or not raw["pipe_name"].strip()
+                    or raw.get("endpoint") or not isinstance(raw.get("token"), str) or not raw["token"]):
+                reject("invalid_state")
+            if any(type(raw.get(key)) is not int or raw[key] != 0 for key in ("session_count", "capture_count", "active_request_count")):
+                reject("legacy_state_resources_unconfirmed")
+            if any(raw.get(key) for key in ("session_id", "capture_file_id", "active_operation")):
+                reject("legacy_state_resources_unconfirmed")
+            worker = raw.get("worker")
+            clients = raw.get("attached_clients")
+            if not isinstance(worker, dict) or not isinstance(clients, list):
+                reject("legacy_state_identity_unconfirmed")
+            identities = [(raw, "pid", "birth", True), (raw, "owner_pid", "owner_birth", False),
+                          (worker, "pid", "birth", bool(worker.get("running")))]
+            for client in clients:
+                if not isinstance(client, dict):
+                    reject("legacy_state_identity_unconfirmed")
+                identities.append((client, "pid", "birth", True))
+            worker_status, worker_record = load_json_with_status(worker_state_path(context))
+            if worker_status == "invalid":
+                reject("legacy_state_identity_unconfirmed")
+            if worker_status == "ok":
+                if worker_record.get("context_id") != context:
+                    reject("legacy_state_identity_unconfirmed")
+                identities.append((worker_record, "pid", "birth", bool(worker_record.get("running"))))
+            for item, pid_key, birth_key, required in identities:
+                pid = item.get(pid_key)
+                if type(pid) is not int or pid < 0 or (required and pid == 0):
+                    reject("legacy_state_identity_unconfirmed")
+                birth = item.get(birth_key, "")
+                if not isinstance(birth, str):
+                    reject("legacy_state_identity_unconfirmed")
+                if pid and process.probe(ProcessIdentity(pid, birth)) is not process.Liveness.EXITED:
+                    reject("legacy_state_identity_unconfirmed")
+            if context_has_unreleased_resources(context):
+                reject("legacy_state_resources_unconfirmed")
+            snapshot_status, snapshot = load_json_with_status(context_snapshot_path(context))
+            runtime_status, runtime = load_json_with_status(context_state_path(context))
+            if snapshot_status == "invalid" or runtime_status == "invalid":
+                reject("legacy_state_resources_unconfirmed")
+            for status, record in ((snapshot_status, snapshot), (runtime_status, runtime)):
+                if status == "ok" and record.get("context_id") != context:
+                    reject("legacy_state_resources_unconfirmed")
+            if snapshot_status == "ok":
+                remote = snapshot.get("remote")
+                snapshot_runtime = snapshot.get("runtime")
+                if not isinstance(remote, dict) or not isinstance(snapshot_runtime, dict):
+                    reject("legacy_state_resources_unconfirmed")
+                bootstrap = remote.get("bootstrap") or {}
+                if (not isinstance(bootstrap, dict) or remote.get("state", "none") != "none"
+                        or remote.get("origin_remote_id") or remote.get("consumed_by_session_id")
+                        or bootstrap.get("owned_pids")):
+                    reject("legacy_state_resources_unconfirmed")
+            elif raw.get("backend") != "local":
+                reject("legacy_state_resources_unconfirmed")
+            if runtime_status == "ok" and (not isinstance(runtime.get("sessions"), dict)
+                                            or not isinstance(runtime.get("captures"), dict)):
+                reject("legacy_state_resources_unconfirmed")
+
+        retire_incomplete_state(context, expected, verify)
 
 
 def list_occupying_context_ids() -> list[str]:
@@ -620,6 +703,16 @@ def detach_client(
     return True, "client detached", updated or state
 
 
+def _worker_record_exited(context: str) -> bool:
+    status, record = load_json_with_status(worker_state_path(context))
+    if status == "missing":
+        return True
+    if (status != "ok" or record.get("context_id") != context or type(record.get("pid")) is not int
+            or record["pid"] <= 0 or not isinstance(record.get("birth", ""), str)):
+        return False
+    return process.probe(ProcessIdentity(record["pid"], record.get("birth", ""))) is process.Liveness.EXITED
+
+
 def clear_context(context: Optional[str] = "default") -> Tuple[bool, str, Dict[str, Any]]:
     chosen_ctx = normalize_context_id(context)
     state = load_state(context=chosen_ctx)
@@ -630,6 +723,8 @@ def clear_context(context: Optional[str] = "default") -> Tuple[bool, str, Dict[s
         cleanup_stale_daemon_states(context=chosen_ctx)
         if context_has_unreleased_resources(chosen_ctx):
             return False, "context still owns resources; restart its daemon and clear it", {"context_id": chosen_ctx}
+        if not _worker_record_exited(chosen_ctx):
+            return False, "context worker identity is unconfirmed; preserve its registration", {"context_id": chosen_ctx}
         clear_context_snapshot(context=chosen_ctx)
         clear_context_state(context=chosen_ctx)
         clear_worker_state(context=chosen_ctx)
@@ -646,6 +741,8 @@ def clear_context(context: Optional[str] = "default") -> Tuple[bool, str, Dict[s
             return False, "context clear failed", {"state": refreshed}
         if context_has_unreleased_resources(chosen_ctx):
             return False, "context clear failed; persisted resources remain", {"context_id": chosen_ctx}
+        if not _worker_record_exited(chosen_ctx):
+            return False, "context clear failed; worker identity is unconfirmed", {"context_id": chosen_ctx}
         clear_context_snapshot(context=chosen_ctx)
         clear_context_state(context=chosen_ctx)
         clear_worker_state(context=chosen_ctx)

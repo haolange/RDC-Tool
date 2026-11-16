@@ -13,7 +13,7 @@ import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple
 
 from rdc_tool.context_snapshot import context_file_token, normalize_context_id
 from rdc_tool.daemon.ownership import DaemonOwnerUnavailable, OwnerLease, locked_publication, owner_is_busy
@@ -248,3 +248,19 @@ def clear_state(context: Optional[str] = "default", *, expected: Dict[str, Any] 
         if lease is not None:
             _check_lease(lease, path, int(previous.get("pid") or 0), ctx)
         path.unlink(missing_ok=True)
+
+
+def retire_incomplete_state(context: str, expected: Dict[str, Any], verify: Callable[[Dict[str, Any]], None]) -> None:
+    """Retire one unchanged state only while owning its publication and owner locks."""
+    ctx = normalize_context_id(context)
+    path = state_path(ctx)
+    lease = OwnerLease(path, ctx)
+    try:
+        with locked_publication(path, ctx):
+            status, current = load_json_with_status(path)
+            if status != "ok" or current != expected:
+                raise DaemonOwnerUnavailable(ctx, path, "state_owner_changed")
+            verify(current)
+            path.unlink()
+    finally:
+        lease.close()

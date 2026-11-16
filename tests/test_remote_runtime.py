@@ -1061,11 +1061,16 @@ def test_clear_context_closes_only_owned_remotes_and_retains_failed_ownership(mo
     assert resets == ([] if cleanup_errors else ['clear-test'])
 
 
+@pytest.mark.parametrize('remote_state', ['expired', 'session_owned'])
 @pytest.mark.parametrize(
     'record_live,forward_identity_valid,cleanup_error,recovery_status,started_activity,owned_pids,expected_success',
     [
         (False, True, False, 'deferred', False, [], True),
         (False, True, False, 'degraded', False, [], True),
+        (False, True, False, 'requires_restart', False, [], True),
+        (False, False, False, 'requires_restart', False, [], False),
+        (False, True, True, 'requires_restart', False, [], False),
+        (True, True, False, 'requires_restart', False, [], False),
         (False, False, False, 'deferred', False, [], False),
         (False, True, True, 'deferred', False, [], False),
         (True, True, False, 'deferred', False, [], False),
@@ -1074,7 +1079,7 @@ def test_clear_context_closes_only_owned_remotes_and_retains_failed_ownership(mo
     ],
 )
 def test_clear_context_deferred_remote_releases_only_verified_owned_forward(
-    monkeypatch, record_live, forward_identity_valid, cleanup_error, recovery_status, started_activity, owned_pids, expected_success,
+    monkeypatch, record_live, forward_identity_valid, cleanup_error, recovery_status, started_activity, owned_pids, expected_success, remote_state,
 ):
     from rdc_tool.core.session_manager import SessionError
 
@@ -1084,16 +1089,18 @@ def test_clear_context_deferred_remote_releases_only_verified_owned_forward(
     record = {
         'backend_type': 'remote',
         'is_live': record_live,
-        'state': recovery_status,
-        'recovery': {'status': recovery_status},
+        'state': 'degraded' if recovery_status == 'requires_restart' else recovery_status,
+        'recovery': {'status': recovery_status, 'worker_exit': {'pid': 10123, 'birth': 'test-birth'}},
         'shader_replacements': [],
     }
     remote = {
-        'state': 'expired',
+        'state': remote_state,
         'transport': 'adb_android',
         'origin_context_id': context_id,
         'device_serial': serial,
         'endpoint': '127.0.0.1:57885',
+        'consumed_by_session_id': session_id if remote_state == 'session_owned' else '',
+        'active_session_ids': [session_id] if remote_state == 'session_owned' else [],
         'options': {'device_serial': serial, 'local_port': 57885, 'remote_port': 39920},
         'bootstrap': {
             'device_serial': serial,
@@ -1112,6 +1119,7 @@ def test_clear_context_deferred_remote_releases_only_verified_owned_forward(
         async def close_session(self, sid):
             pytest.fail('Missing native session must not be closed again')
     monkeypatch.setattr(live_state, '_session_manager', MissingManager())
+    monkeypatch.setattr(session_ops.process, 'probe', lambda identity: session_ops.process.Liveness.EXITED)
     monkeypatch.setattr(live_state, '_runtime_context_id', lambda: context_id)
     monkeypatch.setattr(context_records, '_context_state', lambda *a: {'sessions': {session_id: record}})
     monkeypatch.setattr(context_records, '_context_snapshot', lambda *a: {'remote': remote})
@@ -1145,6 +1153,62 @@ def test_clear_context_deferred_remote_releases_only_verified_owned_forward(
         assert cleanups[0].started_activity is started_activity
         assert cleanups[0].owned_pids == owned_pids
     assert resets == ([context_id] if expected_success else [])
+
+
+@pytest.mark.parametrize('exit_record,liveness,replacement', [
+    (None, 'exited', False),
+    ({'pid': 10123, 'birth': 'test-birth'}, 'alive', False),
+    ({'pid': 10123, 'birth': 'test-birth'}, 'unknown', False),
+    ({'pid': 10123, 'birth': 'test-birth'}, 'exited', True),
+])
+def test_clear_restart_session_preserves_unconfirmed_worker_or_replacement(monkeypatch, exit_record, liveness, replacement):
+    from rdc_tool.core.session_manager import SessionError
+    class MissingManager:
+        def get_state(self, sid):
+            raise SessionError('session_not_found', 'No live native session')
+    record = {'backend_type': 'remote', 'is_live': False, 'state': 'degraded',
+              'recovery': {'status': 'requires_restart', 'worker_exit': exit_record}, 'shader_replacements': []}
+    monkeypatch.setattr(live_state, '_session_manager', MissingManager())
+    monkeypatch.setattr(live_state, '_runtime_context_id', lambda: 'clear-test')
+    monkeypatch.setattr(context_records, '_context_state', lambda *a: {'sessions': {'session': record}})
+    monkeypatch.setattr(live_state._runtime, 'replays', {})
+    monkeypatch.setattr(live_state._runtime, 'session_owned_remotes', {})
+    monkeypatch.setattr(live_state._runtime, 'shader_replacements', {'session': [{'replacement_id': 'patch'}]} if replacement else {})
+    monkeypatch.setattr(session_ops.process, 'probe', lambda identity: session_ops.process.Liveness(liveness))
+    async def noop(*a): pass
+    monkeypatch.setattr(preview_sync, '_close_preview_binding', noop)
+    monkeypatch.setattr(context_records, '_reset_context_snapshot', lambda *a: pytest.fail('must preserve context'))
+    result = asyncio.run(session_ops.dispatch('clear_context', {}))
+    assert not result.ok
+    assert result.details['cleanup_reason_code'] == 'session_cleanup_failed'
+
+
+def test_failed_native_session_cleanup_retains_owner_and_is_not_retried(monkeypatch):
+    from rdc_tool.core.session_manager import SessionError
+    SessionManager.reset()
+    manager = SessionManager()
+    calls = []
+    def fail_close(controller):
+        calls.append(controller)
+        raise RuntimeError('remote close outcome unknown')
+    remote = SimpleNamespace(CloseCapture=fail_close)
+    controller = object()
+    state = SessionState(session_id='owned', backend_type=BackendType.REMOTE, controller=controller,
+                         remote_server=remote, remote_server_owned=False)
+    manager._sessions['owned'] = state
+    async def offload(fn, *args): return fn(*args)
+    monkeypatch.setattr(manager, '_offload', offload)
+    try:
+        with pytest.raises(RuntimeError, match='outcome unknown'):
+            asyncio.run(manager.close_session('owned'))
+        assert manager.get_state('owned') is state
+        assert state.controller is controller
+        assert state.remote_server is remote
+        with pytest.raises(SessionError, match='cleanup did not complete'):
+            asyncio.run(manager.close_session('owned'))
+        assert calls == [controller]
+    finally:
+        SessionManager.reset()
 
 
 def test_android_transfer_does_not_break_rpc_with_native_copy_attempt(monkeypatch):

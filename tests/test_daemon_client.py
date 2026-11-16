@@ -57,6 +57,77 @@ def _configure_context_artifact_paths(monkeypatch, tmp_path: Path) -> Path:
     return state_dir
 
 
+def _legacy_state(context: str) -> dict:
+    return {"context_id": context, "daemon_context": context, "pid": 101, "owner_pid": 102,
+            "worker": {"pid": 103, "running": True}, "pipe_name": "fixture-pipe", "token": "fixture-secret",
+            "session_count": 0, "capture_count": 0, "session_id": "", "capture_file_id": "",
+            "active_request_count": 0, "active_operation": {}, "attached_clients": [], "backend": "local"}
+
+
+def test_capacity_retires_only_proven_inactive_legacy_state(monkeypatch, tmp_path: Path) -> None:
+    from rdc_tool.platform.process import Liveness
+    _configure_runtime_dir(monkeypatch, tmp_path)
+    context = "old-inactive"
+    path = daemon_client.state_path(context)
+    path.write_text(json.dumps(_legacy_state(context)), encoding="utf-8")
+    monkeypatch.setattr(daemon_client.process, "probe", lambda identity: Liveness.EXITED)
+    assert context not in daemon_client.list_occupying_context_ids()
+    assert not path.exists()
+
+
+@pytest.mark.parametrize("obstruction", ["live", "unknown", "resources", "bad_worker", "wrong_context", "corrupt"])
+def test_capacity_preserves_unverifiable_legacy_state(monkeypatch, tmp_path: Path, obstruction: str) -> None:
+    from rdc_tool.daemon.ownership import DaemonOwnerUnavailable
+    from rdc_tool.platform.process import Liveness
+    _configure_runtime_dir(monkeypatch, tmp_path)
+    context = "old-uncertain"
+    path = daemon_client.state_path(context)
+    payload = _legacy_state(context)
+    if obstruction == "resources":
+        payload["capture_count"] = 1
+    if obstruction == "bad_worker":
+        payload["worker"] = {"running": True}
+    if obstruction == "wrong_context":
+        payload["context_id"] = "another-context"
+    path.write_text("{" if obstruction == "corrupt" else json.dumps(payload), encoding="utf-8")
+    before = path.read_bytes()
+    monkeypatch.setattr(daemon_client.process, "probe", lambda identity:
+        Liveness.ALIVE if obstruction == "live" else Liveness.UNKNOWN if obstruction == "unknown" else Liveness.EXITED)
+    with pytest.raises(DaemonOwnerUnavailable) as exc:
+        daemon_client.list_occupying_context_ids()
+    assert "fixture-secret" not in str(exc.value)
+    assert path.read_bytes() == before
+
+
+def test_capacity_preserves_legacy_snapshot_with_remote_ownership(monkeypatch, tmp_path: Path) -> None:
+    from rdc_tool.context_snapshot import save_context_snapshot
+    from rdc_tool.daemon.ownership import DaemonOwnerUnavailable
+    from rdc_tool.platform.process import Liveness
+    _configure_runtime_dir(monkeypatch, tmp_path)
+    context = 'old-owned-remote'
+    path = daemon_client.state_path(context)
+    path.write_text(json.dumps(_legacy_state(context)), encoding='utf-8')
+    save_context_snapshot({'remote': {'state': 'live_handle', 'remote_id': 'owned'}}, context)
+    monkeypatch.setattr(daemon_client.process, 'probe', lambda identity: Liveness.EXITED)
+    with pytest.raises(DaemonOwnerUnavailable, match='resources_unconfirmed'):
+        daemon_client.list_occupying_context_ids()
+    assert path.is_file()
+
+
+def test_capacity_never_retires_legacy_state_with_busy_owner(monkeypatch, tmp_path: Path) -> None:
+    from rdc_tool.daemon.ownership import OwnerLease
+    _configure_runtime_dir(monkeypatch, tmp_path)
+    context = 'old-busy'
+    path = daemon_client.state_path(context)
+    path.write_text(json.dumps(_legacy_state(context)), encoding='utf-8')
+    lease = OwnerLease(path, context)
+    try:
+        assert context in daemon_client.list_occupying_context_ids()
+        assert path.is_file()
+    finally:
+        lease.close()
+
+
 def test_cleanup_stale_daemon_state_removes_dead_pid(monkeypatch, tmp_path: Path) -> None:
     _configure_runtime_dir(monkeypatch, tmp_path)
 

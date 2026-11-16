@@ -29,6 +29,13 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
     session_id = str(args["session_id"])
 
     if action == "screenshot":
+        requested_formats = texture_naming._parse_requested_formats(args.get("file_format", "png"))
+        allowed_formats = {"png", "jpg", "exr", "hdr"}
+        special_formats = {"auto", "smart", "all", "*"}
+        if not any(fmt in allowed_formats or fmt in special_formats for fmt in requested_formats):
+            return envelope.failure("Unsupported screenshot format", code="screenshot_format_unsupported",
+                                    category="validation", details={"session_id": session_id,
+                                        "failure_stage": "validate_format", "effects_attempted": False, "context_preserved": True})
         target = coerce._parse_target_like(args.get("target"))
         original_event = replay_access._active_event(session_id)
         event_id = coerce._as_int(args.get("event_id"), original_event)
@@ -111,7 +118,6 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
             requested_formats,
             recommended_formats=recommended_formats,
         )
-        allowed_formats = {"png", "jpg", "exr", "hdr"}
         valid_formats = [fmt for fmt in selected_formats if fmt in allowed_formats]
         if not valid_formats:
             allowed_text = ", ".join(sorted(allowed_formats))

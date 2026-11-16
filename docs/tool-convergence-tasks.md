@@ -2,7 +2,19 @@
 
 本页只记录当前一轮工作的任务、依赖、状态与阻塞；已发布版本的事实见 [CHANGELOG](../CHANGELOG.md) 与 [发布说明](release-notes.md)，稳定规则见 [AGENTS.md](../AGENTS.md) 与 [ARCHITECTURE.md](../ARCHITECTURE.md)。状态取值：`待执行 / 执行中 / 待验证 / 通过 / 阻塞`。
 
-## 本轮目标：跨平台收敛与架构升级
+## 本轮目标：RDC-Agent 对接问题修复
+
+| 任务 | 依赖 | 状态 | 交付与验收 |
+|---|---|---|---|
+| 旧 daemon 状态 | 无 | 待验证 | 隔离样本通过进程、锁、资源和状态损坏检查；旧现场仍登记远程资源，保留原件 |
+| 异常 worker 后清理 | 无 | 待验证 | 隔离测试覆盖已退出身份、replacement、远程归属与原生清理失败；待产品实机复验 |
+| shader 产物字节 | 无 | 待验证 | 隔离测试覆盖 LF、CRLF 与非 ASCII，保存字节和 artifact store 一致；待产品审计 |
+| 错误分类 | 无 | 待验证 | 对提交中的 36 处逐项核对，安全前置拒绝返回证明；不确定结果保持隔离 |
+| 集成验收与本地交付 | 上述任务 | 执行中 | Windows 全量测试 1316 passed、12 skipped、2 subtests passed；catalog 和生成文档检查通过，待正式隔离打包与最小产品路径。受限沙箱中的 taskkill 返回 Access denied，同一测试及全量门禁在正常权限下通过 |
+
+错误分类核对：20 处是 catalog 路由不支持操作的兜底，另 3 处已被参数校验或更早的调试参数检查拦截。其余分支中，capture 缺失、事件索引未命中、表达式未找到和可提前确认的格式错误按实际阶段提供保全信息；图像依赖缺失是 capability 错误，当前 Agent 尚不将该类别的一般保全证明用于保留 lease。healthcheck 会触及文件、debug 超时可能已推进调试状态、Pixel History 可能已进入原生调用，均保留不确定分类；自动选择格式后才能判断的失败也不虚报前置保全。
+
+## 上轮：跨平台收敛与架构升级
 
 把外部 Linux 适配 PR 引出的问题收敛为单一实现：`rdc_tool/platform/` 平台层、Linux x64 作为与 Windows 同策略的主机布局（本轮代码与工具链，正式产物下一轮）、运行时与 catalog 单一真源、`server_runtime.py` 按领域拆分、遗留与文档债务清零，并用测试门禁锁住。PR #3 已合并，Windows 与 Android 验收结果见下文；本轮不打 tag、不发布。
 

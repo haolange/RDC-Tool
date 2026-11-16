@@ -293,6 +293,61 @@ def test_event_set_active_validates_before_mutating_state(monkeypatch: pytest.Mo
     assert context_records._context_snapshot()["runtime"]["active_event_id"] == 101
 
 
+@pytest.mark.parametrize('action', ['get_action_details', 'get_callstack', 'get_action_tree'])
+def test_missing_action_reports_preserved_replay_after_read_only_lookup(monkeypatch, action):
+    controller = _FakeController(roots=[_FakeAction(101)])
+    _install_common_env(monkeypatch, controller)
+    _seed_capture()
+    _seed_session(101)
+    replay = live_state._runtime.replays['sess_demo']
+    result = asyncio.run(event_ops.dispatch(action, {'session_id': 'sess_demo', 'event_id': 999}))
+    assert not result.ok
+    assert result.code == 'event_not_found'
+    assert result.category == 'validation'
+    assert result.details == {'session_id': 'sess_demo', 'event_id': 999, 'failure_stage': 'validate_event',
+                              'effects_attempted': False, 'context_preserved': True}
+    assert live_state._runtime.replays['sess_demo'] is replay
+    assert replay.active_event_id == 101
+    assert controller.set_frame_calls == []
+
+
+def test_missing_action_does_not_claim_preservation_after_session_recovery(monkeypatch):
+    controller = _FakeController(roots=[_FakeAction(101)])
+    _install_common_env(monkeypatch, controller)
+    monkeypatch.setattr(live_state._runtime, 'replays', {})
+    result = asyncio.run(event_ops.dispatch('get_action_details', {'session_id': 'sess_demo', 'event_id': 999}))
+    assert not result.ok
+    assert result.category == 'runtime'
+    assert not result.details.get('context_preserved')
+
+
+def test_invalid_screenshot_format_is_rejected_before_target_resolution(monkeypatch):
+    async def forbidden(*args, **kwargs):
+        pytest.fail('format rejection must precede replay access')
+    monkeypatch.setattr(visual_target, '_resolve_visual_target_for_event', forbidden)
+    result = asyncio.run(export_ops.dispatch('screenshot', {'session_id': 'session', 'file_format': 'dds'}))
+    assert not result.ok
+    assert result.code == 'screenshot_format_unsupported'
+    assert result.category == 'validation'
+    assert result.details['effects_attempted'] is False
+    assert result.details['context_preserved'] is True
+
+
+def test_invalid_display_export_format_is_rejected_before_any_write_or_replay_access(monkeypatch, tmp_path):
+    async def forbidden(*args, **kwargs):
+        pytest.fail('format rejection must precede replay access')
+    monkeypatch.setattr(replay_access, '_get_texture_descriptor', forbidden)
+    target = tmp_path / 'output.png'
+    result = asyncio.run(texture_export._export_texture_file({'session_id': 'session', 'texture_id': 'texture',
+        'output_path': str(target), 'file_format': 'png,dds', 'flip_y': True}))
+    assert not result.ok
+    assert result.code == 'texture_export_format_unsupported'
+    assert result.category == 'validation'
+    assert result.details['effects_attempted'] is False
+    assert result.details['context_preserved'] is True
+    assert not target.exists()
+
+
 def test_pixel_value_rejects_missing_event_before_replay_effects(monkeypatch: pytest.MonkeyPatch) -> None:
     controller = _FakeController(roots=[
         _FakeAction(1246, flags=_FakeActionFlags.Drawcall),

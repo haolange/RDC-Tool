@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from copy import deepcopy
 from typing import Any, Dict, List, Sequence
 
 from rdc_tool.runtime import (
@@ -48,9 +49,22 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
                     return envelope.failure(f"Unknown ActionFlags name in {filter_name}: {name}", code="validation_error", category="validation", details=validation_details)
                 members.append(member)
             flag_filters[filter_name] = members
+    replay_before = live_state._runtime.replays.get(session_id)
+    event_before = replay_before.active_event_id if replay_before is not None else None
+    replacements_before = deepcopy(live_state._runtime.shader_replacements.get(session_id, []))
     controller = await replay_access._get_controller(session_id)
 
     roots, flat, by_event = await replay_access._load_action_index(session_id, controller=controller)
+
+    def _missing_event(event_id: int) -> envelope.Failure:
+        preserved = (replay_before is not None and live_state._runtime.replays.get(session_id) is replay_before
+                     and replay_before.active_event_id == event_before
+                     and live_state._runtime.shader_replacements.get(session_id, []) == replacements_before)
+        details = {"session_id": session_id, "event_id": event_id}
+        if preserved:
+            details.update({"failure_stage": "validate_event", "effects_attempted": False, "context_preserved": True})
+        return envelope.failure(f"Event not found: {event_id}", code="event_not_found",
+                                category="validation" if preserved else "runtime", details=details)
 
     def _parent_chain(event_id: int) -> List[Any]:
         chain: List[Any] = []
@@ -93,7 +107,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
         if requested is not None:
             node = by_event.get(int(requested))
             if node is None:
-                return envelope.failure(f"Event not found: {requested}", code="event_not_found")
+                return _missing_event(int(requested))
             source = [node]
         include_markers = coerce._as_bool(args.get("include_markers"), True)
         include_drawcalls = coerce._as_bool(args.get("include_drawcalls"), True)
@@ -137,7 +151,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
         event_id = coerce._as_int(args["event_id"])
         action_obj = by_event.get(event_id)
         if action_obj is None:
-            return envelope.failure(f"Event not found: {event_id}", code="runtime_error")
+            return _missing_event(event_id)
         payload = action_index._action_to_dict(action_obj, include_children=True)
         payload["parent_chain"] = [{"event_id": int(item.eventId), "name": action_index._action_name(item)} for item in _parent_chain(event_id)[:-1]]
         payload["marker_path"] = [str(item.customName) for item in _parent_chain(event_id) if getattr(item, "customName", "") and action_index._map_action_flags(item.flags).get("is_marker")] or None
@@ -231,7 +245,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
         event_id = coerce._as_int(args["event_id"])
         action_obj = by_event.get(event_id)
         if action_obj is None:
-            return envelope.failure(f"Event not found: {event_id}", code="runtime_error")
+            return _missing_event(event_id)
         callstack = []
         raw = getattr(action_obj, "callstack", None) or []
         for frame in raw:

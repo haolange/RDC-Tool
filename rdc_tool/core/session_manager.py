@@ -143,6 +143,7 @@ class SessionState:
     rdc_path: Optional[str] = None
     replay_config: Dict[str, Any] = field(default_factory=dict)
     created_at: float = field(default_factory=time.time)
+    cleanup_error: str = ""
 
 
 class SessionError(Exception):
@@ -258,10 +259,17 @@ class SessionManager:
 
     async def close_session(self, session_id: str) -> None:
         async with self._lock:
-            state = self._sessions.pop(session_id, None)
-        if state is None:
-            raise SessionError(code="session_not_found", message=f"Unknown session_id: {session_id}")
-        await self._cleanup(state)
+            state = self._sessions.get(session_id)
+            if state is None:
+                raise SessionError(code="session_not_found", message=f"Unknown session_id: {session_id}")
+            if state.cleanup_error:
+                raise SessionError(code="session_cleanup_unconfirmed", message=state.cleanup_error)
+            try:
+                await self._cleanup(state)
+            except BaseException as exc:
+                state.cleanup_error = f"Session cleanup did not complete: {exc}"
+                raise
+            self._sessions.pop(session_id)
 
     def get_controller(self, session_id: str) -> Any:
         state = self._require_state(session_id)
@@ -625,54 +633,34 @@ class SessionManager:
         logger.debug("Created headless output (%dx%d) for session %s", width, height, state.session_id)
 
     async def _cleanup(self, state: SessionState) -> None:
-        errors: List[str] = []
-
         if state.output is not None:
-            try:
-                await self._offload(state.output.Shutdown)
-            except Exception as exc:
-                errors.append(f"output.Shutdown: {exc}")
+            await self._offload(state.output.Shutdown)
             state.output = None
 
         if state.controller is not None:
-            try:
-                if state.backend_type == BackendType.REMOTE and state.remote_server is not None:
-                    await self._offload(state.remote_server.CloseCapture, state.controller)
-                else:
-                    await self._offload(state.controller.Shutdown)
-            except Exception as exc:
-                errors.append(f"controller.Shutdown: {exc}")
+            if state.backend_type == BackendType.REMOTE and state.remote_server is not None:
+                await self._offload(state.remote_server.CloseCapture, state.controller)
+            else:
+                await self._offload(state.controller.Shutdown)
             state.controller = None
 
         if state.capture_file is not None:
-            try:
-                if hasattr(state.capture_file, "CloseFile"):
-                    await self._offload(state.capture_file.CloseFile)
-                elif hasattr(state.capture_file, "Shutdown"):
-                    await self._offload(state.capture_file.Shutdown)
-            except Exception as exc:
-                errors.append(f"capture_file.CloseFile/Shutdown: {exc}")
+            if hasattr(state.capture_file, "CloseFile"):
+                await self._offload(state.capture_file.CloseFile)
+            elif hasattr(state.capture_file, "Shutdown"):
+                await self._offload(state.capture_file.Shutdown)
             state.capture_file = None
 
         if state.remote_server is not None and state.remote_server_owned:
-            try:
-                await self._offload(state.remote_server.ShutdownConnection)
-            except Exception as exc:
-                errors.append(f"remote.ShutdownConnection: {exc}")
+            await self._offload(state.remote_server.ShutdownConnection)
         state.remote_server = None
         state.remote_server_owned = True
 
         if state.backend_type == BackendType.LOCAL:
-            remaining_local = any(s.backend_type == BackendType.LOCAL for s in self._sessions.values())
+            remaining_local = any(s is not state and s.backend_type == BackendType.LOCAL for s in self._sessions.values())
             if not remaining_local and self._replay_initialized:
-                try:
-                    rd = _get_rd()
-                    await self._offload(rd.ShutdownReplay)
-                    self._replay_initialized = False
-                    logger.debug("RenderDoc replay subsystem shut down")
-                except Exception as exc:
-                    errors.append(f"ShutdownReplay: {exc}")
-
-        if errors:
-            logger.warning("Errors during cleanup of session %s: %s", state.session_id, '; '.join(errors))
+                rd = _get_rd()
+                await self._offload(rd.ShutdownReplay)
+                self._replay_initialized = False
+                logger.debug("RenderDoc replay subsystem shut down")
 

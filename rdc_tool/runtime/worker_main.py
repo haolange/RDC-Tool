@@ -131,7 +131,7 @@ def main(argv: list[str] | None = None) -> int:
                     if method == "clear_context":
                         result = runner.run(
                             dispatch.dispatch_operation(
-                                "rd.core.shutdown",
+                                "rd.session.clear_context",
                                 {},
                                 transport="daemon",
                                 remote=False,

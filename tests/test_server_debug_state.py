@@ -62,6 +62,19 @@ def test_native_batches_and_before_after_are_preserved(native_debug):
     assert 'trace' not in live_state._runtime.shader_debugs
 
 
+def test_unknown_expression_keeps_live_debugger_and_replay(monkeypatch, native_debug):
+    replay = live_state.ReplayHandle(session_id='replay', capture_file_id='capture', frame_index=0, active_event_id=42)
+    monkeypatch.setattr(live_state._runtime, 'replays', {'replay': replay})
+    result = native_debug.call('evaluate_expression', expression='missing_variable')
+    assert not result.ok
+    assert result.code == 'expression_not_found'
+    assert result.category == 'validation'
+    assert result.details['effects_attempted'] is False
+    assert result.details['context_preserved'] is True
+    assert live_state._runtime.replays['replay'] is replay
+    assert not native_debug.advances
+
+
 @pytest.mark.parametrize('action,args', [
     ('step', {'step_mode': 'line'}), ('run_to', {'target': {'texture_id': 'not-pc'}}),
     ('run_to', {'target': {'pc': -1}}), ('run_to', {'target': {'pc': 3}}),

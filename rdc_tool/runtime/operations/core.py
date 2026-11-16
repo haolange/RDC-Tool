@@ -53,6 +53,12 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
             "remote_connections": len(unique_remote_ids),
             "shader_debugs": len(live_state._runtime.shader_debugs),
         }
+        # The context operation owns the durable release checks. Never erase
+        # its records after an unconfirmed session or remote cleanup.
+        from rdc_tool.runtime.operations import session as session_ops
+        cleared = await session_ops.dispatch("clear_context", {})
+        if not cleared.ok:
+            return cleared
         if live_state._patch_engine is not None:
             for sid in list(live_state._runtime.replays.keys()):
                 try:
