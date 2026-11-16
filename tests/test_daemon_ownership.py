@@ -198,7 +198,7 @@ def test_unconfirmed_stop_retains_state_and_prevents_replacement(monkeypatch, is
         before = path.read_bytes()
         monkeypatch.setattr(client, 'context_has_unreleased_resources', lambda ctx: False)
         monkeypatch.setattr(client, '_shutdown_stateful_daemon', lambda *a: False)
-        assert client.stop_daemon('isolated-owner') == (False, 'daemon stop timed out')
+        assert client.stop_daemon('isolated-owner') == (False, f'daemon stop timed out: pid {proc.pid} is alive')
         assert path.read_bytes() == before
         assert owner_is_busy(path, 'isolated-owner')
         monkeypatch.setattr(client, 'daemon_request', lambda *a, **kw: (_ for _ in ()).throw(TimeoutError('stopping')))
