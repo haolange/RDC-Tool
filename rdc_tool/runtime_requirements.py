@@ -8,7 +8,6 @@ REQUIRED_DEPENDENCIES: list[tuple[str, str]] = [
     ("pydantic", "pydantic"),
     ("numpy", "numpy"),
     ("Pillow", "PIL"),
-    ("jinja2", "jinja2"),
     ("aiofiles", "aiofiles"),
 ]
 

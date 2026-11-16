@@ -10,10 +10,8 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextvars
-import csv
 import difflib
 import hashlib
-import inspect
 import io
 import json
 import math
@@ -22,23 +20,21 @@ import os
 import re
 import shutil
 import struct
-import sys
 import time
-import textwrap
-import zipfile
 from collections import deque
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+import numpy as np
 
 from rdc_tool.config import RdcToolConfig
 from rdc_tool.io_utils import safe_json_text
 from rdc_tool.context_snapshot import (
     SnapshotRetentionPolicy,
-    clear_context_snapshot,
     default_context_snapshot,
     default_preview_display_state,
     default_preview_state,
@@ -48,17 +44,15 @@ from rdc_tool.context_snapshot import (
     normalize_context_snapshot,
     normalize_preview_display_state,
     normalize_preview_state,
-    normalize_pixel,
     save_context_snapshot,
     update_user_context,
 )
 from rdc_tool.platform import host as platform_host
 from rdc_tool.platform import preview as platform_preview
 from rdc_tool.platform import process as platform_process
-from rdc_tool.core.artifact_publisher import ArtifactPublisher
-from rdc_tool.core.contracts import TSV_FORMAT_VERSION, canonical_error, env_bool
+from rdc_tool.core.contracts import TSV_FORMAT_VERSION
 from rdc_tool.core.errors import CoreError, RuntimeToolError
-from rdc_tool.core.engine import CoreEngine, ExecutionContext
+from rdc_tool.core.engine import ExecutionContext
 from rdc_tool.core.renderdoc_status import (
     build_renderdoc_error_details,
     status_code_name,
@@ -299,23 +293,6 @@ def _serialize_runtime_config() -> Dict[str, Any]:
             "total_limit": int(getattr(cfg.snapshot_retention, "total_limit", 32) or 32),
             "per_type_limit": int(getattr(cfg.snapshot_retention, "per_type_limit", 8) or 8),
         },
-        "bisect": {
-            "default_strategy": str(getattr(cfg.bisect, "default_strategy", "binary") or "binary"),
-            "max_iterations": int(getattr(cfg.bisect, "max_iterations", 60) or 60),
-            "default_confidence_threshold": float(
-                getattr(cfg.bisect, "default_confidence_threshold", 0.85) or 0.85
-            ),
-            "confidence_profile": str(getattr(cfg.bisect, "confidence_profile", "default") or "default"),
-        },
-        "confidence_weights": {
-            "sharpness": float(getattr(cfg.confidence_weights, "sharpness", 0.50) or 0.50),
-            "consistency": float(getattr(cfg.confidence_weights, "consistency", 0.35) or 0.35),
-            "range_factor": float(getattr(cfg.confidence_weights, "range_factor", 0.15) or 0.15),
-        },
-        "adaptive_bisect": {
-            "mode": str(getattr(cfg.adaptive_bisect, "mode", "off") or "off"),
-            "history_store_path": str(getattr(cfg.adaptive_bisect, "history_store_path", runtime_root() / "bisect_history.jsonl")),
-        },
         "runtime_limits": {
             "max_contexts": int(getattr(cfg.runtime_limits, "max_contexts", 8) or 8),
             "max_sessions_per_context": int(getattr(cfg.runtime_limits, "max_sessions_per_context", 4) or 4),
@@ -331,9 +308,15 @@ def _serialize_runtime_config() -> Dict[str, Any]:
     }
 
 
+_RUNTIME_CONFIG_KEYS = frozenset({"artifact_dir", "log_level", "snapshot_retention", "runtime_limits"})
+
+
 def _apply_runtime_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
     global _config
     payload = dict(cfg or {})
+    unknown = sorted(set(payload) - _RUNTIME_CONFIG_KEYS)
+    if unknown:
+        raise ValueError(f"Unsupported runtime config keys: {', '.join(unknown)}; supported: {', '.join(sorted(_RUNTIME_CONFIG_KEYS))}")
     if _config is None:
         _config = RdcToolConfig.from_env()
     if "artifact_dir" in payload:
@@ -348,37 +331,6 @@ def _apply_runtime_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
             _config.snapshot_retention.total_limit = max(1, int(snapshot_retention.get("total_limit") or 32))
         if "per_type_limit" in snapshot_retention:
             _config.snapshot_retention.per_type_limit = max(1, int(snapshot_retention.get("per_type_limit") or 8))
-    bisect_payload = payload.get("bisect")
-    if isinstance(bisect_payload, dict):
-        if "default_strategy" in bisect_payload:
-            _config.bisect.default_strategy = str(bisect_payload.get("default_strategy") or "binary")
-        if "max_iterations" in bisect_payload:
-            _config.bisect.max_iterations = max(1, int(bisect_payload.get("max_iterations") or 60))
-        if "default_confidence_threshold" in bisect_payload:
-            _config.bisect.default_confidence_threshold = float(
-                bisect_payload.get("default_confidence_threshold") or 0.85
-            )
-        if "confidence_profile" in bisect_payload:
-            _config.bisect.confidence_profile = str(bisect_payload.get("confidence_profile") or "default")
-    weight_payload = payload.get("confidence_weights")
-    if isinstance(weight_payload, dict):
-        sharpness = float(weight_payload.get("sharpness", _config.confidence_weights.sharpness))
-        consistency = float(weight_payload.get("consistency", _config.confidence_weights.consistency))
-        range_factor = float(weight_payload.get("range_factor", _config.confidence_weights.range_factor))
-        total = sharpness + consistency + range_factor
-        if sharpness < 0 or consistency < 0 or range_factor < 0 or total <= 0:
-            raise ValueError("confidence_weights must be positive and sum to a non-zero value")
-        _config.confidence_weights.sharpness = sharpness / total
-        _config.confidence_weights.consistency = consistency / total
-        _config.confidence_weights.range_factor = range_factor / total
-    adaptive_payload = payload.get("adaptive_bisect")
-    if isinstance(adaptive_payload, dict):
-        if "mode" in adaptive_payload:
-            _config.adaptive_bisect.mode = str(adaptive_payload.get("mode") or "off")
-        if "history_store_path" in adaptive_payload:
-            _config.adaptive_bisect.history_store_path = Path(
-                str(adaptive_payload.get("history_store_path") or runtime_root() / "bisect_history.jsonl")
-            )
     limits_payload = payload.get("runtime_limits")
     if isinstance(limits_payload, dict):
         if "max_contexts" in limits_payload:
@@ -481,17 +433,6 @@ def _store_context_state(state: Dict[str, Any], context_id: Optional[str] = None
     saved = save_context_state(state, ctx, limits=_runtime_limits())
     _runtime.context_states[ctx] = saved
     return saved
-
-
-def _context_preview_state(context_id: Optional[str] = None) -> Dict[str, Any]:
-    ctx = normalize_context_id(context_id or _runtime_context_id())
-    state = _context_state(ctx)
-    preview = normalize_preview_state(
-        state.get("preview"),
-        backend=str(state.get("backend") or "local"),
-    )
-    state["preview"] = dict(preview)
-    return preview
 
 
 def _preview_update_payload(
@@ -839,20 +780,6 @@ def _remove_context_capture(capture_file_id: str, *, context_id: Optional[str] =
             if isinstance(record, dict) and str(record.get("capture_file_id") or "") == str(capture_file_id):
                 sessions.pop(session_id, None)
     state = _select_session_from_state(state)
-    _store_context_state(state, ctx)
-    _sync_context_metrics(ctx)
-    return _sync_context_snapshot_from_state(ctx)
-
-
-def _upsert_context_session(session_id: str, *, context_id: Optional[str] = None) -> Dict[str, Any]:
-    ctx = normalize_context_id(context_id or _runtime_context_id())
-    state = _context_state(ctx)
-    record = _session_record_from_runtime(session_id, context_id=ctx)
-    state.setdefault("sessions", {})[str(session_id)] = record
-    capture_file_id = str(record.get("capture_file_id") or "")
-    if capture_file_id and capture_file_id in _runtime.captures:
-        state.setdefault("captures", {})[capture_file_id] = _capture_record_from_runtime(capture_file_id)
-    state = _select_session_from_state(state, session_id=str(session_id), capture_file_id=capture_file_id)
     _store_context_state(state, ctx)
     _sync_context_metrics(ctx)
     return _sync_context_snapshot_from_state(ctx)
@@ -1231,7 +1158,6 @@ def _context_snapshot(context_id: Optional[str] = None) -> Dict[str, Any]:
     return snapshot
 
 
-
 def _store_context_snapshot(snapshot: Dict[str, Any], context_id: Optional[str] = None) -> Dict[str, Any]:
     ctx = normalize_context_id(context_id or _runtime_context_id())
     normalized = save_context_snapshot(snapshot, ctx, retention=_snapshot_retention())
@@ -1239,15 +1165,12 @@ def _store_context_snapshot(snapshot: Dict[str, Any], context_id: Optional[str] 
     return normalized
 
 
-
 def _set_context_capture_file(capture_file_id: str, *, context_id: Optional[str] = None) -> Dict[str, Any]:
     return _upsert_context_capture(str(capture_file_id or ""), context_id=context_id)
 
 
-
 def _clear_context_capture_file(capture_file_id: str, *, context_id: Optional[str] = None) -> Dict[str, Any]:
     return _remove_context_capture(str(capture_file_id or ""), context_id=context_id)
-
 
 
 def _set_context_runtime_session(
@@ -1296,14 +1219,12 @@ def _set_context_runtime_session(
     return _sync_context_snapshot_from_state(ctx)
 
 
-
 def _set_context_active_event(session_id: str, event_id: int, *, context_id: Optional[str] = None) -> Dict[str, Any]:
     return _update_context_session_record(
         str(session_id or ""),
         context_id=context_id,
         active_event_id=int(event_id or 0),
     )
-
 
 
 def _set_context_frame(session_id: str, frame_index: int, active_event_id: int, *, context_id: Optional[str] = None) -> Dict[str, Any]:
@@ -2450,7 +2371,6 @@ async def _auto_sync_preview_if_enabled(context_id: Optional[str] = None) -> Non
         _record_log("warning", f"preview auto-sync failed: {exc}", {"context_id": ctx})
 
 
-
 def _remote_active_session_ids(handle: Optional[RemoteHandle]) -> List[str]:
     if handle is None:
         return []
@@ -2567,20 +2487,6 @@ def _remote_snapshot_payload_expired(remote_payload: Dict[str, Any], *, context_
     }
 
 
-def _parse_remote_endpoint(endpoint: str) -> Tuple[str, int]:
-    text = str(endpoint or "").strip()
-    if not text:
-        return "", 0
-    if ":" not in text:
-        return text, 0
-    host, port_text = text.rsplit(":", 1)
-    try:
-        return host.strip(), int(port_text)
-    except ValueError:
-        return text, 0
-
-
-
 def _set_context_remote_live(remote_id: str, endpoint: str, *, context_id: Optional[str] = None) -> Dict[str, Any]:
     ctx = normalize_context_id(context_id or _runtime_context_id())
     state = _context_state(ctx)
@@ -2613,7 +2519,6 @@ def _set_context_remote_live(remote_id: str, endpoint: str, *, context_id: Optio
     return _store_context_snapshot(snapshot, ctx)
 
 
-
 def _set_context_remote_session_owned(
     remote_id: str,
     session_id: str,
@@ -2638,32 +2543,6 @@ def _set_context_remote_session_owned(
     return _store_context_snapshot(snapshot, ctx)
 
 
-
-def _set_context_remote_consumed(
-    remote_id: str,
-    session_id: str,
-    endpoint: str,
-    *,
-    context_id: Optional[str] = None,
-) -> Dict[str, Any]:
-    ctx = normalize_context_id(context_id or _runtime_context_id())
-    state = _context_state(ctx)
-    state["backend"] = "remote"
-    _store_context_state(state, ctx)
-    snapshot = _context_snapshot(ctx)
-    snapshot["remote"] = {
-        "state": "consumed",
-        "remote_id": "",
-        "origin_remote_id": str(remote_id or ""),
-        "endpoint": str(endpoint or ""),
-        "consumed_by_session_id": str(session_id or ""),
-        "active_session_ids": [],
-        **_remote_context_scope(str(remote_id or ""), context_id=ctx),
-    }
-    return _store_context_snapshot(snapshot, ctx)
-
-
-
 def _register_remote_session_lease(
     session_id: str,
     handle: RemoteHandle,
@@ -2686,7 +2565,6 @@ def _register_remote_session_lease(
     return handle
 
 
-
 def _release_remote_session_lease(session_id: str, *, context_id: Optional[str] = None) -> Optional[RemoteHandle]:
     sid = str(session_id or "").strip()
     handle = _runtime.session_owned_remotes.pop(sid, None)
@@ -2707,7 +2585,6 @@ def _release_remote_session_lease(session_id: str, *, context_id: Optional[str] 
     return handle
 
 
-
 def _clear_context_remote_live(remote_id: str, *, context_id: Optional[str] = None) -> Dict[str, Any]:
     ctx = normalize_context_id(context_id or _runtime_context_id())
     snapshot = _context_snapshot(ctx)
@@ -2720,7 +2597,6 @@ def _clear_context_remote_live(remote_id: str, *, context_id: Optional[str] = No
             _store_context_state(state, ctx)
         return _store_context_snapshot(snapshot, ctx)
     return snapshot
-
 
 
 def _clear_context_runtime(session_id: str, *, context_id: Optional[str] = None) -> Dict[str, Any]:
@@ -2750,7 +2626,6 @@ def _clear_context_runtime(session_id: str, *, context_id: Optional[str] = None)
     return result
 
 
-
 def _reset_context_snapshot(context_id: Optional[str] = None) -> Dict[str, Any]:
     ctx = normalize_context_id(context_id or _runtime_context_id())
     clear_context_state(ctx)
@@ -2759,14 +2634,12 @@ def _reset_context_snapshot(context_id: Optional[str] = None) -> Dict[str, Any]:
     return _store_context_snapshot(snapshot, ctx)
 
 
-
 def _append_context_artifacts(artifacts: Sequence[Dict[str, Any]], source_tool: str, *, context_id: Optional[str] = None) -> Dict[str, Any]:
     if not artifacts:
         return _context_snapshot(context_id)
     snapshot = _context_snapshot(context_id)
     snapshot = merge_recent_artifacts(snapshot, artifacts, source_tool=source_tool, retention=_snapshot_retention())
     return _store_context_snapshot(snapshot, context_id)
-
 
 
 def _sync_focus_from_args(operation: str, args: Dict[str, Any], *, context_id: Optional[str] = None) -> Dict[str, Any]:
@@ -2791,7 +2664,6 @@ def _sync_focus_from_args(operation: str, args: Dict[str, Any], *, context_id: O
     if changed:
         return _store_context_snapshot(snapshot, context_id)
     return snapshot
-
 
 
 def _remote_consumed_payload(remote_id: str) -> str | None:
@@ -2938,7 +2810,6 @@ def _remote_handle_missing_payload(remote_id: str) -> str:
     return _err(message, code=code, category="runtime", details=details)
 
 
-
 def _postprocess_context_snapshot(operation: str, args: Dict[str, Any], payload: Dict[str, Any], ctx: ExecutionContext) -> None:
     context_id = normalize_context_id((ctx.metadata or {}).get("context_id") or _runtime_context_id())
     artifacts = payload.get("artifacts") if isinstance(payload, dict) else []
@@ -3054,7 +2925,6 @@ def _artifact_rows_projection(artifacts: Sequence[Dict[str, Any]], *, include_ts
         columns=["artifact_id", "type", "path", "url", "mime", "size_bytes", "storage_backend"],
         include_tsv_text=include_tsv_text,
     )
-
 
 
 def _event_actions_projection(actions: Sequence[Dict[str, Any]], *, include_tsv_text: bool) -> Dict[str, Any]:
@@ -3555,14 +3425,6 @@ def _remote_target_message_type_name(value: Any) -> str:
     return str(raw_value)
 
 
-def _capture_options_payload(options: Any) -> Dict[str, Any]:
-    payload: Dict[str, Any] = {}
-    for key, attr in _CAPTURE_OPTION_ATTRS.items():
-        if hasattr(options, attr):
-            payload[key] = getattr(options, attr)
-    return payload
-
-
 def _capture_options_from_dict(values: Dict[str, Any]) -> Tuple[Any, Dict[str, Any]]:
     rd = _get_rd()
     options = rd.CaptureOptions()
@@ -3776,7 +3638,6 @@ def _drain_target_control_messages_sync(
     max_messages: int = 16,
     deadline_s: float = 0.0,
 ) -> List[Dict[str, Any]]:
-    rd = _get_rd()
     events: List[Dict[str, Any]] = []
     deadline = time.perf_counter() + max(float(deadline_s or 0.0), 0.0)
     remaining_messages = max(1, int(max_messages or 1))
@@ -6168,7 +6029,7 @@ async def _recover_context_sessions(context_id: str, *, recover_remote: bool = F
             sessions[str(session_id)] = updated_record
             live_count += 1
             recovered.append(str(session_id))
-        except Exception as exc:
+        except Exception:
             sessions[str(session_id)] = dict(state.get("sessions", {}).get(str(session_id)) or session_record)
             degraded.append(str(session_id))
 
@@ -6229,7 +6090,7 @@ async def runtime_startup() -> None:
         _record_log("warning", f"renderdoc bootstrap warning: {item}")
 
     _config = RdcToolConfig.from_env()
-    artifact_root = Path(os.environ.get("RDC_TOOL_ARTIFACT_DIR", str(_config.artifact.store_path))).resolve()
+    artifact_root = Path(_config.artifact.store_path).resolve()
     artifact_root.mkdir(parents=True, exist_ok=True)
     _config.artifact.store_path = artifact_root
     _artifact_store = ArtifactStore(root=artifact_root)
@@ -7445,7 +7306,6 @@ async def _dispatch_capture(action: str, args: Dict[str, Any]) -> str:
         return _ok(metadata=_sanitize_dict(metadata))
 
 
-
     if action == "open_replay":
         _require(args, "capture_file_id")
         capture_file_id = str(args["capture_file_id"])
@@ -7948,7 +7808,6 @@ async def _dispatch_event(action: str, args: Dict[str, Any]) -> str:
         passes = list(pass_map.values())
         passes.sort(key=lambda p: p["begin_event_id"])
         return _ok(passes=passes)
-
 
 
     if action == "get_callstack":
@@ -9150,7 +9009,6 @@ async def _dispatch_mesh(action: str, args: Dict[str, Any]) -> str:
 
 
 def _sampled_texture_stats(arr: Any, source_stats: Dict[str, Any], stride: int) -> Dict[str, Any]:
-    import numpy as np
     finite = arr[np.isfinite(arr)]
     stats = {
         **source_stats, "shape": list(arr.shape), "dtype": str(arr.dtype), "stride": stride,
@@ -9208,7 +9066,6 @@ async def _dispatch_texture_impl(action: str, args: Dict[str, Any]) -> str:
         return arr, stats, int(resolved_event), str(rid)
 
     if action == "get_data":
-        import numpy as np
         _require(args, "texture_id")
         subresource = _as_dict(args.get("subresource"), default={})
         representation = str(args.get("representation", "numeric"))
@@ -9317,7 +9174,6 @@ async def _dispatch_texture_impl(action: str, args: Dict[str, Any]) -> str:
             "slice": _as_int(args.get("slice"), 0),
             "sample": _as_int(args.get("sample"), 0),
         }
-        import numpy as np
         stride = _as_int(args.get("stride"), 1)
         as_type = str(args.get("as_type", "float"))
         if stride < 1 or as_type not in {"float", "uint", "int"}:
@@ -9357,10 +9213,6 @@ async def _dispatch_texture_impl(action: str, args: Dict[str, Any]) -> str:
 
     if action == "get_histogram":
         _require(args, "texture_id")
-        try:
-            import numpy as np
-        except Exception as exc:
-            return _err(f"numpy unavailable: {exc}")
         subresource = {"mip": _as_int(args.get("mip"), 0), "slice": _as_int(args.get("slice"), 0), "sample": _as_int(args.get("sample"), 0)}
         arr, stats, resolved_event_id, _ = await read_array(args["texture_id"], subresource, event_id=args.get("event_id"))
         if arr.ndim != 3:
@@ -9559,10 +9411,6 @@ async def _dispatch_texture_impl(action: str, args: Dict[str, Any]) -> str:
 
 
     if action in {"diff", "compute_stats"}:
-        try:
-            import numpy as np
-        except Exception as exc:
-            return _err(f"numpy unavailable: {exc}")
         if action == "diff":
             _require(args, "tex_a", "tex_b")
             tex_a = _as_dict(args["tex_a"])
@@ -9648,22 +9496,6 @@ def _shader_encoding_name(value: Any) -> str:
     if "." in text:
         text = text.rsplit(".", 1)[-1]
     return text.lower()
-
-
-def _shader_encoding_from_name(name: str) -> Any:
-    rd = _get_rd()
-    normalized = str(name or "").strip().lower()
-    mapping = {
-        "hlsl": getattr(rd.ShaderEncoding, "HLSL", None),
-        "glsl": getattr(rd.ShaderEncoding, "GLSL", None),
-        "spirv": getattr(rd.ShaderEncoding, "SPIRV", None),
-        "spirvasm": getattr(rd.ShaderEncoding, "SPIRVAsm", None),
-        "spirv_asm": getattr(rd.ShaderEncoding, "SPIRVAsm", None),
-        "dxbc": getattr(rd.ShaderEncoding, "DXBC", None),
-        "dxil": getattr(rd.ShaderEncoding, "DXIL", None),
-        "slang": getattr(rd.ShaderEncoding, "Slang", None),
-    }
-    return mapping.get(normalized)
 
 
 def _shader_binary_suffix(container: str) -> str:
@@ -11922,7 +11754,6 @@ async def _dispatch_debug(action: str, args: Dict[str, Any]) -> str:
     session_id = str(args["session_id"])
 
 
-
     _require(args, "shader_debug_id")
     debug_id = str(args["shader_debug_id"])
     try:
@@ -12642,10 +12473,6 @@ async def _dispatch_macro(action: str, args: Dict[str, Any]) -> str:
                    range_exhausted=found is None and examined == len(events), budget_exhausted=found is None and examined < len(events))
 
 
-
-
-
-
     return _err(f"Unsupported macro action: {action}")
 
 
@@ -12660,7 +12487,6 @@ async def _dispatch_util(action: str, args: Dict[str, Any]) -> str:
                 or any(not isinstance(item, str) or item not in supported for item in selected)):
             return _err("metrics must be a non-empty list of mse, max_abs, psnr or ssim", code="validation_error")
         try:
-            import numpy as np
             from PIL import Image
         except Exception as exc:
             return _err(f"Image diff dependencies missing: {exc}")
@@ -13213,10 +13039,6 @@ async def _vfs_artifacts_node(parts: List[str], path: str, args: Dict[str, Any])
     return _vfs_node(path, kind="object", title=f"Artifact {index}", canonical_tools=["rd.util.list_artifacts"], data=artifacts[index])
 
 
-async def _vfs_shaders_node(parts: List[str], path: str, args: Dict[str, Any]) -> Dict[str, Any]:
-    return await _vfs_pipeline_like_node(parts, "/pipeline/shaders" if path == "/shaders" else path, args)
-
-
 async def _vfs_debug_node(parts: List[str], path: str) -> Dict[str, Any]:
     snapshot = _context_snapshot(_runtime_context_id())
     focus = snapshot.get("focus", {})
@@ -13734,6 +13556,5 @@ async def _dispatch_remote(action: str, args: Dict[str, Any]) -> str:
             handle.known_captures.pop(capture_id, None)
             return _ok(detail={"deleted_capture_id": capture_id})
     return _err(f"Unsupported remote action: {action}")
-
 
 

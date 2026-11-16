@@ -11,7 +11,7 @@ from typing import Any, Dict, Optional
 
 from .artifact_publisher import ArtifactPublisher
 from .contracts import canonical_error, canonical_success, collect_artifact_candidates
-from .errors import CoreError, InternalToolError, NotFoundError, map_exception
+from .errors import InternalToolError, NotFoundError, map_exception
 from .operation_registry import OperationRegistry
 from rdc_tool.progress import ProgressReporter
 

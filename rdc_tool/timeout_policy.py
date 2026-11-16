@@ -22,7 +22,6 @@ PIXEL_HISTORY_TIMEOUT_S = 20.0
 DEFAULT_DAEMON_REQUEST_TIMEOUT_S = 30.0
 HEAVY_DAEMON_REQUEST_TIMEOUT_S = 60.0
 VERY_HEAVY_DAEMON_REQUEST_TIMEOUT_S = 180.0
-HARNESS_DEFAULT_TIMEOUT_S = 25.0
 
 HEAVY_TIMEOUT_PREFIXES = (
     "rd.event.",
@@ -114,5 +113,3 @@ def worker_exec_timeout_s(operation: str, args: dict[str, Any] | None) -> float:
     return native + REMOTE_CONNECT_WORKER_GRACE_S if operation == "rd.remote.connect" else native
 
 
-def harness_timeout_s(operation: str, args: dict[str, Any] | None) -> float:
-    return max(HARNESS_DEFAULT_TIMEOUT_S, transport_timeout_s(operation, args))

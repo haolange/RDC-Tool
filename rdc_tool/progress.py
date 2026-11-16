@@ -27,30 +27,6 @@ class ProgressEvent:
     ts_ms: int = field(default_factory=_now_ms)
 
 
-@dataclass
-class ProgressState:
-    trace_id: str = ""
-    operation: str = ""
-    stage: str = ""
-    message: str = ""
-    progress_pct: Optional[float] = None
-    details: Dict[str, Any] = field(default_factory=dict)
-    started_at_ms: int = 0
-    updated_at_ms: int = 0
-
-    def as_dict(self) -> Dict[str, Any]:
-        return {
-            "trace_id": self.trace_id,
-            "operation": self.operation,
-            "stage": self.stage,
-            "message": self.message,
-            "progress_pct": self.progress_pct,
-            "details": dict(self.details),
-            "started_at_ms": int(self.started_at_ms or 0),
-            "updated_at_ms": int(self.updated_at_ms or 0),
-        }
-
-
 class ProgressReporter:
     def __init__(
         self,

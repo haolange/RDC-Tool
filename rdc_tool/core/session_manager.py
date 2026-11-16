@@ -276,15 +276,6 @@ class SessionManager:
     def get_state(self, session_id: str) -> SessionState:
         return self._require_state(session_id)
 
-    async def get_session(self, session_id: str) -> SessionInfo:
-        state = self._require_state(session_id)
-        return SessionInfo(
-            session_id=state.session_id,
-            backend_type=state.backend_type,
-            capabilities=state.capabilities,
-            created_at=state.created_at,
-        )
-
     def list_sessions(self) -> List[SessionInfo]:
         return [
             SessionInfo(

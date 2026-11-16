@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import mimetypes
-import os
 import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
@@ -240,8 +239,3 @@ def normalize_drilldown_fields(row: Dict[str, Any], *, details_path: str = "", d
     return out
 
 
-def env_bool(name: str, default: bool = False) -> bool:
-    raw = os.environ.get(name)
-    if raw is None:
-        return default
-    return str(raw).strip().lower() in {"1", "true", "yes", "on"}

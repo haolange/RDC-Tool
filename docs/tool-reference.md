@@ -4,7 +4,7 @@ This file is generated from the structured definitions in `rdc_tool/operation_de
 
 - Tool count: 129
 - Group count: 18
-- Catalog fingerprint: `41526d45c0e933e9e30dfeced87e2d7552aa0a94c9121349e11aececa36a6f2b`
+- Catalog fingerprint: `59511abca74955d1ee461f52a894fdb1b7473de18d0f2af7fefbc2ab5ef4fcdc`
 - Canonical transport: `rdc-tool call <rd.*> --format json`
 - Discovery: `rdc-tool tools list`, `rdc-tool tools search <query>`, and `rdc-tool tools describe <rd.*>`
 

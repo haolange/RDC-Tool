@@ -543,8 +543,11 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
  {'name': 'rd.core.set_config',
   'group': '3.1，核心与环境管理 (Core & Environment)',
   'description': '设置运行时配置（对后续调用生效）。',
-  'parameter_raw': 'config (object): config (dict): {artifact_dir?, temp_dir?, '
-                   'max_artifact_bytes?, default_image_format?, default_mesh_format?, log_level?}',
+  'parameter_raw': 'config (object): config (dict): {artifact_dir?, log_level?, '
+                   'snapshot_retention{total_limit?, per_type_limit?}?, runtime_limits{max_contexts?, '
+                   'max_sessions_per_context?, max_capture_files?, max_capture_size_bytes?, '
+                   'max_estimated_replay_memory_bytes?, replay_memory_multiplier?, max_recent_operations?}?}；'
+                   '其他键返回 validation_error',
   'returns_raw': 'ok (bool)<br>data (dict): {applied}<br>artifacts (list)<br>error '
                  '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
   'param_names': ['config'],
@@ -552,9 +555,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'namespace': 'core',
   'input_schema': {'type': 'object',
                    'properties': {'config': {'description': 'config (dict): {artifact_dir?, '
-                                                            'temp_dir?, max_artifact_bytes?, '
-                                                            'default_image_format?, '
-                                                            'default_mesh_format?, log_level?}',
+                                                            'log_level?, snapshot_retention?, '
+                                                            'runtime_limits?}; other keys are rejected',
                                              'type': 'object'}},
                    'required': ['config'],
                    'additionalProperties': False},

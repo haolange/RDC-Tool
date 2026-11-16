@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import shutil
 import subprocess
 import sys
@@ -20,7 +19,7 @@ if str(SCRIPT_ROOT) not in sys.path:
 
 from rdc_tool import __version__ as TOOL_VERSION
 from rdc_tool.runtime_identity import native_manifest_status
-from scripts._shared import ensure_within_root, task_directory, tools_root, write_text
+from scripts._shared import task_directory, tools_root, write_text
 
 
 PACKAGE_PLATFORM = "windows-x64"

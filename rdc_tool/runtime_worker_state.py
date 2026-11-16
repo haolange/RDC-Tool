@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Dict, Optional
 
 from rdc_tool.context_snapshot import normalize_context_id
 from rdc_tool.io_utils import atomic_write_json
@@ -23,13 +23,6 @@ def worker_state_path(context: Optional[str] = "default") -> Path:
     if ctx == "default":
         return root / "worker_state.json"
     return root / f"worker_state_{_sanitize_context(ctx)}.json"
-
-
-def list_worker_state_paths() -> Iterable[Path]:
-    root = worker_state_dir()
-    if not root.is_dir():
-        return []
-    return sorted(root.glob("worker_state*.json"))
 
 
 def load_worker_state(context: Optional[str] = "default") -> Dict[str, Any]:

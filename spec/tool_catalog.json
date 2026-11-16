@@ -1,7 +1,7 @@
 {
   "schema_version": "1",
   "source_path": "rdc_tool/operation_definitions.py",
-  "fingerprint": "41526d45c0e933e9e30dfeced87e2d7552aa0a94c9121349e11aececa36a6f2b",
+  "fingerprint": "59511abca74955d1ee461f52a894fdb1b7473de18d0f2af7fefbc2ab5ef4fcdc",
   "tool_count": 129,
   "groups": {
     "3.7，缓冲区与网格数据访问 (Buffer & Mesh Data Access)": 6,
@@ -870,7 +870,7 @@
       "name": "rd.core.set_config",
       "group": "3.1，核心与环境管理 (Core & Environment)",
       "description": "设置运行时配置（对后续调用生效）。",
-      "parameter_raw": "config (object): config (dict): {artifact_dir?, temp_dir?, max_artifact_bytes?, default_image_format?, default_mesh_format?, log_level?}",
+      "parameter_raw": "config (object): config (dict): {artifact_dir?, log_level?, snapshot_retention{total_limit?, per_type_limit?}?, runtime_limits{max_contexts?, max_sessions_per_context?, max_capture_files?, max_capture_size_bytes?, max_estimated_replay_memory_bytes?, replay_memory_multiplier?, max_recent_operations?}?}；其他键返回 validation_error",
       "returns_raw": "ok (bool)<br>data (dict): {applied}<br>artifacts (list)<br>error (dict|null)<br>meta (dict)<br>projections (dict, 可选)",
       "param_names": [
         "config"
@@ -881,7 +881,7 @@
         "type": "object",
         "properties": {
           "config": {
-            "description": "config (dict): {artifact_dir?, temp_dir?, max_artifact_bytes?, default_image_format?, default_mesh_format?, log_level?}",
+            "description": "config (dict): {artifact_dir?, log_level?, snapshot_retention?, runtime_limits?}; other keys are rejected",
             "type": "object"
           }
         },

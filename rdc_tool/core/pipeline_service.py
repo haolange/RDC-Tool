@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import json
 import logging
 from typing import Any, Dict, List, Optional, Protocol, Tuple, runtime_checkable
 
@@ -18,7 +16,6 @@ from rdc_tool.models import (
     PipelineSnapshot,
     RenderTargetInfo,
     ResourceBindingEntry,
-    ShaderExportBundle,
     ShaderInfo,
     ShaderStage,
 )
@@ -510,84 +507,6 @@ def _collect_bindings_for_stage(
 # ---------------------------------------------------------------------------
 
 
-def _reflection_to_dict(refl: Any) -> Dict[str, Any]:
-    """Internal helper."""
-    result: Dict[str, Any] = {}
-
-    # ---- Input / output signatures ----
-    for sig_name in ("inputSignature", "outputSignature"):
-        try:
-            sig_list = getattr(refl, sig_name, None)
-            if sig_list is not None:
-                result[sig_name] = [
-                    {
-                        "varName": str(s.varName),
-                        "semanticName": str(s.semanticName),
-                        "semanticIndex": int(s.semanticIndex),
-                        "regIndex": int(s.regIndex),
-                        "compCount": int(s.compCount),
-                        "compType": str(s.compType),
-                    }
-                    for s in sig_list
-                ]
-        except (AttributeError, TypeError):
-            pass
-
-    # ---- Constant blocks ----
-    try:
-        cb_list = refl.constantBlocks
-        result["constantBlocks"] = [
-            {
-                "name": str(cb.name),
-                "bindPoint": int(cb.bindPoint),
-                "byteSize": int(cb.byteSize),
-                "variables": [
-                    {
-                        "name": str(v.name),
-                        "type": str(v.type.descriptor.name) if hasattr(v.type, "descriptor") else str(v.type),
-                        "byteOffset": int(v.byteOffset),
-                    }
-                    for v in (cb.variables or [])
-                ],
-            }
-            for cb in cb_list
-        ]
-    except (AttributeError, TypeError):
-        pass
-
-    # ---- Read-only resources ----
-    try:
-        ro_list = refl.readOnlyResources
-        result["readOnlyResources"] = [
-            {
-                "name": str(r.name),
-                "bindPoint": int(r.bindPoint),
-                "isTexture": bool(r.isTexture),
-                "resType": str(r.resType),
-            }
-            for r in ro_list
-        ]
-    except (AttributeError, TypeError):
-        pass
-
-    # ---- Read-write resources ----
-    try:
-        rw_list = refl.readWriteResources
-        result["readWriteResources"] = [
-            {
-                "name": str(r.name),
-                "bindPoint": int(r.bindPoint),
-                "isTexture": bool(r.isTexture),
-                "resType": str(r.resType),
-            }
-            for r in rw_list
-        ]
-    except (AttributeError, TypeError):
-        pass
-
-    return result
-
-
 # ---------------------------------------------------------------------------
 # PipelineService
 # ---------------------------------------------------------------------------
@@ -610,7 +529,6 @@ class PipelineService:
     ) -> PipelineSnapshot:
         """Internal helper."""
         selected = set(sections) if sections is not None else set(PIPELINE_SECTIONS)
-        rd = _get_rd()
         controller = session_manager.get_controller(session_id)
 
         await asyncio.to_thread(controller.SetFrameEvent, event_id, True)
@@ -718,132 +636,6 @@ class PipelineService:
     # export_shader
     # ------------------------------------------------------------------
 
-    async def export_shader(
-        self,
-        session_id: str,
-        event_id: int,
-        stage: ShaderStage,
-        session_manager: SessionManager,
-        artifact_store: ArtifactStore,
-    ) -> ShaderExportBundle:
-        """Internal helper."""
-        rd = _get_rd()
-        controller = session_manager.get_controller(session_id)
-
-        await asyncio.to_thread(controller.SetFrameEvent, event_id, True)
-
-        pipe = await asyncio.to_thread(controller.GetPipelineState)
-        rd_stage = _our_stage_to_rd(stage)
-
-        shader_id = pipe.GetShader(rd_stage)
-        if _is_null_id(shader_id):
-            raise ValueError(
-                f"No shader bound at stage {stage.value} for event {event_id}"
-            )
-
-        refl = pipe.GetShaderReflection(rd_stage)
-        if refl is None:
-            raise RuntimeError(
-                f"Shader reflection unavailable for stage {stage.value} "
-                f"at event {event_id}"
-            )
-
-        pipeline_rid = rd.ResourceId()
-        try:
-            if stage == ShaderStage.CS:
-                pipeline_rid = pipe.GetComputePipelineObject()
-            else:
-                pipeline_rid = pipe.GetGraphicsPipelineObject()
-        except (AttributeError, TypeError):
-            pass
-
-        entry_point = "main"
-        encoding = ""
-        if hasattr(refl, "entryPoint"):
-            entry_point = str(refl.entryPoint)
-        if hasattr(refl, "encoding"):
-            encoding = str(refl.encoding)
-
-        refl_dict = _reflection_to_dict(refl)
-        refl_dict["_meta"] = {
-            "event_id": event_id,
-            "stage": stage.value,
-            "shader_id": str(shader_id),
-            "entry_point": entry_point,
-            "encoding": encoding,
-        }
-        refl_bytes = json.dumps(refl_dict, indent=2, default=str).encode()
-        refl_artifact = await artifact_store.store(
-            refl_bytes,
-            mime="application/json",
-            suffix=".refl.json",
-            meta={
-                "event_id": event_id,
-                "stage": stage.value,
-                "kind": "shader_reflection",
-            },
-        )
-
-        disasm_artifact: Optional[ArtifactRef] = None
-        try:
-            targets: List[str] = await asyncio.to_thread(
-                controller.GetDisassemblyTargets, True,
-            )
-
-            if targets:
-                sections: List[str] = []
-                for target_name in targets:
-                    try:
-                        disasm_text: str = await asyncio.to_thread(
-                            controller.DisassembleShader,
-                            pipeline_rid,
-                            refl,
-                            target_name,
-                        )
-                        if disasm_text:
-                            sections.append(
-                                f";;; === {target_name} ===\n"
-                                f"{disasm_text}"
-                            )
-                    except Exception as exc:
-                        logger.debug(
-                            "export_shader: disassembly target %r failed: %s",
-                            target_name, exc,
-                        )
-
-                if sections:
-                    combined = "\n\n".join(sections)
-                    disasm_bytes = combined.encode("utf-8")
-                    disasm_artifact = await artifact_store.store(
-                        disasm_bytes,
-                        mime="text/plain",
-                        suffix=".disasm.txt",
-                        meta={
-                            "event_id": event_id,
-                            "stage": stage.value,
-                            "kind": "shader_disassembly",
-                            "targets": [t for t in targets],
-                        },
-                    )
-        except Exception as exc:
-            logger.warning("export_shader: disassembly failed: %s", exc)
-
-        # ---- Compute a content hash for the shader -------------------
-        shader_hash = ""
-        try:
-            shader_hash = hashlib.sha256(refl_bytes).hexdigest()[:16]
-        except Exception:
-            pass
-
-        return ShaderExportBundle(
-            shader_id=str(shader_id),
-            stage=stage,
-            entry_point=entry_point,
-            encoding=encoding,
-            reflection_artifact=refl_artifact,
-            disasm_artifact=disasm_artifact,
-        )
-
     # ------------------------------------------------------------------
     # get_resource_bindings
     # ------------------------------------------------------------------
@@ -856,7 +648,6 @@ class PipelineService:
         *, stage: Optional[ShaderStage] = None,
     ) -> List[ResourceBindingEntry]:
         """Internal helper."""
-        rd = _get_rd()
         controller = session_manager.get_controller(session_id)
 
         await asyncio.to_thread(controller.SetFrameEvent, event_id, True)

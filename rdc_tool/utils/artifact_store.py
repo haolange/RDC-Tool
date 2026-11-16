@@ -13,8 +13,6 @@ Artifacts 通过 ``rdc-tool://`` URI 引用，并由 :class:`rdc_tool.models.Art
 from __future__ import annotations
 
 import hashlib
-import io
-import json
 import logging
 import time
 from pathlib import Path
@@ -231,87 +229,6 @@ class ArtifactStore:
             },
         )
 
-    async def store_json(
-        self,
-        data: Dict[str, Any],
-        *,
-        name: str = "",
-        session_id: Optional[str] = None,
-        meta: Optional[Dict[str, Any]] = None,
-    ) -> ArtifactRef:
-        payload = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
-        merged = dict(meta or {})
-        if name:
-            merged["name"] = name
-        if session_id:
-            merged["session_id"] = session_id
-        return await self.store(
-            payload,
-            mime="application/json",
-            suffix=".json",
-            meta=merged,
-        )
-
-    async def store_text(
-        self,
-        text: str,
-        *,
-        name: str = "",
-        session_id: Optional[str] = None,
-        mime: str = "text/plain",
-        suffix: str = ".txt",
-        meta: Optional[Dict[str, Any]] = None,
-    ) -> ArtifactRef:
-        merged = dict(meta or {})
-        if name:
-            merged["name"] = name
-        if session_id:
-            merged["session_id"] = session_id
-        return await self.store(
-            text.encode("utf-8"),
-            mime=mime,
-            suffix=suffix,
-            meta=merged,
-        )
-
-    async def store_image(
-        self,
-        image: Any,
-        *,
-        name: str = "",
-        session_id: Optional[str] = None,
-        fmt: str = "PNG",
-        meta: Optional[Dict[str, Any]] = None,
-    ) -> ArtifactRef:
-        from PIL import Image
-
-        if isinstance(image, bytes):
-            payload = image
-            suffix = ".png"
-            mime = "image/png"
-        else:
-            img = image if isinstance(image, Image.Image) else Image.fromarray(image)
-            buf = io.BytesIO()
-            fmt_upper = fmt.upper()
-            img.save(buf, format=fmt_upper)
-            payload = buf.getvalue()
-            if fmt_upper == "JPEG":
-                suffix = ".jpg"
-                mime = "image/jpeg"
-            elif fmt_upper == "EXR":
-                suffix = ".exr"
-                mime = "image/x-exr"
-            else:
-                suffix = ".png"
-                mime = "image/png"
-
-        merged = dict(meta or {})
-        if name:
-            merged["name"] = name
-        if session_id:
-            merged["session_id"] = session_id
-        return await self.store(payload, mime=mime, suffix=suffix, meta=merged)
-
     def list_artifacts(self, prefix: str = "") -> List[Dict[str, Any]]:
         items: List[Dict[str, Any]] = []
         if not self._root.exists():
@@ -382,31 +299,6 @@ class ArtifactStore:
                         continue
 
         return {"deleted": deleted, "freed_bytes": freed}
-
-    async def retrieve(self, sha256: str) -> bytes:
-        """按 SHA256 digest 读取 artifact 的原始字节。
-
-        Parameters
-        ----------
-        sha256:
-            Hex 编码的 SHA256 digest。
-
-        Returns
-        -------
-        bytes
-
-        Raises
-        ------
-        FileNotFoundError
-            当 store 中不存在该 hash 的 artifact 时抛出。
-        """
-        dest = _shard_path(self._root, sha256)
-        if not dest.is_file():
-            raise FileNotFoundError(
-                f"Artifact not found in store: {sha256}"
-            )
-        async with aiofiles.open(dest, "rb") as fh:
-            return await fh.read()
 
     def get_path(self, sha256: str) -> Path:
         """返回 artifact 在文件系统中的存放路径。

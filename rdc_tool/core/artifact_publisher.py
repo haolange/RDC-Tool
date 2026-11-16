@@ -7,7 +7,6 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from rdc_tool.runtime_paths import artifacts_dir
 
 from .contracts import make_artifact_from_path, make_artifact_from_url
 
@@ -117,7 +116,4 @@ class ArtifactPublisher:
             )
         return out
 
-
-def default_artifact_root() -> Path:
-    return Path(os.environ.get("RDC_TOOL_ARTIFACT_DIR", str(artifacts_dir()))).resolve()
 

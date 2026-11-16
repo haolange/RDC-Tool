@@ -12,7 +12,6 @@ from rdc_tool.io_utils import atomic_append_jsonl, atomic_write_json, state_file
 from rdc_tool.runtime_paths import cli_runtime_dir
 
 
-
 def _now_ms() -> int:
     return int(time.time() * 1000)
 
@@ -53,13 +52,6 @@ def _normalize_int(value: Any, default: int = 0) -> int:
         return int(value)
     except (TypeError, ValueError):
         return int(default)
-
-
-def _normalize_float(value: Any, default: float = 0.0) -> float:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return float(default)
 
 
 def _default_limits() -> Dict[str, Any]:

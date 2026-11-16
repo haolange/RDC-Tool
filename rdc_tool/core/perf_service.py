@@ -18,7 +18,7 @@ import asyncio
 import functools
 import logging
 import math
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 from rdc_tool.core.errors import CoreError
 from rdc_tool.models import PerfResult, CounterSample, CounterSummary

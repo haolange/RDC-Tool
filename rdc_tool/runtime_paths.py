@@ -43,14 +43,6 @@ def tools_root() -> Path:
     return fallback
 
 
-def require_tools_root() -> Path:
-    """Return tools root and raise when invalid."""
-    root = tools_root()
-    if not root.is_dir():
-        raise RuntimeError(f"rdc-tool root not found: {root}")
-    return root
-
-
 def ensure_tools_root_env(*, force: bool = False) -> Path:
     """Ensure ``RDC_TOOL_ROOT`` is set to the resolved root."""
     root = tools_root()
