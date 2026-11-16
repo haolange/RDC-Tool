@@ -8,9 +8,9 @@ from types import SimpleNamespace as NS
 
 import pytest
 
-from rdc_tool import server_runtime, tool_router
-from rdc_tool.core.engine import CoreEngine
 from rdc_tool.core import pipeline_service as pipeline
+from rdc_tool.runtime import context_records, dispatch, envelope, live_state, renderdoc_api, replay_access, routing, truth_matrix
+from rdc_tool.runtime.operations import shader as shader_ops
 
 
 class Code(IntEnum):
@@ -47,18 +47,22 @@ def runtime(monkeypatch):
     async def ensure_live_session(session_id):
         assert session_id == 'native-session'
 
-    monkeypatch.setattr(server_runtime, '_ensure_live_session', ensure_live_session)
-    monkeypatch.setattr(server_runtime, '_context_snapshot', lambda: {'runtime': {'session_id': 'native-session'}})
-    monkeypatch.setattr(server_runtime, '_session_manager', NS(get_controller=lambda session_id: controller))
-    monkeypatch.setattr(server_runtime, '_update_context_session_record',
+    monkeypatch.setattr(replay_access, '_ensure_live_session', ensure_live_session)
+    monkeypatch.setattr(context_records, '_context_snapshot', lambda: {'runtime': {'session_id': 'native-session'}})
+    monkeypatch.setattr(live_state, '_session_manager', NS(get_controller=lambda session_id: controller))
+    monkeypatch.setattr(context_records, '_update_context_session_record',
                         lambda session_id, **fields: updates.append((session_id, fields)))
     return controller, updates
 
 
+def _route_namespace(monkeypatch, namespace, handler):
+    async def namespace_dispatch(action, args):
+        return await handler(action, args, {})
+    monkeypatch.setattr(routing.OPERATION_MODULES[namespace], 'dispatch', namespace_dispatch)
+
+
 def execute(monkeypatch, operation, handler):
-    domain = operation.split('.')[1]
-    monkeypatch.setitem(tool_router._DOMAIN_HANDLERS, domain, handler)
-    engine = CoreEngine(registry=tool_router.build_operation_registry())
+    _route_namespace(monkeypatch, operation.split('.')[1], handler)
     args = {'session_id': 'native-session'}
     if operation == 'rd.texture.get_pixel_value':
         args.update(texture_id='ResourceId::187074', x=685, y=70, event_id=1716)
@@ -66,7 +70,7 @@ def execute(monkeypatch, operation, handler):
         args = {'out_path': '/qa/observation.png'}
     elif operation == 'rd.pipeline.get_state':
         args.update(event_id=1716, detail='summary', sections=['blend'])
-    return asyncio.run(engine.execute(operation, args))
+    return asyncio.run(dispatch._execute(operation, args, live_state.ExecutionContext()))
 
 
 @pytest.mark.parametrize('operation', ['rd.texture.get_pixel_value', 'rd.pipeline.get_state', 'rd.session.observe'])
@@ -76,9 +80,9 @@ def test_existing_native_fatal_rejects_before_read(monkeypatch, runtime, operati
     called = []
 
     async def handler(action, args, env):
-        await server_runtime._get_controller(args.get("session_id", "native-session"))
+        await replay_access._get_controller(args.get("session_id", "native-session"))
         called.append(action)
-        return {'success': True, 'r': 0}
+        return envelope.success(r=0)
 
     result = execute(monkeypatch, operation, handler)
     assert result['ok'] is False
@@ -94,9 +98,9 @@ def test_native_fatal_during_call_rejects_default_success(monkeypatch, runtime, 
     controller, updates = runtime
 
     async def handler(action, args, env):
-        await server_runtime._get_controller(args.get("session_id", "native-session"))
+        await replay_access._get_controller(args.get("session_id", "native-session"))
         controller.status = Status(Code.RemoteServerConnectionLost)
-        return {'success': True, 'r': 0, 'g': 0, 'b': 0, 'a': 0}
+        return envelope.success(r=0, g=0, b=0, a=0)
 
     result = execute(monkeypatch, operation, handler)
     assert result['ok'] is False
@@ -109,7 +113,7 @@ def test_native_fatal_explains_secondary_projection_exception(monkeypatch, runti
     controller, _ = runtime
 
     async def handler(action, args, env):
-        await server_runtime._get_controller(args.get("session_id", "native-session"))
+        await replay_access._get_controller(args.get("session_id", "native-session"))
         controller.status = Status(Code.RemoteServerConnectionLost)
         raise AttributeError("'NoneType' object has no attribute 'outputMerger'")
 
@@ -122,8 +126,8 @@ def test_healthy_native_zero_is_valid_readback(monkeypatch, runtime):
     controller, updates = runtime
 
     async def handler(action, args, env):
-        await server_runtime._get_controller(args.get("session_id", "native-session"))
-        return {'success': True, 'r': 0, 'g': 0, 'b': 0, 'a': 0}
+        await replay_access._get_controller(args.get("session_id", "native-session"))
+        return envelope.success(r=0, g=0, b=0, a=0)
 
     result = execute(monkeypatch, 'rd.texture.get_pixel_value', handler)
     assert result['ok'] is True and result['data']['r'] == 0
@@ -137,9 +141,9 @@ def test_missing_or_unknown_health_is_not_assumed_success(monkeypatch, runtime, 
     called = []
 
     async def handler(action, args, env):
-        await server_runtime._get_controller(args.get("session_id", "native-session"))
+        await replay_access._get_controller(args.get("session_id", "native-session"))
         called.append(action)
-        return {'success': True, 'r': 0}
+        return envelope.success(r=0)
 
     result = execute(monkeypatch, 'rd.texture.get_pixel_value', handler)
     assert result['ok'] is False
@@ -149,7 +153,7 @@ def test_missing_or_unknown_health_is_not_assumed_success(monkeypatch, runtime, 
 
 def test_non_native_projection_error_keeps_original_error(monkeypatch, runtime):
     async def handler(action, args, env):
-        await server_runtime._get_controller(args.get("session_id", "native-session"))
+        await replay_access._get_controller(args.get("session_id", "native-session"))
         raise AttributeError('independent projection failure')
 
     result = execute(monkeypatch, 'rd.pipeline.get_state', handler)
@@ -164,7 +168,7 @@ def test_global_capture_close_remains_available_after_native_fatal(monkeypatch, 
 
     async def handler(action, args, env):
         called.append(action)
-        return {'success': True, 'released': True}
+        return envelope.success(released=True)
 
     result = execute(monkeypatch, 'rd.capture.close_replay', handler)
     assert result['ok'] is True and called == ['close_replay']
@@ -212,28 +216,27 @@ def test_concurrent_health_scopes_do_not_mix_controllers(monkeypatch):
     async def ensure_live(session_id):
         assert session_id in controllers
 
-    monkeypatch.setattr(server_runtime, '_ensure_live_session', ensure_live)
-    monkeypatch.setattr(server_runtime, '_session_manager', NS(get_controller=lambda key: controllers[key]))
-    monkeypatch.setattr(server_runtime, '_update_context_session_record', lambda *args, **fields: None)
+    monkeypatch.setattr(replay_access, '_ensure_live_session', ensure_live)
+    monkeypatch.setattr(live_state, '_session_manager', NS(get_controller=lambda key: controllers[key]))
+    monkeypatch.setattr(context_records, '_update_context_session_record', lambda *args, **fields: None)
 
     async def run():
         reached = asyncio.Event()
 
         async def handler(action, args, env):
-            controller = await server_runtime._get_controller(args['session_id'])
+            controller = await replay_access._get_controller(args['session_id'])
             if args['session_id'] == 'broken':
                 await asyncio.sleep(0)
                 controller.status = Status(Code.RemoteServerConnectionLost)
                 reached.set()
             else:
                 await reached.wait()
-            return {'success': True, 'r': 0}
+            return envelope.success(r=0)
 
-        monkeypatch.setitem(tool_router._DOMAIN_HANDLERS, 'texture', handler)
-        engine = CoreEngine(registry=tool_router.build_operation_registry())
+        _route_namespace(monkeypatch, 'texture', handler)
         async def query(key):
-            return await engine.execute('rd.texture.get_pixel_value', {
-                'session_id': key, 'texture_id': 'ResourceId::187074', 'x': 0, 'y': 0})
+            return await dispatch._execute('rd.texture.get_pixel_value', {
+                'session_id': key, 'texture_id': 'ResourceId::187074', 'x': 0, 'y': 0}, live_state.ExecutionContext())
         broken, healthy = await asyncio.gather(query('broken'), query('healthy'))
         assert broken['error']['code'] == 'replay_fatal_error'
         assert healthy['ok'] is True and healthy['data']['r'] == 0
@@ -241,7 +244,7 @@ def test_concurrent_health_scopes_do_not_mix_controllers(monkeypatch):
     asyncio.run(run())
 
 def test_debug_start_capability_probe_uses_owning_replay_executor(monkeypatch):
-    import json
+    pass
 
     async def run():
         executor = ThreadPoolExecutor(max_workers=1)
@@ -271,13 +274,13 @@ def test_debug_start_capability_probe_uses_owning_replay_executor(monkeypatch):
             controller.GetTargetShaderEncodings()
             return {'shader_debug': {'status': 'unsupported', 'reason': 'fixture boundary'}}
 
-        monkeypatch.setattr(server_runtime, '_get_controller', get_controller)
-        monkeypatch.setattr(server_runtime, '_ensure_event', ensure_event)
-        monkeypatch.setattr(server_runtime, '_get_rd', lambda: NS())
-        monkeypatch.setattr(server_runtime, '_session_remote_capability_matrix', capabilities)
-        monkeypatch.setattr(server_runtime, '_runtime_context_id', lambda: 'native-caps-context')
-        result = json.loads(await server_runtime._dispatch_shader('debug_start', {
-            'session_id': 'native-session', 'event_id': 1716, 'params': {'x': 685, 'y': 70}}))
-        assert result['code'] == 'shader_debug_backend_unsupported'
+        monkeypatch.setattr(replay_access, '_get_controller', get_controller)
+        monkeypatch.setattr(replay_access, '_ensure_event', ensure_event)
+        monkeypatch.setattr(renderdoc_api, '_get_rd', lambda: NS())
+        monkeypatch.setattr(truth_matrix, '_session_remote_capability_matrix', capabilities)
+        monkeypatch.setattr(live_state, '_runtime_context_id', lambda: 'native-caps-context')
+        result = await shader_ops.dispatch('debug_start', {
+            'session_id': 'native-session', 'event_id': 1716, 'params': {'x': 685, 'y': 70}})
+        assert result.code == 'shader_debug_backend_unsupported'
 
     asyncio.run(run())

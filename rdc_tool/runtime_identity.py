@@ -5,27 +5,36 @@ are separate observations; an embedded commit alone never certifies a source tre
 """
 from __future__ import annotations
 
-import ctypes
 import hashlib
 import json
-import os
 from pathlib import Path
 import struct
 import sys
-from typing import Any
+from types import MappingProxyType
+from typing import Any, Iterable
 import zipfile
 
 from rdc_tool.android_apk_identity import read_apk_identity
+from rdc_tool.platform import native as platform_native
+from rdc_tool.platform import host as platform_host
+from rdc_tool.runtime_paths import HOST_LAYOUTS, binding_module_name, native_library_name
 
 
-NATIVE_OUTPUTS = {
-    "windows-x64": {
-        "renderdoc_dll": "binaries/windows/x64/renderdoc.dll",
-        "renderdoc_pyd": "binaries/windows/x64/pymodules/renderdoc.pyd",
-    },
+RECEIPT_PATH = "binaries/native_build.json"
+ANDROID_TARGETS = {
     "android-arm32": {"helper_apk": "binaries/android/arm32/org.renderdoc.renderdoccmd.arm32.apk"},
     "android-arm64": {"helper_apk": "binaries/android/arm64/org.renderdoc.renderdoccmd.arm64.apk"},
 }
+# Every native target one frozen source can produce: each host layout plus both Android helpers.
+NATIVE_TARGETS = MappingProxyType({
+    **{target: {"native_library": f"{layout.runtime_dir}/{layout.native_library}",
+                "binding_module": f"{layout.runtime_dir}/{layout.binding_module}"}
+       for target, layout in HOST_LAYOUTS.items()},
+    **ANDROID_TARGETS,
+})
+SOURCE_HEX_FIELDS = {"revision": 40, "base_revision": 40, "upstream_revision": 40, "tree_sha256": 64}
+SOURCE_FIELDS = frozenset({"repository", *SOURCE_HEX_FIELDS})
+NATIVE_SUFFIXES = frozenset({".dll", ".pyd", ".so", ".json"})
 _OBSERVED_FILES: dict[tuple[str, int, int], dict[str, Any]] = {}
 
 
@@ -43,16 +52,20 @@ def _observed_file(path: Path) -> dict[str, Any]:
     return dict(_OBSERVED_FILES[key])
 
 
-def windows_native_files(directory: Path) -> dict[str, Path]:
-    """The Windows native surface, separate from Python and host tools."""
+def native_runtime_files(directory: Path) -> dict[str, Path]:
+    """A host runtime's native surface (libraries, layer manifest, binding), apart from Python and host tools."""
     result = {path.name: path for path in directory.iterdir()
-              if path.is_file() and path.suffix.lower() in {".dll", ".pyd", ".json"}
-              and path.name != "manifest.runtime.json"}
+              if path.is_file() and path.suffix.lower() in NATIVE_SUFFIXES and path.name != "manifest.runtime.json"}
     modules = directory / "pymodules"
     if modules.is_dir():
         result.update({path.relative_to(directory).as_posix(): path for path in modules.rglob("*")
                        if path.is_file() and "__pycache__" not in path.parts and path.suffix.lower() != ".pyc"})
     return result
+
+
+def required_native_targets() -> tuple[str, ...]:
+    """What this host needs certified: its own runtime and both Android helpers."""
+    return (platform_host.host_target(), *ANDROID_TARGETS)
 
 
 def _elf_build_id(data: bytes) -> str:
@@ -163,21 +176,62 @@ def apk_native_identity(path: Path, abi: str) -> dict[str, Any]:
             "signature_validation": "not_performed", "libraries": libraries}
 
 
-def native_manifest_status(root: Path) -> dict[str, Any]:
-    manifest_path = root / "binaries/windows/x64/manifest.runtime.json"
+def _reject_constant(value: str) -> None:
+    raise ValueError(f"invalid JSON numeric constant: {value}")
+
+
+def _verify_source(source: Any) -> None:
+    if not isinstance(source, dict) or set(source) != SOURCE_FIELDS:
+        raise ValueError(f"native source fields must be exactly {sorted(SOURCE_FIELDS)}")
+    if not isinstance(source["repository"], str) or not source["repository"].startswith("https://"):
+        raise ValueError("native source repository must be an https URL")
+    for key, length in SOURCE_HEX_FIELDS.items():
+        value = source[key]
+        if not isinstance(value, str) or len(value) != length or any(c not in "0123456789abcdef" for c in value):
+            raise ValueError(f"invalid native source {key}")
+
+
+def _verify_host_runtime(root: Path, target: str, files: list[dict[str, Any]]) -> None:
+    runtime_dir = HOST_LAYOUTS[target].runtime_dir
+    actual = {f"{runtime_dir}/{name}": path for name, path in native_runtime_files(root / runtime_dir).items()}
+    if len(files) != len(actual) or {item["path"] for item in files} != set(actual):
+        raise ValueError(f"{target} native runtime file set differs from its build receipt")
+    indexed = {item["path"]: item for item in files}
+    for name, path in actual.items():
+        item = indexed[name]
+        if file_identity(path) != {"size": item["size"], "sha256": item["sha256"]}:
+            raise ValueError(f"{target} native runtime bytes differ: {name}")
+        if path.suffix.lower() == ".json":
+            try:
+                layer_manifest = json.loads(path.read_bytes().decode("utf-8-sig"), parse_constant=_reject_constant)
+            except (UnicodeError, ValueError) as exc:
+                raise ValueError(f"{target} Vulkan layer manifest JSON is invalid: {name}: {exc}") from exc
+            if not isinstance(layer_manifest, dict):
+                raise ValueError(f"{target} Vulkan layer manifest must be a JSON object: {name}")
+
+
+def native_manifest_status(root: Path, required: Iterable[str] | None = None) -> dict[str, Any]:
+    """Check the shared build receipt against the native files present under `root`.
+
+    Every listed target whose outputs are present is verified byte for byte; a listed
+    target with no outputs present is reported `absent`. `required` names what the
+    caller's scenario needs certified (default: this host and both Android helpers):
+    a required target that is unlisted or absent leaves the status `unavailable`,
+    while present bytes that contradict the receipt make it `invalid`.
+    """
+    needed = tuple(required) if required is not None else required_native_targets()
+    receipt_path = root / RECEIPT_PATH
+    if not receipt_path.is_file():
+        return {"status": "unavailable", "reason": "native_build_receipt_missing"}
     try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        receipt = manifest.get("native_build")
-        if not receipt:
-            return {"status": "unavailable", "reason": "native_build_receipt_missing"}
-        builds = receipt["builds"]
-        if {build["target"] for build in builds} != set(NATIVE_OUTPUTS) or len(builds) != 3:
-            raise ValueError("native receipt requires exactly three build targets")
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
         source = receipt["source"]
-        for key, length in (("base_revision", 40), ("upstream_revision", 40), ("tree_sha256", 64)):
-            value = source[key]
-            if not isinstance(value, str) or len(value) != length or any(c not in "0123456789abcdef" for c in value):
-                raise ValueError(f"invalid native source {key}")
+        _verify_source(source)
+        builds = receipt["builds"]
+        listed = [build["target"] for build in builds]
+        if len(set(listed)) != len(listed) or not set(listed) <= set(NATIVE_TARGETS):
+            raise ValueError(f"native receipt targets must be unique and known: {listed}")
+        targets: dict[str, str] = {}
         apks = []
         for build in builds:
             target = build["target"]
@@ -186,65 +240,41 @@ def native_manifest_status(root: Path) -> dict[str, Any]:
             if build["inputs_sha256"] != source["tree_sha256"]:
                 raise ValueError(f"source digest differs for {target}")
             outputs = build["outputs"]
-            expected = NATIVE_OUTPUTS[target]
+            expected = NATIVE_TARGETS[target]
             if len(outputs) != len(expected) or {item["role"] for item in outputs} != set(expected):
                 raise ValueError(f"native output roles differ for {target}")
-            if target == "windows-x64":
-                files = build["runtime_files"]
-                actual = {"binaries/windows/x64/" + name: path
-                          for name, path in windows_native_files(root / "binaries/windows/x64").items()}
-                if len(files) != len(actual) or {item["path"] for item in files} != set(actual):
-                    raise ValueError("Windows native runtime file set differs from its build receipt")
-                indexed = {item["path"]: item for item in files}
-                for name, path in actual.items():
-                    item = indexed[name]
-                    if file_identity(path) != {"size": item["size"], "sha256": item["sha256"]}:
-                        raise ValueError(f"Windows native runtime bytes differ: {name}")
-                    if name == "binaries/windows/x64/renderdoc.json":
-                        def reject_constant(value: str) -> None:
-                            raise ValueError(f"invalid JSON numeric constant: {value}")
-                        try:
-                            layer_manifest = json.loads(path.read_bytes().decode("utf-8-sig"),
-                                                        parse_constant=reject_constant)
-                        except (UnicodeError, ValueError) as exc:
-                            raise ValueError(f"Windows Vulkan layer manifest JSON is invalid: {name}: {exc}") from exc
-                        if not isinstance(layer_manifest, dict):
-                            raise ValueError(f"Windows Vulkan layer manifest must be a JSON object: {name}")
+            if any(item["path"] != expected[item["role"]] for item in outputs):
+                raise ValueError(f"native output path differs for {target}")
+            present = [(root / item["path"]).is_file() for item in outputs]
+            if not any(present):
+                targets[target] = "absent"
+                continue
+            if not all(present):
+                raise ValueError(f"native outputs are partially present for {target}")
             for item in outputs:
-                if item["path"] != expected[item["role"]]:
-                    raise ValueError(f"native output path differs for {target}")
                 path = root / item["path"]
                 if file_identity(path) != {"size": item["size"], "sha256": item["sha256"]}:
                     raise ValueError(f"native bytes differ: {item['path']}")
-                if target.startswith("android-"):
+                if target in ANDROID_TARGETS:
                     if apk_native_identity(path, target.removeprefix("android-")) != item["apk"]:
                         raise ValueError(f"APK native identity differs: {item['path']}")
                     apks.append(item["apk"])
-        if apks[0]["signer_certificate_sha256"] != apks[1]["signer_certificate_sha256"]:
-            raise ValueError("Android ABI helpers were signed by different certificates")
-        if (apks[0]["version_code"], apks[0]["version_name"]) != (apks[1]["version_code"], apks[1]["version_name"]):
-            raise ValueError("Android ABI helpers have different source/version metadata")
-        return {"status": "verified", "source": source,
-                "receipt_sha256": hashlib.sha256(json.dumps(receipt, sort_keys=True, separators=(",", ":")).encode()).hexdigest()}
+            if target in HOST_LAYOUTS:
+                _verify_host_runtime(root, target, build["runtime_files"])
+            targets[target] = "verified"
+        if len(apks) == 2:
+            if apks[0]["signer_certificate_sha256"] != apks[1]["signer_certificate_sha256"]:
+                raise ValueError("Android ABI helpers were signed by different certificates")
+            if (apks[0]["version_code"], apks[0]["version_name"]) != (apks[1]["version_code"], apks[1]["version_name"]):
+                raise ValueError("Android ABI helpers have different source/version metadata")
+        result = {"source": source, "targets": targets,
+                  "receipt_sha256": hashlib.sha256(json.dumps(receipt, sort_keys=True, separators=(",", ":")).encode()).hexdigest()}
+        missing = [target for target in needed if targets.get(target) != "verified"]
+        if missing:
+            return {"status": "unavailable", "reason": "native_targets_absent", "missing_targets": missing, **result}
+        return {"status": "verified", **result}
     except (OSError, ValueError, KeyError, TypeError, IndexError, struct.error, zipfile.BadZipFile) as exc:
         return {"status": "invalid", "reason": str(exc)}
-
-
-def _loaded_renderdoc_dll() -> Path | None:
-    if os.name != "nt":
-        raise OSError("native_loader_query_unsupported")
-    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel.GetModuleHandleW.argtypes = [ctypes.c_wchar_p]
-    kernel.GetModuleHandleW.restype = ctypes.c_void_p
-    kernel.GetModuleFileNameW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_uint]
-    kernel.GetModuleFileNameW.restype = ctypes.c_uint
-    handle = kernel.GetModuleHandleW("renderdoc.dll")
-    if not handle:
-        return None
-    buffer = ctypes.create_unicode_buffer(32768)
-    if not kernel.GetModuleFileNameW(handle, buffer, len(buffer)):
-        raise OSError("loaded renderdoc.dll path is unavailable")
-    return Path(buffer.value).resolve()
 
 
 def loaded_runtime_identity(bin_dir: Path, pymod_dir: Path) -> dict[str, Any]:
@@ -255,7 +285,7 @@ def loaded_runtime_identity(bin_dir: Path, pymod_dir: Path) -> dict[str, Any]:
     except OSError as exc:
         return {"status": "unavailable", "reason": str(exc)}
     try:
-        dll = _loaded_renderdoc_dll()
+        dll = platform_native.loaded_library_path(native_library_name())
         module = sys.modules.get("renderdoc")
         if dll is not None:
             result["native"] = {"path": str(dll), "on_disk": _observed_file(dll)}
@@ -269,9 +299,9 @@ def loaded_runtime_identity(bin_dir: Path, pymod_dir: Path) -> dict[str, Any]:
         if dll is None:
             return {**result, "status": "not_loaded" if module is None else "unavailable",
                     "reason": "native_dll_not_loaded"}
-        matches = dll == (bin_dir / "renderdoc.dll").resolve()
+        matches = dll == (bin_dir / native_library_name()).resolve()
         if module is not None:
-            matches = matches and pyd == (pymod_dir / "renderdoc.pyd").resolve()
+            matches = matches and pyd == (pymod_dir / binding_module_name()).resolve()
         return {**result, "status": ("observed" if module is not None else "partial") if matches else "mismatch",
                 "configured_paths_match": matches, "hash_scope": "on_disk_files_at_observation"}
     except (OSError, AttributeError, TypeError) as exc:

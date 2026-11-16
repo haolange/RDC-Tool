@@ -109,13 +109,13 @@ function Remove-ObsoleteReleaseFiles {
 
 function Remove-ObsoleteNativeRuntimeFiles {
     param([string]$SourceRoot, [string]$TargetRoot)
-    $sourceReceipt = Join-Path $SourceRoot 'binaries/windows/x64/manifest.runtime.json'
+    $sourceReceipt = Join-Path $SourceRoot 'binaries/native_build.json'
     $previousRelease = Join-Path $TargetRoot 'RELEASE_MANIFEST.json'
     if (-not (Test-Path -LiteralPath $sourceReceipt) -or -not (Test-Path -LiteralPath $previousRelease)) { return }
     $receipt = Get-Content -LiteralPath $sourceReceipt -Raw | ConvertFrom-Json
     $previous = Get-Content -LiteralPath $previousRelease -Raw | ConvertFrom-Json
     $expected = @{}
-    foreach ($build in $receipt.native_build.builds) {
+    foreach ($build in $receipt.builds) {
         if ($build.target -eq 'windows-x64') {
             foreach ($file in $build.runtime_files) { $expected[$file.path] = $true }
         }

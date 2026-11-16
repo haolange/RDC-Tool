@@ -12,98 +12,95 @@ from pathlib import Path
 
 import pytest
 
-from rdc_tool import cli, environment
+from rdc_tool import cli
 from rdc_tool.daemon import client
+from rdc_tool.platform import locks
 
 
 @pytest.fixture(autouse=True)
 def lock_dir(monkeypatch, tmp_path):
-    monkeypatch.setattr(client, 'STATE_DIR', tmp_path / 'locks')
+    monkeypatch.setenv('RDC_TOOL_INTERMEDIATE_ROOT', str(tmp_path))
 
 
-def test_nonblocking_retry_and_unlock(monkeypatch):
+class FakeBackend:
+    """Scripted lock primitive: each entry is True, False (contention) or an exception."""
+
+    def __init__(self, *script):
+        self.script = list(script)
+        self.calls = []
+
+    def try_lock(self, fd):
+        self.calls.append('try')
+        outcome = self.script.pop(0) if self.script else True
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+    def unlock(self, fd):
+        self.calls.append('unlock')
+
+
+@pytest.fixture
+def fake_clock(monkeypatch):
     clock = [0.0]
-    modes = []
-    monkeypatch.setattr(client.time, 'monotonic', lambda: clock[0])
-    monkeypatch.setattr(client.time, 'sleep', lambda seconds: clock.__setitem__(0, clock[0] + seconds))
-    def locking(fd, mode, size):
-        modes.append(mode)
-        assert size == 1
-        if mode == client.msvcrt.LK_NBLCK and len(modes) <= 2:
-            raise OSError(errno.EACCES, 'locked')
-    monkeypatch.setattr(client.msvcrt, 'locking', locking)
+    monkeypatch.setattr(locks.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(locks.time, 'sleep', lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    return clock
+
+
+def test_nonblocking_retry_and_unlock(monkeypatch, fake_clock):
+    backend = FakeBackend(False, False, True)
+    monkeypatch.setattr(locks, '_os', backend)
     with client._locked_daemon_start('retry'):
-        assert clock[0] == pytest.approx(.1)
-    assert modes == [client.msvcrt.LK_NBLCK] * 3 + [client.msvcrt.LK_UNLCK]
+        assert fake_clock[0] == pytest.approx(.1)
+    assert backend.calls == ['try', 'try', 'try', 'unlock']
 
 
 @pytest.mark.parametrize('failure', [OSError(errno.EBADF, 'bad descriptor'), OSError(errno.EINVAL, 'bad argument'), OSError(errno.EIO, 'I/O'), KeyboardInterrupt()])
 def test_non_contention_and_interrupt_release_mutex(monkeypatch, failure):
-    real_locking = client.msvcrt.locking
-    def fail(*args):
-        raise failure
-    monkeypatch.setattr(client.msvcrt, 'locking', fail)
-    monkeypatch.setattr(client.time, 'sleep', lambda _: pytest.fail('must not retry'))
+    real_backend = locks._os
+    monkeypatch.setattr(locks, '_os', FakeBackend(failure))
+    monkeypatch.setattr(locks.time, 'sleep', lambda _: pytest.fail('must not retry'))
     with pytest.raises(type(failure)):
         with client._locked_daemon_start('failed'):
             pytest.fail('entered')
-    monkeypatch.setattr(client.msvcrt, 'locking', real_locking)
+    monkeypatch.setattr(locks, '_os', real_backend)
     with client._locked_daemon_start('failed'):
         pass
 
 
-def test_explicit_access_denied_is_not_contention(monkeypatch):
-    failure = OSError(errno.EACCES, 'denied')
-    failure.winerror = 5
-    monkeypatch.setattr(client.msvcrt, 'locking', lambda *args: (_ for _ in ()).throw(failure))
-    monkeypatch.setattr(client.time, 'sleep', lambda _: pytest.fail('must not retry'))
-    with pytest.raises(OSError) as caught:
-        with client._locked_daemon_start('denied'):
-            pytest.fail('entered')
-    assert caught.value is failure
-
-
-def test_timeout_never_enters_startup_or_unlocks(monkeypatch):
-    clock = [0.0]
+def test_timeout_never_enters_startup_or_unlocks(monkeypatch, fake_clock):
+    backend = FakeBackend(*([False] * 100))
+    monkeypatch.setattr(locks, '_os', backend)
     monkeypatch.setattr(client, 'DAEMON_START_LOCK_TIMEOUT_S', .125)
-    monkeypatch.setattr(client.time, 'monotonic', lambda: clock[0])
-    monkeypatch.setattr(client.time, 'sleep', lambda seconds: clock.__setitem__(0, clock[0] + seconds))
-    modes = []
-    def busy(fd, mode, size):
-        modes.append(mode)
-        raise OSError(errno.EACCES, 'locked')
-    monkeypatch.setattr(client.msvcrt, 'locking', busy)
     monkeypatch.setattr(client, '_ensure_daemon_locked', lambda **kw: pytest.fail('startup entered'))
     with pytest.raises(client.DaemonStartLockTimeout) as caught:
         client.ensure_daemon(context='busy')
-    assert clock[0] == pytest.approx(.125)
-    assert set(modes) == {client.msvcrt.LK_NBLCK}
+    assert fake_clock[0] == pytest.approx(.125)
+    assert set(backend.calls) == {'try'}
     payload = cli._exception_error_payload('rdc_tool.cli', caught.value)
     assert payload['error']['code'] == 'daemon_start_lock_timeout'
     assert caught.value.details['waiting_for'] == 'file_lock'
     assert caught.value.details['elapsed_seconds'] == pytest.approx(.125)
 
 
-def test_thread_mutex_and_file_retry_share_one_deadline(monkeypatch):
-    clock = [0.0]
+def test_thread_mutex_and_file_retry_share_one_deadline(monkeypatch, fake_clock):
     class Mutex:
         def acquire(self, *, timeout):
             assert timeout == pytest.approx(.2)
-            clock[0] += .15
+            fake_clock[0] += .15
             return True
         def release(self):
-            clock.append('released')
-    path = client._daemon_state_path('deadline').with_suffix('.start.lock')
+            fake_clock.append('released')
+    path = client.state_path('deadline').with_suffix('.start.lock')
     key = os.path.normcase(str(path.resolve()))
-    monkeypatch.setattr(client, '_START_MUTEXES', {key: Mutex()})
+    monkeypatch.setattr(locks, '_MUTEXES', {key: Mutex()})
+    monkeypatch.setattr(locks, '_os', FakeBackend(*([False] * 100)))
     monkeypatch.setattr(client, 'DAEMON_START_LOCK_TIMEOUT_S', .2)
-    monkeypatch.setattr(client.time, 'monotonic', lambda: clock[0])
-    monkeypatch.setattr(client.time, 'sleep', lambda seconds: clock.__setitem__(0, clock[0] + seconds))
-    monkeypatch.setattr(client.msvcrt, 'locking', lambda *args: (_ for _ in ()).throw(OSError(errno.EACCES, 'locked')))
     with pytest.raises(client.DaemonStartLockTimeout):
         with client._locked_daemon_start('deadline'):
             pytest.fail('entered')
-    assert clock == [pytest.approx(.2), 'released']
+    assert fake_clock == [pytest.approx(.2), 'released']
 
 
 def test_thread_wait_is_bounded_and_other_context_is_independent(monkeypatch):
@@ -152,12 +149,19 @@ def test_body_failure_unlocks(monkeypatch):
         pass
 
 
+def test_body_lock_timeout_is_not_reported_as_start_contention(monkeypatch):
+    inner = locks.LockTimeout(Path('inner.lock'), 'file_lock', 1.0, 1.0)
+    with pytest.raises(locks.LockTimeout) as caught:
+        with client._locked_daemon_start('body-timeout'):
+            raise inner
+    assert caught.value is inner
+
+
 def test_cli_start_timeout_does_not_clean_state(monkeypatch, capsys):
     cleaned = []
-    monkeypatch.setattr(environment, 'validate_environment', lambda: None)
     monkeypatch.setattr(cli, 'cleanup_stale_daemon_states', lambda **kw: cleaned.append(kw))
     def timeout(**kw):
-        raise client.DaemonStartLockTimeout('cli-busy', 'file_lock', time.monotonic(), 30)
+        raise client.DaemonStartLockTimeout('cli-busy', 'file_lock', 30.0, 30)
     monkeypatch.setattr(cli, 'ensure_daemon', timeout)
     monkeypatch.setattr(sys, 'argv', ['rdc-tool', '--daemon-context', 'cli-busy', 'daemon', 'start'])
     with pytest.raises(SystemExit) as caught:
@@ -172,8 +176,7 @@ import json,os,sys,time
 from pathlib import Path
 sys.path.insert(0,sys.argv[1])
 from rdc_tool.daemon import client
-from rdc_tool.runtime_process_identity import _process_birth
-client.STATE_DIR=Path(sys.argv[2])
+from rdc_tool.platform import process
 mode=sys.argv[3]
 if mode=='hold':
  with client._locked_daemon_start('shared'):
@@ -200,13 +203,13 @@ else:
   if mode!='bounded':raise
   print(json.dumps({'code':exc.code,'elapsed':time.monotonic()-started}),flush=True)
   sys.exit(0)
- print(json.dumps({'ok':ok,'pid':state.get('pid'),'birth':_process_birth(state['pid']),'elapsed':time.monotonic()-started}),flush=True)
+ print(json.dumps({'ok':ok,'pid':state.get('pid'),'birth':process.identify(state['pid']).birth,'elapsed':time.monotonic()-started}),flush=True)
 '''
 
 
 def _spawn(tmp_path, mode):
     root = Path(__file__).resolve().parents[1]
-    env = dict(os.environ, RDC_TOOL_INTERMEDIATE_ROOT=str(tmp_path), RDC_TOOL_ROOT=str(root))
+    env = dict(os.environ, RDC_TOOL_INTERMEDIATE_ROOT=str(tmp_path))
     state = tmp_path / 'runtime' / 'rdc_tool_cli'
     return subprocess.Popen([sys.executable, '-u', '-c', _CHILD, str(root), str(state), mode, str(os.getpid())],
                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
@@ -226,6 +229,42 @@ def _line(process, timeout=20):
     reader.join(5)
     assert text, process.stderr.read()
     return text.strip()
+
+
+def _stop_forensics(context):
+    """What the OS reports about a daemon whose stop could not be confirmed."""
+    from rdc_tool.daemon import state as daemon_state
+    from rdc_tool.platform import process
+    try:
+        state = daemon_state.load_state(context)
+    except Exception as exc:  # noqa: BLE001 - reported, not handled
+        return {'state': repr(exc)}
+    if not state:
+        return {'state': 'missing'}
+    pid = state['pid']
+    report = {'pid': pid, 'probe': process.probe(daemon_state.daemon_process(state)).value,
+              'endpoint_exists': Path(state['endpoint']).exists()}
+    proc = Path('/proc') / str(pid)
+    try:
+        status = (proc / 'status').read_text(errors='replace').splitlines()
+        report['status'] = [line for line in status if line.split(':')[0] in {'State', 'PPid', 'Threads', 'SigPnd', 'ShdPnd'}]
+        report['threads'] = {task.name: (task / 'stat').read_text().rsplit(') ', 1)[1].split()[0] + ' ' + (task / 'wchan').read_text()
+                             for task in (proc / 'task').iterdir()}
+    except OSError as exc:
+        report['proc'] = repr(exc)
+    try:
+        report['status_request'] = client.daemon_request('status', params={}, state=state, context=context, timeout=2).get('ok')
+    except Exception as exc:  # noqa: BLE001 - reported, not handled
+        report['status_request'] = repr(exc)
+    return report
+
+
+def _clear_and_stop(context):
+    cleared = client.clear_context(context)
+    assert cleared[0], cleared
+    started = time.monotonic()
+    stopped, message = client.stop_daemon(context)
+    assert stopped, {'message': message, 'elapsed_s': round(time.monotonic() - started, 2), **_stop_forensics(context)}
 
 
 def _close(*processes):
@@ -277,7 +316,6 @@ def test_process_owner_exit_releases_lock(tmp_path):
 
 def test_slow_real_daemon_is_reused_across_processes(monkeypatch, tmp_path):
     monkeypatch.setenv('RDC_TOOL_INTERMEDIATE_ROOT', str(tmp_path))
-    monkeypatch.setattr(client, 'STATE_DIR', tmp_path / 'runtime' / 'rdc_tool_cli')
     owner = _spawn(tmp_path, 'slow')
     waiter = None
     try:
@@ -298,14 +336,12 @@ def test_slow_real_daemon_is_reused_across_processes(monkeypatch, tmp_path):
         waiter.wait(timeout=5)
     finally:
         _close(waiter, owner)
-        assert client.clear_context('shared')[0]
-        assert client.stop_daemon('shared')[0]
+        _clear_and_stop('shared')
 
 
 def test_process_default_deadline_preserves_slow_live_owner(monkeypatch, tmp_path):
-    from rdc_tool.runtime_process_identity import _process_birth
+    from rdc_tool.platform import process
     monkeypatch.setenv('RDC_TOOL_INTERMEDIATE_ROOT', str(tmp_path))
-    monkeypatch.setattr(client, 'STATE_DIR', tmp_path / 'runtime' / 'rdc_tool_cli')
     owner = _spawn(tmp_path, 'slow')
     waiter = None
     try:
@@ -315,10 +351,10 @@ def test_process_default_deadline_preserves_slow_live_owner(monkeypatch, tmp_pat
         deadline = time.monotonic() + 10
         state = {}
         while not state and time.monotonic() < deadline:
-            state = client.load_daemon_state('shared')
+            state = client.load_state('shared')
             time.sleep(.05)
         assert state
-        birth = _process_birth(state['pid'])
+        birth = process.identify(state['pid']).birth
         waiter = _spawn(tmp_path, 'bounded')
         assert _line(waiter) == 'starting'
         result = json.loads(_line(waiter, timeout=40))
@@ -330,8 +366,8 @@ def test_process_default_deadline_preserves_slow_live_owner(monkeypatch, tmp_pat
         response = client.daemon_request('status', params={}, state=state, context='shared', timeout=2)
         assert response['ok']
         current = response['result']['state']
-        assert (current['pid'], current['pipe_name']) == (state['pid'], state['pipe_name'])
-        assert _process_birth(current['pid']) == birth
+        assert (current['pid'], current['endpoint']) == (state['pid'], state['endpoint'])
+        assert process.identify(current['pid']).birth == birth
         owner.stdin.write('release\n')
         owner.stdin.flush()
         published = json.loads(_line(owner))
@@ -340,14 +376,13 @@ def test_process_default_deadline_preserves_slow_live_owner(monkeypatch, tmp_pat
         waiter.wait(timeout=5)
     finally:
         _close(waiter, owner)
-        assert client.clear_context('shared')[0]
-        assert client.stop_daemon('shared')[0]
+        _clear_and_stop('shared')
 
 
 def test_mutex_registry_wait_also_uses_acquisition_deadline(monkeypatch):
     registry = threading.Lock()
     registry.acquire()
-    monkeypatch.setattr(client, '_START_MUTEXES_LOCK', registry)
+    monkeypatch.setattr(locks, '_MUTEXES_GUARD', registry)
     monkeypatch.setattr(client, 'DAEMON_START_LOCK_TIMEOUT_S', .05)
     try:
         with pytest.raises(client.DaemonStartLockTimeout) as caught:

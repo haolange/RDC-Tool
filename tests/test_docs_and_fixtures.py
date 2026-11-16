@@ -17,9 +17,9 @@ def test_tool_reference_is_generated_from_code_owned_definitions() -> None:
     document = doc_path.read_text(encoding="utf-8-sig")
 
     assert document == generate_tool_reference()
-    assert f"- Tool count: {len(tools)}" in document
-    assert f"- Group count: {len(groups)}" in document
-    assert f"- Catalog fingerprint: `{payload['fingerprint']}`" in document
+    assert f"- 工具数：{len(tools)}" in document
+    assert f"- 分组数：{len(groups)}" in document
+    assert f"- Catalog fingerprint：`{payload['fingerprint']}`" in document
     for tool in tools:
         assert str(tool["name"]) in document
         assert str(tool["scope"]) in document
@@ -59,7 +59,6 @@ def test_rdc_tool_native_playbook_covers_cli_and_runtime_contracts() -> None:
 
 def test_public_rdc_fixtures_have_expected_size_and_hash() -> None:
     expected = {
-        "hello_triangle.rdc": (75478, "00797a27e6316a0cf4369327f9db30a21635fa757673b3f9712af07989145ba8"),
         "vkcube.rdc": (75478, "00797a27e6316a0cf4369327f9db30a21635fa757673b3f9712af07989145ba8"),
         "vkcube_validation.rdc": (65913, "c50cd1e7c29241c64fd33faf07cb35e802f9dc85692a8512aa36db01c956b385"),
     }
@@ -74,12 +73,12 @@ def test_fixture_policy_and_third_party_notices_cover_copied_assets() -> None:
     fixture_readme = (ROOT / "tests" / "fixtures" / "README.md").read_text(encoding="utf-8-sig")
     notices = (ROOT / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8-sig")
 
-    for name in ("hello_triangle.rdc", "vkcube.rdc", "vkcube_validation.rdc"):
+    for name in ("vkcube.rdc", "vkcube_validation.rdc"):
         assert name in fixture_readme
         assert name in notices
     assert "MIT" in notices
     assert "BANANASJIM" in notices
-    assert "Release behavior: excluded" in notices
+    assert "不随 `rdc-tool` 发行包分发" in notices
 
 
 def test_project_license_metadata_is_apache_2() -> None:

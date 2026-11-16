@@ -4,6 +4,8 @@ import pytest
 
 from rdc_tool import remote_bootstrap as rb
 from rdc_tool.android_install_state import parse_active_install_sessions
+from rdc_tool import remote_bootstrap
+from rdc_tool.runtime import dispatch, live_state
 
 
 @pytest.fixture(autouse=True)
@@ -216,24 +218,22 @@ def test_inspection_requires_exact_serial_before_queries(monkeypatch, serial):
 
 def test_inspection_operation_is_canonical_readonly_and_context_bound(monkeypatch):
     import asyncio
-    from rdc_tool import server
     from rdc_tool.runtime_catalog import describe_operation
     definition = describe_operation("rd.remote.inspect_installation")
     assert definition["scope"] == "global" and definition["effects"] == []
     assert definition["input_schema"]["required"] == ["device_serial"]
-    runtime = server.server_runtime
-    monkeypatch.setattr(runtime._runtime, "enable_remote", True)
+    monkeypatch.setattr(live_state._runtime, "enable_remote", True)
     observed = []
     def inspect(serial):
         observed.append(serial)
         return {"device_serial": serial, "package_name": PACKAGE, "apk_sha256": "a" * 64,
             "installation_state": "clear", "observation": "verified", "sessions": []}
-    monkeypatch.setattr(runtime, "inspect_android_installation", inspect)
+    monkeypatch.setattr(remote_bootstrap, "inspect_android_installation", inspect)
     async def run():
-        denied = await server.dispatch_operation("rd.remote.inspect_installation", {"device_serial": "serial"}, context_id="default", transport="test")
+        denied = await dispatch.dispatch_operation("rd.remote.inspect_installation", {"device_serial": "serial"}, context_id="default", transport="test")
         assert denied["ok"] is False and denied["error"]["code"] == "remote_context_required"
         assert not observed
-        result = await server.dispatch_operation("rd.remote.inspect_installation", {"device_serial": "serial"}, context_id="inspection-owned", transport="test")
+        result = await dispatch.dispatch_operation("rd.remote.inspect_installation", {"device_serial": "serial"}, context_id="inspection-owned", transport="test")
         assert result["ok"] is True and result["data"]["context_id"] == "inspection-owned"
         assert result["data"]["installation_state"] == "clear"
         assert observed == ["serial"]

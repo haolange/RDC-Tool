@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from rdc_tool import server
+from rdc_tool import timeout_policy
+from rdc_tool.core import replay_facts
+from rdc_tool.runtime import dispatch, live_state, pixel_trace, renderdoc_api, replay_access, runtime_lifecycle, shader_patches
+from rdc_tool.runtime.operations import core as core_ops
+from rdc_tool.runtime.operations import debug as debug_ops
+from rdc_tool.runtime.operations import shader as shader_ops
+from rdc_tool.runtime.operations import texture as texture_ops
 
 
 class _FakeTrace:
@@ -103,23 +108,22 @@ def _install_debug_env(monkeypatch, controller: _FakeController, history_items: 
     async def _fake_history(controller_obj: object, resource_id: object, x: int, y: int, subresource: object):  # type: ignore[no-untyped-def]
         return history_items
 
-    monkeypatch.setattr(server.server_runtime, "_offload", _fake_offload)
-    monkeypatch.setattr(server.server_runtime, "_get_controller", _fake_get_controller)
-    monkeypatch.setattr(server.server_runtime, "_ensure_event", _fake_ensure_event)
-    monkeypatch.setattr(server.server_runtime, "_configure_texture_output_for_target", _fake_configure)
-    monkeypatch.setattr(server.server_runtime, "_pixel_history_raw", _fake_history)
-    monkeypatch.setattr(server.server_runtime, "pixel_history_input_attachment_conflict", lambda *args: None)
-    monkeypatch.setattr(server.server_runtime, "_output_target_resource_ids", lambda session_id, event_id: asyncio.sleep(0, result=[]))
-    monkeypatch.setattr(server.server_runtime, "_refresh_pixel_context", lambda session_id, x, y: asyncio.sleep(0))
-    monkeypatch.setattr(server.server_runtime, "_get_rd", lambda: SimpleNamespace(DebugPixelInputs=_FakeDebugInputs))
-    monkeypatch.setattr(server.server_runtime, "_session_manager", SimpleNamespace(get_output=lambda session_id: _FakeOutput()))
-    server._runtime.shader_debugs.clear()
+    monkeypatch.setattr(renderdoc_api, "_offload", _fake_offload)
+    monkeypatch.setattr(replay_access, "_get_controller", _fake_get_controller)
+    monkeypatch.setattr(replay_access, "_ensure_event", _fake_ensure_event)
+    monkeypatch.setattr(replay_access, "_configure_texture_output_for_target", _fake_configure)
+    monkeypatch.setattr(pixel_trace, "_pixel_history_raw", _fake_history)
+    monkeypatch.setattr(replay_facts, "pixel_history_input_attachment_conflict", lambda *args: None)
+    monkeypatch.setattr(replay_access, "_output_target_resource_ids", lambda session_id, event_id: asyncio.sleep(0, result=[]))
+    monkeypatch.setattr(pixel_trace, "_refresh_pixel_context", lambda session_id, x, y: asyncio.sleep(0))
+    monkeypatch.setattr(renderdoc_api, "_get_rd", lambda: SimpleNamespace(DebugPixelInputs=_FakeDebugInputs))
+    monkeypatch.setattr(live_state, "_session_manager", SimpleNamespace(get_output=lambda session_id: _FakeOutput()))
+    live_state._runtime.shader_debugs.clear()
 
 
 def test_debug_start_rejects_unsupported_pixel_history_and_restores_entry(monkeypatch) -> None:
     controller = _FakeController([])
     _install_debug_env(monkeypatch, controller, [])
-    runtime = server.server_runtime
     active = {"event": 19}
 
     async def ensure_event(session_id: str, event_id: int | None) -> int:
@@ -129,28 +133,27 @@ def test_debug_start_rejects_unsupported_pixel_history_and_restores_entry(monkey
     async def forbidden_native_call(*args: object) -> list[object]:
         raise AssertionError("Pixel History must not run for an invalid input attachment")
 
-    monkeypatch.setattr(runtime, "_ensure_event", ensure_event)
-    monkeypatch.setattr(runtime, "_active_event", lambda session_id: active["event"])
-    monkeypatch.setattr(runtime, "_runtime_context_id", lambda: "owned-context")
-    monkeypatch.setattr(runtime, "pixel_history_input_attachment_conflict", lambda *args: (7, 0x10))
-    monkeypatch.setattr(runtime, "_pixel_history_raw", forbidden_native_call)
-    payload = json.loads(asyncio.run(server._dispatch_shader("debug_start", {
+    monkeypatch.setattr(replay_access, "_ensure_event", ensure_event)
+    monkeypatch.setattr(replay_access, "_active_event", lambda session_id: active["event"])
+    monkeypatch.setattr(live_state, "_runtime_context_id", lambda: "owned-context")
+    monkeypatch.setattr(replay_facts, "pixel_history_input_attachment_conflict", lambda *args: (7, 0x10))
+    monkeypatch.setattr(pixel_trace, "_pixel_history_raw", forbidden_native_call)
+    payload = asyncio.run(shader_ops.dispatch("debug_start", {
         "session_id": "sess_test", "event_id": 5,
         "params": {"x": 1, "y": 2, "target": {"texture_id": "ResourceId::77"}},
-    })))
-    assert payload["success"] is False
-    assert payload["code"] == "pixel_history_unsupported_input_attachment"
-    assert payload["category"] == "capability"
-    assert payload["details"]["usage_event_id"] == 7
-    assert payload["details"]["replay_state_restored"] is True
-    assert payload["details"]["restored_event_id"] == active["event"] == 19
+    }))
+    assert payload.ok is False
+    assert payload.code == "pixel_history_unsupported_input_attachment"
+    assert payload.category == "capability"
+    assert payload.details["usage_event_id"] == 7
+    assert payload.details["replay_state_restored"] is True
+    assert payload.details["restored_event_id"] == active["event"] == 19
     assert controller.debug_calls == []
 
 
 def test_debug_start_skips_unsupported_implicit_target(monkeypatch) -> None:
     controller = _FakeController([_FakeTrace(debugger=object())])
     _install_debug_env(monkeypatch, controller, [])
-    runtime = server.server_runtime
     history_targets = []
 
     async def outputs(session_id: str, event_id: int):
@@ -163,16 +166,16 @@ def test_debug_start_skips_unsupported_implicit_target(monkeypatch) -> None:
         history_targets.append(resource_id)
         return [_FakeHistoryItem(11, 9)]
 
-    monkeypatch.setattr(runtime, "_output_target_resource_ids", outputs)
-    monkeypatch.setattr(runtime, "_configure_texture_output_for_target", configure)
-    monkeypatch.setattr(runtime, "_pixel_history_raw", history)
-    monkeypatch.setattr(runtime, "pixel_history_input_attachment_conflict",
+    monkeypatch.setattr(replay_access, "_output_target_resource_ids", outputs)
+    monkeypatch.setattr(replay_access, "_configure_texture_output_for_target", configure)
+    monkeypatch.setattr(pixel_trace, "_pixel_history_raw", history)
+    monkeypatch.setattr(replay_facts, "pixel_history_input_attachment_conflict",
                         lambda rd, controller_obj, rid: (17, 0x10) if rid == "unsupported" else None)
-    payload = json.loads(asyncio.run(server._dispatch_shader("debug_start", {
+    payload = asyncio.run(shader_ops.dispatch("debug_start", {
         "session_id": "sess_test", "event_id": 11, "params": {"x": 1, "y": 2},
-    })))
-    assert payload["success"] is True
-    assert payload["resolved_context"]["target"]["texture_id"] == "usable"
+    }))
+    assert payload.ok is True
+    assert payload.data['resolved_context']["target"]["texture_id"] == "usable"
     assert history_targets == ["usable"]
 
 
@@ -180,9 +183,8 @@ def test_debug_start_returns_structured_error_details(monkeypatch) -> None:
     controller = _FakeController([None])
     _install_debug_env(monkeypatch, controller, [_FakeHistoryItem(11, 9)])
 
-    payload = json.loads(
-        asyncio.run(
-            server._dispatch_shader(
+    payload = asyncio.run(
+            shader_ops.dispatch(
                 "debug_start",
                 {
                     "session_id": "sess_test",
@@ -199,19 +201,18 @@ def test_debug_start_returns_structured_error_details(monkeypatch) -> None:
                 },
             )
         )
-    )
 
-    assert payload["success"] is False
-    assert payload["code"] == "shader_debug_event_binding_unavailable"
-    assert payload["category"] == "capability"
-    assert payload["details"]["capability"] == "shader_debug"
-    assert "resolved_context" in payload["details"]
-    assert "pixel_history_summary" in payload["details"]
-    assert "attempts" in payload["details"]
-    assert "selected_target_source" in payload["details"]
-    assert payload["details"]["failure_stage"] == "debug_pixel"
-    assert payload["details"]["failure_reason"] == "invalid_trace"
-    assert payload["details"]["debug_attempt_count"] == 1
+    assert payload.ok is False
+    assert payload.code == "shader_debug_event_binding_unavailable"
+    assert payload.category == "capability"
+    assert payload.details["capability"] == "shader_debug"
+    assert "resolved_context" in payload.details
+    assert "pixel_history_summary" in payload.details
+    assert "attempts" in payload.details
+    assert "selected_target_source" in payload.details
+    assert payload.details["failure_stage"] == "debug_pixel"
+    assert payload.details["failure_reason"] == "invalid_trace"
+    assert payload.details["debug_attempt_count"] == 1
     assert controller.debug_calls[0] == {"x": 3, "y": 4, "sample": 7, "view": 8, "primitive": 9}
 
 
@@ -219,9 +220,8 @@ def test_debug_start_rejects_unsupported_mode_with_structured_validation_error(m
     controller = _FakeController([])
     _install_debug_env(monkeypatch, controller, [])
 
-    payload = json.loads(
-        asyncio.run(
-            server._dispatch_shader(
+    payload = asyncio.run(
+            shader_ops.dispatch(
                 "debug_start",
                 {
                     "session_id": "sess_test",
@@ -238,24 +238,22 @@ def test_debug_start_rejects_unsupported_mode_with_structured_validation_error(m
                 },
             )
         )
-    )
 
-    assert payload["success"] is False
-    assert payload["code"] == "validation_error"
-    assert payload["category"] == "validation"
-    assert payload["details"]["failure_stage"] == "mode_validation"
-    assert payload["details"]["failure_reason"] == "debug_mode_unsupported"
-    assert payload["details"]["requested_mode"] == "compute"
-    assert payload["details"]["supported_modes"] == ["pixel"]
+    assert payload.ok is False
+    assert payload.code == "validation_error"
+    assert payload.category == "validation"
+    assert payload.details["failure_stage"] == "mode_validation"
+    assert payload.details["failure_reason"] == "debug_mode_unsupported"
+    assert payload.details["requested_mode"] == "compute"
+    assert payload.details["supported_modes"] == ["pixel"]
 
 
 def test_debug_start_rejects_cross_event_fallback(monkeypatch) -> None:
     controller = _FakeController([None, None, None])
     _install_debug_env(monkeypatch, controller, [_FakeHistoryItem(17, 0)])
 
-    start = json.loads(
-        asyncio.run(
-            server._dispatch_shader(
+    start = asyncio.run(
+            shader_ops.dispatch(
                 "debug_start",
                 {
                     "session_id": "sess_test",
@@ -265,15 +263,14 @@ def test_debug_start_rejects_cross_event_fallback(monkeypatch) -> None:
                 },
             )
         )
-    )
-    assert start["success"] is False
-    assert start["code"] == "shader_debug_event_binding_unavailable"
-    assert start["details"]["capability"] == "shader_debug"
-    assert start["details"]["failure_stage"] == "pixel_history"
-    assert start["details"]["failure_reason"] == "cross_event_only"
+    assert start.ok is False
+    assert start.code == "shader_debug_event_binding_unavailable"
+    assert start.details["capability"] == "shader_debug"
+    assert start.details["failure_stage"] == "pixel_history"
+    assert start.details["failure_reason"] == "cross_event_only"
     assert any(
         "Cross-event shader debug fallback" in str(item.get("error") or "")
-        for item in start["details"]["attempts"]
+        for item in start.details["attempts"]
         if isinstance(item, dict)
     )
 
@@ -285,11 +282,10 @@ def test_debug_start_reports_target_configuration_failures(monkeypatch) -> None:
     async def _failing_configure(session_id: str, target: dict[str, object], *, event_id: int | None = None, sample_override: int | None = None):  # type: ignore[no-untyped-def]
         raise RuntimeError("no target available")
 
-    monkeypatch.setattr(server.server_runtime, "_configure_texture_output_for_target", _failing_configure)
+    monkeypatch.setattr(replay_access, "_configure_texture_output_for_target", _failing_configure)
 
-    payload = json.loads(
-        asyncio.run(
-            server._dispatch_shader(
+    payload = asyncio.run(
+            shader_ops.dispatch(
                 "debug_start",
                 {
                     "session_id": "sess_test",
@@ -299,23 +295,21 @@ def test_debug_start_reports_target_configuration_failures(monkeypatch) -> None:
                 },
             )
         )
-    )
 
-    assert payload["success"] is False
-    assert payload["code"] == "shader_debug_target_config_failed"
-    assert payload["category"] == "runtime"
-    assert payload["details"]["failure_stage"] == "configure_target"
-    assert payload["details"]["failure_reason"] == "all_targets_failed"
-    assert payload["details"]["target_config_failures"] >= 1
+    assert payload.ok is False
+    assert payload.code == "shader_debug_target_config_failed"
+    assert payload.category == "runtime"
+    assert payload.details["failure_stage"] == "configure_target"
+    assert payload.details["failure_reason"] == "all_targets_failed"
+    assert payload.details["target_config_failures"] >= 1
 
 
 def test_debug_start_reports_missing_debugger_handle(monkeypatch) -> None:
     controller = _FakeController([_FakeTrace()])
     _install_debug_env(monkeypatch, controller, [_FakeHistoryItem(11, 9)])
 
-    payload = json.loads(
-        asyncio.run(
-            server._dispatch_shader(
+    payload = asyncio.run(
+            shader_ops.dispatch(
                 "debug_start",
                 {
                     "session_id": "sess_test",
@@ -325,13 +319,12 @@ def test_debug_start_reports_missing_debugger_handle(monkeypatch) -> None:
                 },
             )
         )
-    )
 
-    assert payload["success"] is False
-    assert payload["code"] == "shader_debug_start_failed"
-    assert payload["category"] == "runtime"
-    assert payload["details"]["failure_stage"] == "trace_state"
-    assert payload["details"]["failure_reason"] == "debugger_handle_missing"
+    assert payload.ok is False
+    assert payload.code == "shader_debug_start_failed"
+    assert payload.category == "runtime"
+    assert payload.details["failure_stage"] == "trace_state"
+    assert payload.details["failure_reason"] == "debugger_handle_missing"
 
 
 def test_debug_start_accepts_native_trace_without_valid_field(monkeypatch) -> None:
@@ -339,9 +332,8 @@ def test_debug_start_accepts_native_trace_without_valid_field(monkeypatch) -> No
     controller = _FakeController([_FakeTrace(debugger=debugger)])
     _install_debug_env(monkeypatch, controller, [_FakeHistoryItem(11, 9)])
 
-    payload = json.loads(
-        asyncio.run(
-            server._dispatch_shader(
+    payload = asyncio.run(
+            shader_ops.dispatch(
                 "debug_start",
                 {
                     "session_id": "sess_test",
@@ -351,11 +343,10 @@ def test_debug_start_accepts_native_trace_without_valid_field(monkeypatch) -> No
                 },
             )
         )
-    )
 
-    assert payload["success"] is True
-    assert payload["resolved_event_id"] == 11
-    assert server._runtime.shader_debugs[payload["shader_debug_id"]].debugger is debugger
+    assert payload.ok is True
+    assert payload.data['resolved_event_id'] == 11
+    assert live_state._runtime.shader_debugs[payload.data['shader_debug_id']].debugger is debugger
 
 
 def test_debug_start_uses_event_output_before_unrelated_default_target(monkeypatch) -> None:
@@ -375,18 +366,18 @@ def test_debug_start_uses_event_output_before_unrelated_default_target(monkeypat
     async def _history(controller_obj: object, resource_id: str, x: int, y: int, subresource: object):
         return [_FakeHistoryItem(11, 14915)] if resource_id == "ResourceId::208" else []
 
-    monkeypatch.setattr(server.server_runtime, "_output_target_resource_ids", _event_outputs)
-    monkeypatch.setattr(server.server_runtime, "_configure_texture_output_for_target", _configure)
-    monkeypatch.setattr(server.server_runtime, "_pixel_history_raw", _history)
+    monkeypatch.setattr(replay_access, "_output_target_resource_ids", _event_outputs)
+    monkeypatch.setattr(replay_access, "_configure_texture_output_for_target", _configure)
+    monkeypatch.setattr(pixel_trace, "_pixel_history_raw", _history)
 
-    payload = json.loads(asyncio.run(server._dispatch_shader(
+    payload = asyncio.run(shader_ops.dispatch(
         "debug_start", {"session_id": "sess_test", "event_id": 11, "params": {"x": 5, "y": 6, "primitive": 14915}},
-    )))
+    ))
 
-    assert payload["success"] is True
-    assert payload["selected_target_source"] == "event.output[0]"
-    assert payload["resolved_context"]["target"]["texture_id"] == "ResourceId::208"
-    assert payload["pixel_history_summary"]["matched_event_hit_count"] == 1
+    assert payload.ok is True
+    assert payload.data['selected_target_source'] == "event.output[0]"
+    assert payload.data['resolved_context']["target"]["texture_id"] == "ResourceId::208"
+    assert payload.data['pixel_history_summary']["matched_event_hit_count"] == 1
     assert len(controller.debug_calls) == 1
 
 
@@ -394,14 +385,14 @@ def test_debug_start_uses_matching_default_when_event_has_no_listed_output(monke
     controller = _FakeController([_FakeTrace(debugger=object())])
     _install_debug_env(monkeypatch, controller, [_FakeHistoryItem(11, 14915)])
 
-    payload = json.loads(asyncio.run(server._dispatch_shader(
+    payload = asyncio.run(shader_ops.dispatch(
         "debug_start", {"session_id": "sess_test", "event_id": 11,
                         "params": {"x": 5, "y": 6, "primitive": 14915}},
-    )))
+    ))
 
-    assert payload["success"] is True
-    assert payload["selected_target_source"] == "default_target"
-    assert payload["pixel_history_summary"]["matched_event_hit_count"] == 1
+    assert payload.ok is True
+    assert payload.data['selected_target_source'] == "default_target"
+    assert payload.data['pixel_history_summary']["matched_event_hit_count"] == 1
 
 
 def test_debug_start_rejects_zero_hit_explicit_target_without_fallback(monkeypatch) -> None:
@@ -416,18 +407,18 @@ def test_debug_start_rejects_zero_hit_explicit_target_without_fallback(monkeypat
         configured_targets.append(target)
         return (str(target["texture_id"]), None, SimpleNamespace(mip=0, slice=0, sample=0))
 
-    monkeypatch.setattr(server.server_runtime, "_output_target_resource_ids", _event_outputs)
-    monkeypatch.setattr(server.server_runtime, "_configure_texture_output_for_target", _configure)
+    monkeypatch.setattr(replay_access, "_output_target_resource_ids", _event_outputs)
+    monkeypatch.setattr(replay_access, "_configure_texture_output_for_target", _configure)
 
-    payload = json.loads(asyncio.run(server._dispatch_shader(
+    payload = asyncio.run(shader_ops.dispatch(
         "debug_start", {"session_id": "sess_test", "event_id": 11,
                         "params": {"x": 5, "y": 6, "target": {"texture_id": "ResourceId::284"}}},
-    )))
+    ))
 
-    assert payload["success"] is False
-    assert payload["code"] == "shader_debug_event_binding_unavailable"
-    assert payload["details"]["failure_stage"] == "pixel_history"
-    assert payload["details"]["failure_reason"] == "no_event_hit"
+    assert payload.ok is False
+    assert payload.code == "shader_debug_event_binding_unavailable"
+    assert payload.details["failure_stage"] == "pixel_history"
+    assert payload.details["failure_reason"] == "no_event_hit"
     assert configured_targets == [{"texture_id": "ResourceId::284"}]
     assert controller.debug_calls == []
 
@@ -440,12 +431,11 @@ def test_debug_start_times_out_pixel_history(monkeypatch) -> None:
         await asyncio.sleep(0.05)
         return []
 
-    monkeypatch.setattr(server.server_runtime, "_pixel_history_raw", _slow_history)
-    monkeypatch.setattr(server.server_runtime, "PIXEL_HISTORY_TIMEOUT_S", 0.01)
+    monkeypatch.setattr(pixel_trace, "_pixel_history_raw", _slow_history)
+    monkeypatch.setattr(timeout_policy, "PIXEL_HISTORY_TIMEOUT_S", 0.01)
 
-    payload = json.loads(
-        asyncio.run(
-            server._dispatch_shader(
+    payload = asyncio.run(
+            shader_ops.dispatch(
                 "debug_start",
                 {
                     "session_id": "sess_test",
@@ -455,14 +445,13 @@ def test_debug_start_times_out_pixel_history(monkeypatch) -> None:
                 },
             )
         )
-    )
 
-    assert payload["success"] is False
-    assert payload["code"] == "shader_debug_start_failed"
-    assert payload["category"] == "runtime"
-    assert payload["details"]["failure_stage"] == "pixel_history"
-    assert payload["details"]["failure_reason"] == "pixel_history_timeout"
-    assert payload["details"]["pixel_history_timeout_count"] == 1
+    assert payload.ok is False
+    assert payload.code == "shader_debug_start_failed"
+    assert payload.category == "runtime"
+    assert payload.details["failure_stage"] == "pixel_history"
+    assert payload.details["failure_reason"] == "pixel_history_timeout"
+    assert payload.details["pixel_history_timeout_count"] == 1
 
 
 def test_texture_get_pixel_history_times_out(monkeypatch) -> None:
@@ -485,34 +474,32 @@ def test_texture_get_pixel_history_times_out(monkeypatch) -> None:
         await asyncio.sleep(0.05)
         return []
 
-    monkeypatch.setattr(server.server_runtime, "_get_controller", _fake_get_controller)
-    monkeypatch.setattr(server.server_runtime, "_ensure_event", _fake_ensure_event)
-    monkeypatch.setattr(server.server_runtime, "_resolve_texture_id", _fake_resolve_texture_id)
-    monkeypatch.setattr(server.server_runtime, "pixel_history_input_attachment_conflict", lambda *args: None)
-    monkeypatch.setattr(server.server_runtime, "_pixel_history_raw", _slow_history)
-    monkeypatch.setattr(server.server_runtime, "PIXEL_HISTORY_TIMEOUT_S", 0.01)
-    monkeypatch.setattr(server.server_runtime, "_get_rd", lambda: SimpleNamespace(Subresource=_FakeSubresource))
-    monkeypatch.setattr(server.server_runtime, "_render_service", object())
+    monkeypatch.setattr(replay_access, "_get_controller", _fake_get_controller)
+    monkeypatch.setattr(replay_access, "_ensure_event", _fake_ensure_event)
+    monkeypatch.setattr(replay_access, "_resolve_texture_id", _fake_resolve_texture_id)
+    monkeypatch.setattr(replay_facts, "pixel_history_input_attachment_conflict", lambda *args: None)
+    monkeypatch.setattr(pixel_trace, "_pixel_history_raw", _slow_history)
+    monkeypatch.setattr(timeout_policy, "PIXEL_HISTORY_TIMEOUT_S", 0.01)
+    monkeypatch.setattr(renderdoc_api, "_get_rd", lambda: SimpleNamespace(Subresource=_FakeSubresource))
+    monkeypatch.setattr(live_state, "_render_service", object())
 
-    payload = json.loads(
-        asyncio.run(
-            server._dispatch_texture(
+    payload = asyncio.run(
+            texture_ops.dispatch(
                 "get_pixel_history",
                 {"session_id": "sess_test", "texture_id": "ResourceId::77", "x": 1, "y": 2},
             )
         )
-    )
 
-    assert payload["success"] is False
-    assert payload["code"] == "pixel_history_timeout"
-    assert payload["category"] == "runtime"
-    assert payload["details"]["timeout_seconds"] == 0.01
-    assert payload["details"]["resolved_event_id"] == 11
+    assert payload.ok is False
+    assert payload.code == "pixel_history_timeout"
+    assert payload.category == "runtime"
+    assert payload.details["timeout_seconds"] == 0.01
+    assert payload.details["resolved_event_id"] == 11
 
 
 def test_removed_shader_hotfix_macro_is_not_dispatchable() -> None:
     payload = asyncio.run(
-        server.dispatch_operation(
+        dispatch.dispatch_operation(
             "rd.macro.shader_hotfix_validate",
             {"session_id": "sess_test"},
             transport="test",
@@ -524,14 +511,14 @@ def test_removed_shader_hotfix_macro_is_not_dispatchable() -> None:
 
 
 def test_capabilities_and_compile_error_are_structured() -> None:
-    caps = asyncio.run(server._core_capabilities(detail="full"))
+    caps = asyncio.run(core_ops._core_capabilities(detail="full"))
     assert "app_api" not in caps
     for key in ("remote", "shader_debug", "shader_replace", "mesh_post_transform", "shader_binary_export", "shader_compile", "counters"):
         entry = caps[key]
         assert set(("available", "reason", "optional", "source")).issubset(entry.keys())
 
     payload = asyncio.run(
-        server.dispatch_operation(
+        dispatch.dispatch_operation(
             "rd.shader.compile",
             {
                 "source_text": "float4 main() : SV_Target { return 0; }",
@@ -551,7 +538,7 @@ def test_capabilities_and_compile_error_are_structured() -> None:
         assert payload["error"]["code"] == "validation_error"
         assert "session_id" in str(payload["error"]["message"])
     finally:
-        asyncio.run(server.runtime_shutdown())
+        asyncio.run(runtime_lifecycle.runtime_shutdown())
 
 
 def test_shader_compile_source_path_normalization_adds_file_directory(tmp_path: Path) -> None:
@@ -562,7 +549,7 @@ def test_shader_compile_source_path_normalization_adds_file_directory(tmp_path: 
     shader_path = shader_dir / "full_replace.hlsl"
     shader_path.write_text("#include \"common.hlsl\"\nfloat4 main() : SV_Target { return 1; }\n", encoding="utf-8")
 
-    payload = server.server_runtime._normalize_shader_source_input(
+    payload = shader_patches._normalize_shader_source_input(
         {
             "source_path": str(shader_path),
             "include_dirs": [str(include_dir)],
@@ -578,7 +565,7 @@ def test_shader_compile_source_path_normalization_adds_file_directory(tmp_path: 
 
 def test_shader_compile_rejects_removed_ambiguous_source_parameter() -> None:
     with pytest.raises(ValueError, match="source_text or source_path"):
-        server.server_runtime._normalize_shader_source_input(
+        shader_patches._normalize_shader_source_input(
             {"source": "float4 main() : SV_Target { return 0; }"}
         )
 
@@ -586,29 +573,27 @@ def test_shader_compile_rejects_removed_ambiguous_source_parameter() -> None:
 @pytest.mark.parametrize("dispatch,action", [("shader", "get_debug_state"), ("debug", "step")])
 @pytest.mark.parametrize("owner", [None, "another-replay"])
 def test_invalid_debug_handle_rejected_before_any_native_effect(monkeypatch, dispatch, action, owner):
-    runtime = server.server_runtime
     handles = {} if owner is None else {"trace-old": SimpleNamespace(session_id=owner)}
-    monkeypatch.setattr(runtime._runtime, "shader_debugs", handles)
+    monkeypatch.setattr(live_state._runtime, "shader_debugs", handles)
     async def forbidden(*args, **kwargs):
         raise AssertionError("Invalid handle must not access controller or change event")
-    monkeypatch.setattr(runtime, "_get_controller", forbidden)
-    monkeypatch.setattr(runtime, "_ensure_event", forbidden)
-    handler = server._dispatch_shader if dispatch == "shader" else server._dispatch_debug
-    payload = json.loads(asyncio.run(handler(action,
-        {"session_id": "current-replay", "shader_debug_id": "trace-old", "event_id": 42})))
-    assert payload["success"] is False
-    assert payload["code"] == "shader_debug_handle_invalid"
-    assert payload["category"] == "validation"
-    assert payload["details"]["effects_attempted"] is False
-    assert payload["details"]["context_preserved"] is True
-    assert payload["details"]["failure_reason"] == ("unknown_handle" if owner is None else "session_mismatch")
+    monkeypatch.setattr(replay_access, "_get_controller", forbidden)
+    monkeypatch.setattr(replay_access, "_ensure_event", forbidden)
+    handler = shader_ops.dispatch if dispatch == "shader" else debug_ops.dispatch
+    payload = asyncio.run(handler(action,
+        {"session_id": "current-replay", "shader_debug_id": "trace-old", "event_id": 42}))
+    assert payload.ok is False
+    assert payload.code == "shader_debug_handle_invalid"
+    assert payload.category == "validation"
+    assert payload.details["effects_attempted"] is False
+    assert payload.details["context_preserved"] is True
+    assert payload.details["failure_reason"] == ("unknown_handle" if owner is None else "session_mismatch")
 
 
 def test_current_debug_handle_retains_state_and_event_contract(monkeypatch):
-    runtime = server.server_runtime
-    handle = runtime.ShaderDebugHandle("trace-current", "current-replay", "pixel", 42, SimpleNamespace(inputs=[]), object(),
+    handle = live_state.ShaderDebugHandle("trace-current", "current-replay", "pixel", 42, SimpleNamespace(inputs=[]), object(),
                                      current_state=SimpleNamespace(stepIndex=29))
-    monkeypatch.setattr(runtime._runtime, "shader_debugs", {"trace-current": handle})
+    monkeypatch.setattr(live_state._runtime, "shader_debugs", {"trace-current": handle})
     events = []
     async def ensure(session_id, event_id):
         events.append((session_id, event_id))
@@ -617,12 +602,12 @@ def test_current_debug_handle_retains_state_and_event_contract(monkeypatch):
         return SimpleNamespace(GetPipelineState=lambda: None)
     async def offload(fn, *args):
         return fn(*args)
-    monkeypatch.setattr(runtime, "_ensure_event", ensure)
-    monkeypatch.setattr(runtime, "_get_controller", controller)
-    monkeypatch.setattr(runtime, "_offload", offload)
-    payload = json.loads(asyncio.run(server._dispatch_shader("get_debug_state",
-        {"session_id": "current-replay", "shader_debug_id": "trace-current", "event_id": 42})))
-    assert payload["success"] is True
-    assert payload["state"]["pc"] == 29
-    assert payload["resolved_event_id"] == 42
+    monkeypatch.setattr(replay_access, "_ensure_event", ensure)
+    monkeypatch.setattr(replay_access, "_get_controller", controller)
+    monkeypatch.setattr(renderdoc_api, "_offload", offload)
+    payload = asyncio.run(shader_ops.dispatch("get_debug_state",
+        {"session_id": "current-replay", "shader_debug_id": "trace-current", "event_id": 42}))
+    assert payload.ok is True
+    assert payload.data['state']["pc"] == 29
+    assert payload.data['resolved_event_id'] == 42
     assert events == [("current-replay", 42)]

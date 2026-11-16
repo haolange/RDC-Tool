@@ -5,12 +5,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from rdc_tool import server
 from test_resource_identity_details import ResourceId, install
+from rdc_tool.runtime import dispatch
 
 
 def invoke(**args):
-    return asyncio.run(server.dispatch_operation("rd.resource.list_all", {
+    return asyncio.run(dispatch.dispatch_operation("rd.resource.list_all", {
         "session_id": "sess_demo", **args,
     }, transport="test"))
 

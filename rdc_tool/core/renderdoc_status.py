@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-from rdc_tool.core.errors import RuntimeToolError
 
 
 def status_ok(status: Any, rd_module: Any | None = None) -> bool:
@@ -79,26 +78,3 @@ def build_renderdoc_error_details(
     }
 
 
-def raise_renderdoc_error(
-    status: Any,
-    *,
-    operation: str,
-    source_layer: str,
-    backend_type: str,
-    capture_context: Optional[Dict[str, Any]] = None,
-    classification: str = "renderdoc_status",
-    fix_hint: str = "Inspect the RenderDoc status and capture context before retrying.",
-) -> None:
-    details = build_renderdoc_error_details(
-        status,
-        operation=operation,
-        source_layer=source_layer,
-        backend_type=backend_type,
-        capture_context=capture_context,
-        classification=classification,
-        fix_hint=fix_hint,
-    )
-    raise RuntimeToolError(
-        f"{operation} failed with status: {details['renderdoc_status']['status_text']}",
-        details=details,
-    )

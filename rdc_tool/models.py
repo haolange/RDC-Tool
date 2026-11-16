@@ -50,56 +50,6 @@ class ShaderStage(str, Enum):
     AS = "as"
 
 
-class BugType(str, Enum):
-    NANINF = "naninf"
-    PRECISION = "precision"
-    BINDING_ERROR = "binding_error"
-    TRANSPARENCY = "transparency"
-    VERTEX_DEFORM = "vertex_deform"
-    COLORSPACE = "colorspace"
-    PERFORMANCE = "performance"
-    UNKNOWN = "unknown"
-
-
-class VerifierType(str, Enum):
-    NANINF = "naninf"
-    IMAGE_DIFF = "image_diff"
-    PIXEL_STATS = "pixel_stats"
-    BINDING_DIFF = "binding_diff"
-    COUNTER_ANOMALY = "counter_anomaly"
-    CUSTOM = "custom"
-
-
-class PatchType(str, Enum):
-    PRECISION = "precision"
-    GUARD = "guard"
-    EXPR_REPLACE = "expr_replace"
-
-
-class ExperimentStatus(str, Enum):
-    PENDING = "pending"
-    RUNNING = "running"
-    COMPLETED = "completed"
-    FAILED = "failed"
-
-
-class VerdictResult(str, Enum):
-    IMPROVED = "improved"
-    FIXED = "fixed"
-    REJECTED = "rejected"
-    INCONCLUSIVE = "inconclusive"
-    ERROR = "error"
-
-
-class BisectStrategy(str, Enum):
-    BINARY = "binary"
-    DDMIN = "ddmin"
-
-
-# ---------------------------------------------------------------------------
-# 通用响应封装（response envelope）
-# ---------------------------------------------------------------------------
-
 class ArtifactRef(BaseModel):
     uri: str
     sha256: str
@@ -113,17 +63,6 @@ class ErrorDetail(BaseModel):
     message: str
     details: Optional[Dict[str, Any]] = None
 
-
-class ToolResponse(BaseModel):
-    ok: bool
-    trace_id: str = Field(default_factory=lambda: _new_id("trc"))
-    error: Optional[ErrorDetail] = None
-    artifact: Optional[ArtifactRef] = None
-
-
-# ---------------------------------------------------------------------------
-# Session（会话）
-# ---------------------------------------------------------------------------
 
 class SessionCapabilities(BaseModel):
     api: GraphicsAPI = GraphicsAPI.UNKNOWN
@@ -181,44 +120,7 @@ class EventNode(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Anomaly（异常）
-# ---------------------------------------------------------------------------
-
-class BBox(BaseModel):
-    x0: int
-    y0: int
-    x1: int
-    y1: int
-
-
-class AnomalyInfo(BaseModel):
-    anomaly_id: str = Field(default_factory=lambda: _new_id("anom"))
-    type: str = "naninf"
-    bbox: Optional[BBox] = None
-    nan_count: int = 0
-    inf_count: int = 0
-    total_pixels: int = 0
-    density: float = 0.0
-    stats: Dict[str, Any] = Field(default_factory=dict)
-    mask_artifact: Optional[ArtifactRef] = None
-
-
-# ---------------------------------------------------------------------------
-# Hypothesis（假设）
-# ---------------------------------------------------------------------------
-
-class Hypothesis(BaseModel):
-    hypothesis_id: str = Field(default_factory=lambda: _new_id("hyp"))
-    title: str
-    description: str = ""
-    bug_types: List[BugType] = Field(default_factory=list)
-    proposed_patches: List[str] = Field(default_factory=list)  # PatchSpec references
-    priority_score: float = 0.0
-    result: Optional[VerdictResult] = None
-
-
-# ---------------------------------------------------------------------------
-# Pipeline / Shader
+# Pipeline（管线）
 # ---------------------------------------------------------------------------
 
 class ShaderInfo(BaseModel):
@@ -303,18 +205,6 @@ class PipelineSnapshot(BaseModel):
     vertex_inputs: List[Dict[str, Any]] = Field(default_factory=list)
 
 
-class ShaderExportBundle(BaseModel):
-    shader_id: str
-    stage: ShaderStage
-    entry_point: str = "main"
-    encoding: str = ""
-    reflection_artifact: Optional[ArtifactRef] = None
-    disasm_artifact: Optional[ArtifactRef] = None
-    ir_artifact: Optional[ArtifactRef] = None
-    source_artifact: Optional[ArtifactRef] = None
-    compile_flags: List[str] = Field(default_factory=list)
-
-
 # ---------------------------------------------------------------------------
 # Patch（补丁）
 # ---------------------------------------------------------------------------
@@ -374,79 +264,7 @@ class PatchResult(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Experiment（实验）
-# ---------------------------------------------------------------------------
-
-class VerifierConfig(BaseModel):
-    type: VerifierType = VerifierType.NANINF
-    params: Dict[str, Any] = Field(default_factory=dict)
-
-
-class ExperimentDef(BaseModel):
-    experiment_id: str = Field(default_factory=lambda: _new_id("exp"))
-    session_id: str = ""
-    capture_id: str = ""
-    event_id: int = 0
-    verifier: VerifierConfig = Field(default_factory=VerifierConfig)
-    patch_id: Optional[str] = None
-    description: str = ""
-
-
-class ExperimentEvidence(BaseModel):
-    experiment_id: str
-    before_artifact: Optional[ArtifactRef] = None
-    after_artifact: Optional[ArtifactRef] = None
-    before_metrics: Dict[str, Any] = Field(default_factory=dict)
-    after_metrics: Dict[str, Any] = Field(default_factory=dict)
-    verifier_passed: bool = False
-    verdict: VerdictResult = VerdictResult.INCONCLUSIVE
-    notes: str = ""
-
-
-class ExperimentResult(BaseModel):
-    experiment_id: str
-    status: ExperimentStatus = ExperimentStatus.COMPLETED
-    evidence: Optional[ExperimentEvidence] = None
-    duration_seconds: float = 0.0
-    created_at: float = Field(default_factory=_ts)
-
-
-# ---------------------------------------------------------------------------
-# Bisect（二分定位）
-# ---------------------------------------------------------------------------
-
-class BisectRange(BaseModel):
-    lo: int
-    hi: int
-
-
-class ConfidenceWeights(BaseModel):
-    sharpness: float = 0.50
-    consistency: float = 0.35
-    range_factor: float = 0.15
-
-
-class ConfidenceBreakdown(BaseModel):
-    sharpness: float = 0.0
-    consistency: float = 0.0
-    range_factor: float = 0.0
-    weighted_total: float = 0.0
-
-
-class BisectResult(BaseModel):
-    first_bad_event_id: int
-    first_good_event_id: int
-    evidence_chain: List[str] = Field(default_factory=list)
-    confidence: float = 0.0
-    iterations: int = 0
-    confidence_breakdown: ConfidenceBreakdown = Field(default_factory=ConfidenceBreakdown)
-    confidence_weights: ConfidenceWeights = Field(default_factory=ConfidenceWeights)
-    confidence_profile: str = "default"
-    boundary_consistent_count: int = 0
-
-
-# ---------------------------------------------------------------------------
-# Performance counters（性能计数器）
+# Performance（性能）
 # ---------------------------------------------------------------------------
 
 class CounterSample(BaseModel):
@@ -469,104 +287,3 @@ class PerfResult(BaseModel):
     samples: List[CounterSample] = Field(default_factory=list)
     summaries: List[CounterSummary] = Field(default_factory=list)
     anomaly_events: List[int] = Field(default_factory=list)
-
-
-# ---------------------------------------------------------------------------
-# Report（报告）
-# ---------------------------------------------------------------------------
-
-class ReportBundle(BaseModel):
-    task_id: str
-    bug_types: List[BugType] = Field(default_factory=list)
-    capture_info: Optional[CaptureInfo] = None
-    first_bad_event_id: Optional[int] = None
-    first_good_event_id: Optional[int] = None
-    bbox: Optional[BBox] = None
-    verifier_metrics: Dict[str, Any] = Field(default_factory=dict)
-    hypotheses_tried: List[Hypothesis] = Field(default_factory=list)
-    fix_candidate: Optional[Dict[str, Any]] = None
-    confidence: float = 0.0
-    evidence_artifacts: Dict[str, str] = Field(default_factory=dict)
-    pipeline_snapshot: Optional[PipelineSnapshot] = None
-    experiments: List[ExperimentResult] = Field(default_factory=list)
-    created_at: float = Field(default_factory=_ts)
-
-
-# ---------------------------------------------------------------------------
-# Knowledge / Fingerprint（知识/指纹）
-# ---------------------------------------------------------------------------
-
-class PassFingerprint(BaseModel):
-    fingerprint_id: str = Field(default_factory=lambda: _new_id("fp"))
-    rt_formats: List[str] = Field(default_factory=list)
-    blend_modes: List[str] = Field(default_factory=list)
-    depth_mode: str = ""
-    binding_pattern: List[str] = Field(default_factory=list)
-    output_change_pattern: str = ""
-    tags: List[str] = Field(default_factory=list)
-
-
-class ShaderFingerprint(BaseModel):
-    fingerprint_id: str = Field(default_factory=lambda: _new_id("sfp"))
-    shader_hash: str = ""
-    resource_names: List[str] = Field(default_factory=list)
-    slot_pattern: List[int] = Field(default_factory=list)
-    ir_kgram_hashes: List[str] = Field(default_factory=list)
-    constant_signatures: List[str] = Field(default_factory=list)
-    tags: List[str] = Field(default_factory=list)
-
-
-class FingerprintRecord(BaseModel):
-    record_id: str = Field(default_factory=lambda: _new_id("fpr"))
-    task_id: str = ""
-    pass_fp: Optional[PassFingerprint] = None
-    shader_fp: Optional[ShaderFingerprint] = None
-    bug_type: BugType = BugType.UNKNOWN
-    verdict: VerdictResult = VerdictResult.INCONCLUSIVE
-    project_id: str = ""
-    engine_branch: str = ""
-    fingerprint_version: int = 1
-    created_at: float = Field(default_factory=_ts)
-
-
-class RegressionEntry(BaseModel):
-    entry_id: str = Field(default_factory=lambda: _new_id("reg"))
-    capture_hash: str = ""
-    first_bad_event_id: int = 0
-    verifier_config: VerifierConfig = Field(default_factory=VerifierConfig)
-    patch_id: Optional[str] = None
-    expected_metrics: Dict[str, Any] = Field(default_factory=dict)
-    project_id: str = ""
-    created_at: float = Field(default_factory=_ts)
-
-
-# ---------------------------------------------------------------------------
-# Task（顶层）
-# ---------------------------------------------------------------------------
-
-class TaskInput(BaseModel):
-    rdc_path: str
-    description: str
-    reference_image_path: Optional[str] = None
-    expected_image_path: Optional[str] = None
-    bug_type_hints: List[BugType] = Field(default_factory=list)
-    backend_type: BackendType = BackendType.LOCAL
-    project_id: str = ""
-    extra: Dict[str, Any] = Field(default_factory=dict)
-
-
-class TaskState(BaseModel):
-    task_id: str = Field(default_factory=lambda: _new_id("task"))
-    input: TaskInput
-    session_id: Optional[str] = None
-    capture_id: Optional[str] = None
-    current_skill: str = ""
-    anomalies: List[AnomalyInfo] = Field(default_factory=list)
-    hypotheses: List[Hypothesis] = Field(default_factory=list)
-    experiments: List[ExperimentResult] = Field(default_factory=list)
-    bisect_result: Optional[BisectResult] = None
-    pipeline: Optional[PipelineSnapshot] = None
-    report: Optional[ReportBundle] = None
-    status: str = "created"
-    created_at: float = Field(default_factory=_ts)
-    updated_at: float = Field(default_factory=_ts)

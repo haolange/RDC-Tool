@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import sys
 from pathlib import Path
@@ -7,46 +8,47 @@ from pathlib import Path
 import pytest
 
 from rdc_tool import cli
+from rdc_tool.context_snapshot import normalize_context_id
 from rdc_tool.daemon import client as daemon_client
+from rdc_tool.daemon import state as daemon_state
+from rdc_tool.runtime_paths import cli_runtime_dir
 
 
 def test_idle_daemon_retains_context_with_owned_replay_or_remote(monkeypatch, tmp_path: Path) -> None:
     from rdc_tool.context_snapshot import save_context_snapshot
-    from rdc_tool.daemon.client import _context_has_unreleased_resources
+    from rdc_tool.daemon.client import context_has_unreleased_resources
     from rdc_tool.runtime_state import save_context_state
 
     monkeypatch.setenv("RDC_TOOL_INTERMEDIATE_ROOT", str(tmp_path / "intermediate"))
     context = "ctx-idle-owner"
-    assert _context_has_unreleased_resources(context) is False
+    assert context_has_unreleased_resources(context) is False
 
     save_context_state({"sessions": {"sess-owned": {"session_id": "sess-owned", "backend_type": "remote"}}}, context)
-    assert _context_has_unreleased_resources(context) is True
+    assert context_has_unreleased_resources(context) is True
 
     save_context_state({}, context)
     save_context_snapshot({"remote": {"state": "live_handle", "remote_id": "remote-owned"}}, context)
-    assert _context_has_unreleased_resources(context) is True
+    assert context_has_unreleased_resources(context) is True
 
     save_context_snapshot({}, context)
-    assert _context_has_unreleased_resources(context) is False
+    assert context_has_unreleased_resources(context) is False
 
 
 def _configure_runtime_dir(monkeypatch, tmp_path: Path) -> None:
-    state_dir = tmp_path / "runtime"
-    state_dir.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr(daemon_client, "STATE_DIR", state_dir)
-    monkeypatch.setattr(daemon_client, "DAEMON_STATE_FILE", state_dir / "daemon_state.json")
-    monkeypatch.setattr(daemon_client, "SESSION_STATE_FILE", state_dir / "session_state.json")
+    monkeypatch.setenv("RDC_TOOL_INTERMEDIATE_ROOT", str(tmp_path))
+    cli_runtime_dir().mkdir(parents=True, exist_ok=True)
 
 
 def _configure_context_artifact_paths(monkeypatch, tmp_path: Path) -> Path:
-    state_dir = tmp_path / "runtime"
+    state_dir = cli_runtime_dir()
     state_dir.mkdir(parents=True, exist_ok=True)
 
     def _ctx_path(prefix: str, suffix: str, context: str = "default") -> Path:
-        ctx = daemon_client._normalize_context(context)
+        ctx = normalize_context_id(context)
         if ctx == "default":
             return state_dir / f"{prefix}{suffix}"
-        return state_dir / f"{prefix}_{daemon_client._sanitize_context(ctx)}{suffix}"
+        token = "".join(ch if ch.isalnum() or ch in ("-", "_", ".") else "_" for ch in ctx)
+        return state_dir / f"{prefix}_{token}{suffix}"
 
     monkeypatch.setattr(daemon_client, "context_state_path", lambda context="default": _ctx_path("runtime_state", ".json", context))
     monkeypatch.setattr(daemon_client, "context_snapshot_path", lambda context="default": _ctx_path("context_snapshot", ".json", context))
@@ -55,31 +57,15 @@ def _configure_context_artifact_paths(monkeypatch, tmp_path: Path) -> Path:
     return state_dir
 
 
-def test_session_state_isolated_by_context(monkeypatch, tmp_path: Path) -> None:
-    _configure_runtime_dir(monkeypatch, tmp_path)
-
-    daemon_client.save_session_state({"session_id": "sess-default"}, context="default")
-    daemon_client.save_session_state({"session_id": "sess-custom"}, context="demo ctx")
-
-    default_path = daemon_client.session_state_path("default")
-    custom_path = daemon_client.session_state_path("demo ctx")
-
-    assert default_path.name == "session_state.json"
-    assert custom_path.name == "session_state_demo_ctx.json"
-    assert daemon_client.load_session_state(context="default")["session_id"] == "sess-default"
-    assert daemon_client.load_session_state(context="demo ctx")["session_id"] == "sess-custom"
-
-
 def test_cleanup_stale_daemon_state_removes_dead_pid(monkeypatch, tmp_path: Path) -> None:
     _configure_runtime_dir(monkeypatch, tmp_path)
 
-    state_path = daemon_client.STATE_DIR / "daemon_state_dead.json"
+    state_path = cli_runtime_dir() / "daemon_state_dead.json"
     state_path.write_text(
         json.dumps(
             {
                 "context_id": "dead",
-                "daemon_context": "dead",
-                "pipe_name": "pipe-dead",
+                "endpoint": "pipe-dead",
                 "token": "token-dead",
                 "pid": 99999,
                 "started_at": "2026-03-06T00:00:00+00:00",
@@ -92,16 +78,13 @@ def test_cleanup_stale_daemon_state_removes_dead_pid(monkeypatch, tmp_path: Path
         ),
         encoding="utf-8",
     )
-    daemon_client.save_session_state({"session_id": "stale"}, context="dead")
 
-    monkeypatch.setattr(daemon_client, "_is_process_running", lambda pid: False)
+    monkeypatch.setattr(daemon_client.process, "is_alive", lambda identity: False)
 
     cleaned = daemon_client.cleanup_stale_daemon_states()
 
     assert "daemon_state_dead.json" in cleaned["state_files"]
-    assert "session_state_dead.json" in cleaned["session_files"]
     assert not state_path.exists()
-    assert not daemon_client.session_state_path("dead").exists()
 
 
 @pytest.mark.parametrize("worker_alive", [True, False])
@@ -109,18 +92,15 @@ def test_dead_daemon_replacement_waits_for_recorded_worker_exit(monkeypatch, tmp
     _configure_runtime_dir(monkeypatch, tmp_path)
     _configure_context_artifact_paths(monkeypatch, tmp_path)
     context = "dead-daemon-worker"
-    daemon_client.save_daemon_state({
-        "pid": 100, "pipe_name": "isolated", "token": "test",
+    daemon_state.save_state({
+        "pid": 100, "endpoint": "isolated", "token": "test",
         "worker": {"pid": 200, "running": True},
     }, context)
-    daemon_client.save_session_state({"session_id": "owned-session"}, context)
-    state_path = daemon_client._daemon_state_path(context)
-    session_path = daemon_client.session_state_path(context)
+    state_path = daemon_client.state_path(context)
     state_bytes = state_path.read_bytes()
-    session_bytes = session_path.read_bytes()
-    monkeypatch.setattr(daemon_client, "_is_process_running", lambda pid: worker_alive and pid == 200)
-    monkeypatch.setattr(daemon_client, "_kill_process", lambda pid: False)
-    monkeypatch.setattr(daemon_client, "_wait_for_pid_exit", lambda *args: False)
+    monkeypatch.setattr(daemon_client.process, "is_alive", lambda identity: worker_alive and identity.pid == 200)
+    monkeypatch.setattr(daemon_client.process, "kill_tree", lambda identity: False)
+    monkeypatch.setattr(daemon_client.process, "wait_exit", lambda *args, **kwargs: False)
     monkeypatch.setattr(daemon_client, "owner_is_busy", lambda *args: False)
     def spawn(*args, **kwargs):
         if worker_alive:
@@ -133,7 +113,6 @@ def test_dead_daemon_replacement_waits_for_recorded_worker_exit(monkeypatch, tmp
         assert exc.value.code == "daemon_owner_unavailable"
         assert exc.value.details["reason"] == "worker_exit_unconfirmed"
         assert state_path.read_bytes() == state_bytes
-        assert session_path.read_bytes() == session_bytes
     else:
         # A nonzero PID in the receipt does not block replacement once that
         # process is confirmed gone. This intercepts spawning before execution.
@@ -145,44 +124,38 @@ def test_dead_daemon_replacement_waits_for_recorded_worker_exit(monkeypatch, tmp
 def test_dead_daemon_replacement_preserves_state_retained_by_cleanup(monkeypatch, tmp_path: Path) -> None:
     _configure_runtime_dir(monkeypatch, tmp_path)
     context = "retained-owner"
-    daemon_client.save_daemon_state({"pid": 100, "pipe_name": "isolated", "token": "test"}, context)
-    daemon_client.save_session_state({"session_id": "owned-session"}, context)
-    state_path = daemon_client._daemon_state_path(context)
-    session_path = daemon_client.session_state_path(context)
-    state_bytes, session_bytes = state_path.read_bytes(), session_path.read_bytes()
-    monkeypatch.setattr(daemon_client, "_is_process_running", lambda pid: False)
+    daemon_state.save_state({"pid": 100, "endpoint": "isolated", "token": "test"}, context)
+    state_path = daemon_client.state_path(context)
+    state_bytes = state_path.read_bytes()
+    monkeypatch.setattr(daemon_client.process, "is_alive", lambda identity: False)
     monkeypatch.setattr(daemon_client, "owner_is_busy", lambda *args: False)
     monkeypatch.setattr(daemon_client, "cleanup_stale_daemon_states", lambda context=None: {})
     monkeypatch.setattr(daemon_client.subprocess, "Popen", lambda *a, **kw: pytest.fail("retained owner must not be replaced"))
     with pytest.raises(daemon_client.DaemonOwnerUnavailable, match="owner_exit_unconfirmed"):
         daemon_client.ensure_daemon(context=context)
     assert state_path.read_bytes() == state_bytes
-    assert session_path.read_bytes() == session_bytes
 
 
-def test_clear_context_without_daemon_clears_session(monkeypatch, tmp_path: Path) -> None:
+def test_clear_context_without_daemon_clears_context_files(monkeypatch, tmp_path: Path) -> None:
     _configure_runtime_dir(monkeypatch, tmp_path)
 
-    daemon_client.save_session_state({"session_id": "sess-x"}, context="ctx-x")
     ok, message, details = daemon_client.clear_context("ctx-x")
 
     assert ok is True
     assert "context cleared" in message
     assert details["state"] == {}
-    assert not daemon_client.session_state_path("ctx-x").exists()
 
 
 
 def test_cleanup_stale_daemon_state_skips_invalid_json(monkeypatch, tmp_path: Path) -> None:
     _configure_runtime_dir(monkeypatch, tmp_path)
 
-    state_path = daemon_client.STATE_DIR / "daemon_state_busy.json"
+    state_path = cli_runtime_dir() / "daemon_state_busy.json"
     state_path.write_text('{"context_id":', encoding="utf-8")
 
     cleaned = daemon_client.cleanup_stale_daemon_states()
 
     assert cleaned["state_files"] == []
-    assert cleaned["session_files"] == []
     assert state_path.exists()
 
 
@@ -194,7 +167,6 @@ def test_cleanup_stale_daemon_states_clears_orphan_context_artifacts(monkeypatch
         state_dir / "runtime_state_orphan.json",
         state_dir / "context_snapshot_orphan.json",
         state_dir / "runtime_logs_orphan.jsonl",
-        state_dir / "session_state_orphan.json",
         state_dir / "worker_state_orphan.json",
     ]
     for path in orphan_paths:
@@ -207,7 +179,6 @@ def test_cleanup_stale_daemon_states_clears_orphan_context_artifacts(monkeypatch
     assert "runtime_state_orphan.json" in cleaned["context_files"]
     assert "context_snapshot_orphan.json" in cleaned["snapshot_files"]
     assert "runtime_logs_orphan.jsonl" in cleaned["log_files"]
-    assert "session_state_orphan.json" in cleaned["session_files"]
     assert "worker_state_orphan.json" in cleaned["worker_files"]
     assert all(not path.exists() for path in orphan_paths)
 
@@ -217,21 +188,19 @@ def test_dead_daemon_preserves_unreleased_replay_and_refuses_false_clear(monkeyp
     state_dir = _configure_context_artifact_paths(monkeypatch, tmp_path)
     context = "owned"
     daemon_path = state_dir / "daemon_state_owned.json"
-    daemon_path.write_text(json.dumps({"context_id": context, "pid": 99999, "pipe_name": "dead-owned", "token": "test-nonce"}), encoding="utf-8")
+    daemon_path.write_text(json.dumps({"context_id": context, "pid": 99999, "endpoint": "dead-owned", "token": "test-nonce"}), encoding="utf-8")
     runtime_path = state_dir / "runtime_state_owned.json"
     runtime_path.write_text(json.dumps({"sessions": {"sess-owned": {"session_id": "sess-owned"}}}), encoding="utf-8")
     snapshot_path = state_dir / "context_snapshot_owned.json"
     snapshot_path.write_text(json.dumps({"remote": {"state": "expired", "remote_id": "remote-owned",
                                                     "bootstrap": {"started_activity": True, "created_forward": True}}}), encoding="utf-8")
-    daemon_client.save_session_state({"session_id": "sess-owned"}, context=context)
-    monkeypatch.setattr(daemon_client, "_is_process_running", lambda pid: False)
+    monkeypatch.setattr(daemon_client.process, "is_alive", lambda identity: False)
     monkeypatch.setattr(daemon_client, "list_context_ids", lambda: [context])
 
     cleaned = daemon_client.cleanup_stale_daemon_states()
     assert daemon_path.name in cleaned["state_files"]
     assert not daemon_path.exists()
     assert runtime_path.exists() and snapshot_path.exists()
-    assert daemon_client.session_state_path(context).exists()
     assert cleaned["context_files"] == cleaned["snapshot_files"] == []
 
     ok, message, details = daemon_client.clear_context(context)
@@ -268,12 +237,12 @@ def test_save_daemon_state_uses_atomic_replace(monkeypatch, tmp_path: Path) -> N
 
     monkeypatch.setattr(daemon_client.os, "replace", _spy_replace)
 
-    daemon_client.save_daemon_state({"pid": 42, "token": "tok", "pipe_name": "pipe", "context_id": "ctx"}, context="ctx")
+    daemon_state.save_state({"pid": 42, "token": "tok", "endpoint": "pipe", "context_id": "ctx"}, context="ctx")
 
-    state = daemon_client.load_daemon_state(context="ctx")
+    state = daemon_client.load_state(context="ctx")
     assert state["pid"] == 42
     assert calls
-    assert not list(daemon_client.STATE_DIR.glob("*.tmp"))
+    assert not list(cli_runtime_dir().glob("*.tmp"))
 
 
 def test_stop_daemon_uses_loaded_state_before_cleanup(monkeypatch, tmp_path: Path) -> None:
@@ -281,21 +250,20 @@ def test_stop_daemon_uses_loaded_state_before_cleanup(monkeypatch, tmp_path: Pat
 
     calls: list[tuple[int, str]] = []
     cleared: list[str] = []
-    state = {"pid": 321, "context_id": "ctx-live", "token": "tok", "pipe_name": "pipe-live"}
+    state = {"pid": 321, "context_id": "ctx-live", "token": "tok", "endpoint": "pipe-live"}
 
-    monkeypatch.setattr(daemon_client, "load_daemon_state", lambda context="default": dict(state) if context == "ctx-live" else {})
+    monkeypatch.setattr(daemon_client, "load_state", lambda context="default": dict(state) if context == "ctx-live" else {})
     monkeypatch.setattr(daemon_client, "cleanup_stale_daemon_states", lambda context=None: (_ for _ in ()).throw(AssertionError("cleanup should not run before stop uses loaded state")))
-    monkeypatch.setattr(daemon_client, "_shutdown_stateful_daemon", lambda pid, loaded, context: calls.append((pid, context)) or True)
-    monkeypatch.setattr(daemon_client, "_is_process_running", lambda pid: False)
-    monkeypatch.setattr(daemon_client, "clear_daemon_state", lambda context="default", **kwargs: cleared.append(f"daemon:{context}"))
-    monkeypatch.setattr(daemon_client, "clear_session_state", lambda context="default": cleared.append(f"session:{context}"))
+    monkeypatch.setattr(daemon_client, "_shutdown_stateful_daemon", lambda daemon, loaded, context: calls.append((daemon.pid, context)) or True)
+    monkeypatch.setattr(daemon_client.process, "is_alive", lambda identity: False)
+    monkeypatch.setattr(daemon_client, "clear_state", lambda context="default", **kwargs: cleared.append(f"daemon:{context}"))
 
     ok, message = daemon_client.stop_daemon("ctx-live")
 
     assert ok is True
     assert message == "daemon stopped"
     assert calls == [(321, "ctx-live")]
-    assert cleared == ["daemon:ctx-live", "session:ctx-live"]
+    assert cleared == ["daemon:ctx-live"]
 
 
 def test_daemon_stop_cli_confirms_exact_context_and_completion(monkeypatch, capsys) -> None:
@@ -342,7 +310,7 @@ def test_attach_client_forwards_owner_pid(monkeypatch, tmp_path: Path) -> None:
 
     def _ensure(**kwargs):
         captured.update(kwargs)
-        return True, "ok", {"pid": 1, "token": "tok", "pipe_name": "pipe", "context_id": kwargs["context"]}
+        return True, "ok", {"pid": 1, "token": "tok", "endpoint": "pipe", "context_id": kwargs["context"]}
 
     monkeypatch.setattr(daemon_client, "ensure_daemon", _ensure)
     monkeypatch.setattr(
@@ -369,17 +337,16 @@ def test_stop_daemon_kills_recorded_worker_for_same_context(monkeypatch, tmp_pat
         "pid": 11,
         "context_id": "ctx-live",
         "token": "tok",
-        "pipe_name": "pipe-live",
+        "endpoint": "pipe-live",
         "worker": {"pid": 22},
     }
-    monkeypatch.setattr(daemon_client, "load_daemon_state", lambda context="default": dict(state) if context == "ctx-live" else {})
+    monkeypatch.setattr(daemon_client, "load_state", lambda context="default": dict(state) if context == "ctx-live" else {})
     monkeypatch.setattr(daemon_client, "cleanup_stale_daemon_states", lambda context=None: {})
     monkeypatch.setattr(daemon_client, "_shutdown_stateful_daemon", lambda *args, **kwargs: True)
-    monkeypatch.setattr(daemon_client, "_is_process_running", lambda pid: pid == 22)
-    monkeypatch.setattr(daemon_client, "_kill_process", lambda pid: killed.append(pid) or True)
-    monkeypatch.setattr(daemon_client, "_wait_for_pid_exit", lambda pid, timeout: True)
-    monkeypatch.setattr(daemon_client, "clear_daemon_state", lambda context="default", **kwargs: None)
-    monkeypatch.setattr(daemon_client, "clear_session_state", lambda context="default": None)
+    monkeypatch.setattr(daemon_client.process, "is_alive", lambda identity: identity.pid == 22)
+    monkeypatch.setattr(daemon_client.process, "kill_tree", lambda identity: killed.append(identity.pid) or True)
+    monkeypatch.setattr(daemon_client.process, "wait_exit", lambda identity, timeout: True)
+    monkeypatch.setattr(daemon_client, "clear_state", lambda context="default", **kwargs: None)
     monkeypatch.setattr(daemon_client, "clear_worker_state", lambda context="default": None)
 
     ok, message = daemon_client.stop_daemon("ctx-live")
@@ -393,8 +360,8 @@ def test_clear_context_does_not_stop_daemon(monkeypatch, tmp_path: Path) -> None
     stopped: list[str] = []
     monkeypatch.setattr(
         daemon_client,
-        "load_daemon_state",
-        lambda context="default": {"pid": 1, "token": "tok", "pipe_name": "pipe", "context_id": context},
+        "load_state",
+        lambda context="default": {"pid": 1, "token": "tok", "endpoint": "pipe", "context_id": context},
     )
     monkeypatch.setattr(
         daemon_client,
@@ -402,7 +369,6 @@ def test_clear_context_does_not_stop_daemon(monkeypatch, tmp_path: Path) -> None
         lambda method, **kwargs: {"ok": True, "result": {"released": {}}} if method == "clear_context" else (_ for _ in ()).throw(AssertionError(method)),
     )
     monkeypatch.setattr(daemon_client, "stop_daemon", lambda context="default": stopped.append(context) or (True, "no"))
-    monkeypatch.setattr(daemon_client, "clear_session_state", lambda context="default": None)
     monkeypatch.setattr(daemon_client, "clear_context_snapshot", lambda context="default": None)
     monkeypatch.setattr(daemon_client, "clear_context_state", lambda context="default": None)
     ok, message, _details = daemon_client.clear_context("ctx-keep")
@@ -415,17 +381,16 @@ def test_stop_daemon_does_not_kill_other_context_worker(monkeypatch, tmp_path: P
     _configure_runtime_dir(monkeypatch, tmp_path)
     killed: list[int] = []
     states = {
-        "ctx-live": {"pid": 11, "context_id": "ctx-live", "token": "tok", "pipe_name": "pipe-live", "worker": {"pid": 22}},
-        "ctx-other": {"pid": 33, "context_id": "ctx-other", "token": "tok", "pipe_name": "pipe-other", "worker": {"pid": 44}},
+        "ctx-live": {"pid": 11, "context_id": "ctx-live", "token": "tok", "endpoint": "pipe-live", "worker": {"pid": 22}},
+        "ctx-other": {"pid": 33, "context_id": "ctx-other", "token": "tok", "endpoint": "pipe-other", "worker": {"pid": 44}},
     }
-    monkeypatch.setattr(daemon_client, "load_daemon_state", lambda context="default": dict(states.get(context, {})))
+    monkeypatch.setattr(daemon_client, "load_state", lambda context="default": dict(states.get(context, {})))
     monkeypatch.setattr(daemon_client, "cleanup_stale_daemon_states", lambda context=None: {})
     monkeypatch.setattr(daemon_client, "_shutdown_stateful_daemon", lambda *args, **kwargs: True)
-    monkeypatch.setattr(daemon_client, "_is_process_running", lambda pid: pid in {22, 44})
-    monkeypatch.setattr(daemon_client, "_kill_process", lambda pid: killed.append(pid) or True)
-    monkeypatch.setattr(daemon_client, "_wait_for_pid_exit", lambda pid, timeout: True)
-    monkeypatch.setattr(daemon_client, "clear_daemon_state", lambda context="default", **kwargs: None)
-    monkeypatch.setattr(daemon_client, "clear_session_state", lambda context="default": None)
+    monkeypatch.setattr(daemon_client.process, "is_alive", lambda identity: identity.pid in {22, 44})
+    monkeypatch.setattr(daemon_client.process, "kill_tree", lambda identity: killed.append(identity.pid) or True)
+    monkeypatch.setattr(daemon_client.process, "wait_exit", lambda identity, timeout: True)
+    monkeypatch.setattr(daemon_client, "clear_state", lambda context="default", **kwargs: None)
     monkeypatch.setattr(daemon_client, "clear_worker_state", lambda context="default": None)
 
     ok, message = daemon_client.stop_daemon("ctx-live")
@@ -437,10 +402,10 @@ def test_stop_daemon_does_not_kill_other_context_worker(monkeypatch, tmp_path: P
 def test_ensure_daemon_forwards_owner_pid_to_existing_zero_owner(monkeypatch, tmp_path: Path) -> None:
     _configure_runtime_dir(monkeypatch, tmp_path)
     claimed: dict[str, object] = {}
-    existing = {"pid": 77, "token": "tok", "pipe_name": "pipe", "context_id": "ctx-a", "owner_pid": 0}
+    existing = {"pid": 77, "token": "tok", "endpoint": "pipe", "context_id": "ctx-a", "owner_pid": 0}
     monkeypatch.setattr(daemon_client, "cleanup_stale_daemon_states", lambda context=None: {})
-    monkeypatch.setattr(daemon_client, "load_daemon_state", lambda context="default": dict(existing))
-    monkeypatch.setattr(daemon_client, "_is_process_running", lambda pid: pid == 77)
+    monkeypatch.setattr(daemon_client, "load_state", lambda context="default": dict(existing))
+    monkeypatch.setattr(daemon_client.process, "is_alive", lambda identity: identity.pid == 77)
 
     def _request(method, **kwargs):
         if method == "claim_owner":
@@ -461,7 +426,6 @@ def test_ensure_daemon_forwards_owner_pid_to_existing_zero_owner(monkeypatch, tm
 
 def test_dead_owner_exits_live_daemon_process(monkeypatch, tmp_path: Path) -> None:
     import subprocess
-    import time
 
     try:
         from rdc_tool.daemon import server as _daemon_server
@@ -473,10 +437,6 @@ def test_dead_owner_exits_live_daemon_process(monkeypatch, tmp_path: Path) -> No
     state_dir = intermediate / "runtime" / "rdc_tool_cli"
     state_dir.mkdir(parents=True)
     monkeypatch.setenv("RDC_TOOL_INTERMEDIATE_ROOT", str(intermediate))
-    monkeypatch.setenv("RDC_TOOL_ROOT", str(Path(__file__).resolve().parents[1]))
-    monkeypatch.setattr(daemon_client, "STATE_DIR", state_dir)
-    monkeypatch.setattr(daemon_client, "DAEMON_STATE_FILE", state_dir / "daemon_state.json")
-    monkeypatch.setattr(daemon_client, "SESSION_STATE_FILE", state_dir / "session_state.json")
 
     dummy = subprocess.Popen(
         [sys.executable, "-c", "import time; time.sleep(120)"],
@@ -486,21 +446,18 @@ def test_dead_owner_exits_live_daemon_process(monkeypatch, tmp_path: Path) -> No
     )
     owner = int(dummy.pid)
     try:
-        ok, _message, state = daemon_client.start_daemon(
+        ok, _message, state = daemon_client.ensure_daemon(
             context="ctx-owner-reap",
             owner_pid=owner,
             lease_timeout_seconds=1,
             idle_timeout_seconds=900,
         )
         assert ok is True
-        daemon_pid = int(state.get("pid") or 0)
-        assert daemon_pid > 0
+        daemon = daemon_client.daemon_process(state)
+        assert daemon.pid > 0 and daemon.birth
         dummy.kill()
         dummy.wait(timeout=5)
-        deadline = time.time() + 8
-        while time.time() < deadline and daemon_client._is_process_running(daemon_pid):
-            time.sleep(0.2)
-        assert not daemon_client._is_process_running(daemon_pid)
+        assert daemon_client.process.wait_exit(daemon, 8)
     finally:
         if dummy.poll() is None:
             dummy.kill()
@@ -517,9 +474,9 @@ def test_daemon_request_timeout_returns_structured_details(monkeypatch, tmp_path
     _configure_runtime_dir(monkeypatch, tmp_path)
 
     class _FakeClient:
-        def __init__(self, *, address: str, family: str) -> None:
-            self.address = address
-            self.family = family
+        def __init__(self, endpoint, *, authkey: bytes) -> None:
+            self.address = endpoint.address
+            self.authkey = authkey
 
         def send(self, payload: dict[str, object]) -> None:
             return None
@@ -531,7 +488,7 @@ def test_daemon_request_timeout_returns_structured_details(monkeypatch, tmp_path
             return None
 
     state = {
-        "pipe_name": "pipe-demo",
+        "endpoint": "pipe-demo",
         "token": "tok-demo",
         "context_id": "ctx-demo",
         "active_operation": {"operation": "rd.capture.open_replay", "trace_id": "trace-1", "transport": "cli"},
@@ -540,7 +497,7 @@ def test_daemon_request_timeout_returns_structured_details(monkeypatch, tmp_path
         "capture_file_id": "capf-demo",
         "active_request_count": 1,
     }
-    daemon_client.save_daemon_state(
+    daemon_state.save_state(
         {
             **state,
             "active_operation": {"operation": "rd.capture.open_replay", "trace_id": "trace-2", "transport": "cli"},
@@ -553,7 +510,7 @@ def test_daemon_request_timeout_returns_structured_details(monkeypatch, tmp_path
         context="ctx-demo",
     )
 
-    monkeypatch.setattr(daemon_client, "Client", _FakeClient)
+    monkeypatch.setattr(daemon_client.ipc, "connect", _FakeClient)
 
     try:
         daemon_client.daemon_request(
@@ -591,19 +548,19 @@ def test_idle_client_cleanup_preserves_owned_daemon(monkeypatch, tmp_path: Path,
         daemon_client.context_snapshot_path(context).write_text(json.dumps({"remote": {"state": "live_handle", "remote_id": "owned"}}), encoding="utf-8")
     elif resource == "unreadable":
         daemon_client.context_state_path(context).write_text("{invalid", encoding="utf-8")
-    state = {"context_id": context, "pid": 321, "owner_pid": 654, "pipe_name": "owned-pipe", "token": "test-only",
+    state = {"context_id": context, "pid": 321, "owner_pid": 654, "endpoint": "owned-pipe", "token": "test-only",
         "last_activity_at": "2026-03-06T00:00:00+00:00", "idle_timeout_seconds": 900,
         "active_request_count": int(resource == "active_request")}
-    daemon_client.save_daemon_state(state, context)
-    monkeypatch.setattr(daemon_client, "_is_process_running", lambda pid: pid in {321, 654})
-    monkeypatch.setattr(daemon_client, "_wait_for_pid_exit", lambda *args: True)
+    daemon_state.save_state(state, context)
+    monkeypatch.setattr(daemon_client.process, "is_alive", lambda identity: identity.pid in {321, 654})
+    monkeypatch.setattr(daemon_client.process, "wait_exit", lambda *args, **kwargs: True)
     requests = []
     def request(method, **kwargs):
         requests.append(method)
         return {"ok": True, "result": {"running": True, "state": state}}
     monkeypatch.setattr(daemon_client, "daemon_request", request)
     monkeypatch.setattr(daemon_client.subprocess, "Popen", lambda *args, **kwargs: pytest.fail("must preserve original daemon"))
-    assert not daemon_client._state_should_reap(daemon_client.load_daemon_state(context))
+    assert not daemon_client._state_should_reap(daemon_client.load_state(context))
     cleaned = daemon_client.cleanup_stale_daemon_states(context)
     assert cleaned["state_files"] == cleaned["killed_pids"] == []
     ok, _, current = daemon_client.ensure_daemon(context=context, owner_pid=654)
@@ -613,8 +570,8 @@ def test_idle_client_cleanup_preserves_owned_daemon(monkeypatch, tmp_path: Path,
 
 @pytest.mark.parametrize("owner_alive,has_resources,expected", [(True, False, True), (False, True, True)])
 def test_idle_cleanup_still_reaps_empty_or_orphaned_daemon(monkeypatch, owner_alive, has_resources, expected):
-    monkeypatch.setattr(daemon_client, "_is_process_running", lambda pid: pid == 321 or owner_alive)
-    monkeypatch.setattr(daemon_client, "_context_has_unreleased_resources", lambda context: has_resources)
+    monkeypatch.setattr(daemon_client.process, "is_alive", lambda identity: identity.pid == 321 or owner_alive)
+    monkeypatch.setattr(daemon_client, "context_has_unreleased_resources", lambda context: has_resources)
     state = {"context_id": "test-only", "pid": 321, "owner_pid": 654,
         "last_activity_at": "2026-03-06T00:00:00+00:00", "idle_timeout_seconds": 900, "lease_timeout_seconds": 120}
     assert daemon_client._state_should_reap(state) is expected
@@ -629,7 +586,7 @@ def test_concurrent_ensure_daemon_publishes_one_owner(monkeypatch, tmp_path: Pat
     spawned = []
 
     def spawn(*args, **kwargs):
-        proc = type('Process', (), {'pid': 7100 + len(spawned)})()
+        proc = type('Process', (), {'pid': 7100 + len(spawned), 'stdin': io.StringIO()})()
         spawned.append(proc.pid)
         first_spawned.set()
         return proc
@@ -637,12 +594,12 @@ def test_concurrent_ensure_daemon_publishes_one_owner(monkeypatch, tmp_path: Pat
     def ready(state):
         assert release_start.wait(3)
         # Readiness is published by the daemon, never by a client RPC response.
-        daemon_client.save_daemon_state(state, context='same-context')
+        daemon_state.save_state(state, context='same-context')
         return True
 
     monkeypatch.setattr(daemon_client.subprocess, 'Popen', spawn)
     monkeypatch.setattr(daemon_client, '_wait_for_daemon_ready', ready)
-    monkeypatch.setattr(daemon_client, '_is_process_running', lambda pid: pid > 0)
+    monkeypatch.setattr(daemon_client.process, 'is_alive', lambda identity: identity.pid > 0)
     monkeypatch.setattr(daemon_client, 'daemon_request', lambda method, **kw: {'ok': True, 'result': {'state': kw['state']}})
     with ThreadPoolExecutor(max_workers=2) as executor:
         one = executor.submit(daemon_client.ensure_daemon, context='same-context', owner_pid=9000)
@@ -672,12 +629,11 @@ def test_daemon_start_lock_is_process_scoped_and_released(monkeypatch, tmp_path:
 import sys
 from pathlib import Path
 from rdc_tool.daemon import client
-client.STATE_DIR = Path(sys.argv[1])
 with client._locked_daemon_start('shared'):
     print('locked', flush=True)
     sys.stdin.readline()
 """
-    child = subprocess.Popen([sys.executable, '-c', code, str(daemon_client.STATE_DIR)],
+    child = subprocess.Popen([sys.executable, '-c', code, str(cli_runtime_dir())],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
     acquired = threading.Event()
     def acquire():

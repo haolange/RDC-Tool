@@ -7,38 +7,41 @@ from types import SimpleNamespace
 
 import pytest
 
-from rdc_tool import server
 from rdc_tool.context_snapshot import clear_context_snapshot, load_context_snapshot
-from rdc_tool.preview_window import fit_content_rect, fit_size_within_bounds
+from rdc_tool.preview_geometry import fit_size_within_bounds
 from rdc_tool.runtime_state import clear_context_state, load_context_state, save_context_state
+from rdc_tool.context_snapshot import normalize_context_id
+from rdc_tool.runtime import context_records, dispatch, envelope, live_state, preview_sync, renderdoc_api, replay_access, session_recovery, truth_matrix, visual_target
+from rdc_tool.runtime.operations import export as export_ops
+from rdc_tool.runtime.operations import texture as texture_ops
 
 
 @pytest.fixture(autouse=True)
 def _reset_preview_runtime() -> None:
-    original_snapshots = dict(server._runtime.context_snapshots)
-    original_states = dict(server._runtime.context_states)
-    original_previews = dict(server._runtime.previews)
-    original_hydrated = set(server._runtime.hydrated_contexts)
-    original_logs = list(server._runtime.logs)
+    original_snapshots = dict(live_state._runtime.context_snapshots)
+    original_states = dict(live_state._runtime.context_states)
+    original_previews = dict(live_state._runtime.previews)
+    original_hydrated = set(live_state._runtime.hydrated_contexts)
+    original_logs = list(live_state._runtime.logs)
     for context_id in ("default", "ctx-preview"):
         clear_context_snapshot(context_id)
         clear_context_state(context_id)
-    server._runtime.context_snapshots.clear()
-    server._runtime.context_states.clear()
-    server._runtime.previews.clear()
-    server._runtime.hydrated_contexts.clear()
-    server._runtime.logs.clear()
+    live_state._runtime.context_snapshots.clear()
+    live_state._runtime.context_states.clear()
+    live_state._runtime.previews.clear()
+    live_state._runtime.hydrated_contexts.clear()
+    live_state._runtime.logs.clear()
     try:
         yield
     finally:
         for context_id in ("default", "ctx-preview"):
             clear_context_snapshot(context_id)
             clear_context_state(context_id)
-        server._runtime.context_snapshots = original_snapshots
-        server._runtime.context_states = original_states
-        server._runtime.previews = original_previews
-        server._runtime.hydrated_contexts = original_hydrated
-        server._runtime.logs = original_logs
+        live_state._runtime.context_snapshots = original_snapshots
+        live_state._runtime.context_states = original_states
+        live_state._runtime.previews = original_previews
+        live_state._runtime.hydrated_contexts = original_hydrated
+        live_state._runtime.logs = original_logs
 
 
 def test_context_snapshot_and_state_preview_defaults() -> None:
@@ -61,12 +64,12 @@ def test_context_snapshot_and_state_preview_defaults() -> None:
 
 def test_get_context_exposes_preview_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _fake_ready(context_id: str):  # type: ignore[no-untyped-def]
-        return server.server_runtime._context_state(context_id)
+        return context_records._context_state(context_id)
 
-    monkeypatch.setattr(server.server_runtime, "ensure_context_ready", _fake_ready)
+    monkeypatch.setattr(session_recovery, "ensure_context_ready", _fake_ready)
 
     payload = asyncio.run(
-        server.dispatch_operation(
+        dispatch.dispatch_operation(
             "rd.session.get_context",
             {"context_id": "ctx-preview"},
             transport="test",
@@ -110,12 +113,12 @@ def test_open_preview_rejects_non_current_session(monkeypatch: pytest.MonkeyPatc
     )
 
     async def _fake_ready(context_id: str):  # type: ignore[no-untyped-def]
-        return server.server_runtime._context_state(context_id)
+        return context_records._context_state(context_id)
 
-    monkeypatch.setattr(server.server_runtime, "ensure_context_ready", _fake_ready)
+    monkeypatch.setattr(session_recovery, "ensure_context_ready", _fake_ready)
 
     payload = asyncio.run(
-        server.dispatch_operation(
+        dispatch.dispatch_operation(
             "rd.session.open_preview",
             {"context_id": "ctx-preview", "session_id": "sess_other"},
             transport="test",
@@ -156,10 +159,10 @@ def test_open_preview_failure_does_not_leave_enabled_intent(monkeypatch: pytest.
     )
 
     async def _fake_ready(context_id: str):  # type: ignore[no-untyped-def]
-        return server.server_runtime._context_state(context_id)
+        return context_records._context_state(context_id)
 
     async def _fake_ensure_live_session(session_id: str):  # type: ignore[no-untyped-def]
-        return server.ReplayHandle(session_id=str(session_id), capture_file_id="capf_preview", frame_index=0, active_event_id=23)
+        return live_state.ReplayHandle(session_id=str(session_id), capture_file_id="capf_preview", frame_index=0, active_event_id=23)
 
     async def _fake_get_controller(session_id: str):  # type: ignore[no-untyped-def]
         return SimpleNamespace()
@@ -169,20 +172,20 @@ def test_open_preview_failure_does_not_leave_enabled_intent(monkeypatch: pytest.
         return [action], [action], {23: action}
 
     async def _fake_create_preview_binding(context_id: str, *, title: str):  # type: ignore[no-untyped-def]
-        raise server.server_runtime._preview_error(
+        raise visual_target._preview_error(
             "preview_window_create_failed",
             "Failed to create preview window: test",
             context_id=context_id,
         )
 
-    monkeypatch.setattr(server.server_runtime, "ensure_context_ready", _fake_ready)
-    monkeypatch.setattr(server.server_runtime, "_ensure_live_session", _fake_ensure_live_session)
-    monkeypatch.setattr(server.server_runtime, "_get_controller", _fake_get_controller)
-    monkeypatch.setattr(server.server_runtime, "_load_action_index", _fake_load_action_index)
-    monkeypatch.setattr(server.server_runtime, "_create_preview_binding", _fake_create_preview_binding)
+    monkeypatch.setattr(session_recovery, "ensure_context_ready", _fake_ready)
+    monkeypatch.setattr(replay_access, "_ensure_live_session", _fake_ensure_live_session)
+    monkeypatch.setattr(replay_access, "_get_controller", _fake_get_controller)
+    monkeypatch.setattr(replay_access, "_load_action_index", _fake_load_action_index)
+    monkeypatch.setattr(preview_sync, "_create_preview_binding", _fake_create_preview_binding)
 
     payload = asyncio.run(
-        server.dispatch_operation(
+        dispatch.dispatch_operation(
             "rd.session.open_preview",
             {"context_id": "ctx-preview"},
             transport="test",
@@ -239,16 +242,16 @@ def test_close_preview_clears_enabled_intent(monkeypatch: pytest.MonkeyPatch) ->
     )
 
     async def _fake_ready(context_id: str):  # type: ignore[no-untyped-def]
-        return server.server_runtime._context_state(context_id)
+        return context_records._context_state(context_id)
 
     async def _fake_close_preview_binding(context_id=None, *, close_window=True):  # type: ignore[no-untyped-def]
         return None
 
-    monkeypatch.setattr(server.server_runtime, "ensure_context_ready", _fake_ready)
-    monkeypatch.setattr(server.server_runtime, "_close_preview_binding", _fake_close_preview_binding)
+    monkeypatch.setattr(session_recovery, "ensure_context_ready", _fake_ready)
+    monkeypatch.setattr(preview_sync, "_close_preview_binding", _fake_close_preview_binding)
 
     payload = asyncio.run(
-        server.dispatch_operation(
+        dispatch.dispatch_operation(
             "rd.session.close_preview",
             {"context_id": "ctx-preview"},
             transport="test",
@@ -290,14 +293,14 @@ def test_open_preview_uses_selected_context(monkeypatch: pytest.MonkeyPatch) -> 
     )
 
     async def _fake_ready(context_id: str):  # type: ignore[no-untyped-def]
-        return server.server_runtime._context_state(context_id)
+        return context_records._context_state(context_id)
 
     async def _fake_sync_preview(context_id=None, *, strict=False, enable_intent=None):  # type: ignore[no-untyped-def]
-        ctx = server.server_runtime.normalize_context_id(context_id or "ctx-preview")
-        state = server.server_runtime._context_state(ctx)
-        preview = server.server_runtime._preview_update_payload(
+        ctx = normalize_context_id(context_id or "ctx-preview")
+        state = context_records._context_state(ctx)
+        preview = preview_sync._preview_update_payload(
             ctx,
-            server.server_runtime._preview_state_value(ctx),
+            preview_sync._preview_state_value(ctx),
             enabled=True,
             state_name="live",
             bound_session_id=str(state.get("current_session_id") or ""),
@@ -305,7 +308,7 @@ def test_open_preview_uses_selected_context(monkeypatch: pytest.MonkeyPatch) -> 
             bound_event_id=23,
             backend="local",
             last_error="",
-            display=server.server_runtime._preview_display_state(
+            display=preview_sync._preview_display_state(
                 output_slot=0,
                 texture_id="ResourceId::55",
                 texture_format="R8G8B8A8_UNORM",
@@ -317,13 +320,13 @@ def test_open_preview_uses_selected_context(monkeypatch: pytest.MonkeyPatch) -> 
                 window_rect={"width": 640, "height": 360},
             ),
         )
-        return server.server_runtime._store_preview_state(ctx, preview)
+        return preview_sync._store_preview_state(ctx, preview)
 
-    monkeypatch.setattr(server.server_runtime, "ensure_context_ready", _fake_ready)
-    monkeypatch.setattr(server.server_runtime, "_sync_context_preview", _fake_sync_preview)
+    monkeypatch.setattr(session_recovery, "ensure_context_ready", _fake_ready)
+    monkeypatch.setattr(preview_sync, "_sync_context_preview", _fake_sync_preview)
 
     opened = asyncio.run(
-        server.dispatch_operation(
+        dispatch.dispatch_operation(
             "rd.session.open_preview",
             {"context_id": "ctx-preview"},
             transport="test",
@@ -382,14 +385,14 @@ def test_choose_visual_output_target_uses_event_binding_texture_when_outputs_are
             "has_any_inf": False,
         }
 
-    monkeypatch.setattr(server.server_runtime, "_output_target_resource_ids", _fake_output_targets)
-    monkeypatch.setattr(server.server_runtime, "_offload", _inline_offload)
-    monkeypatch.setattr(server.server_runtime, "_get_controller", _fake_get_controller)
-    monkeypatch.setattr(server.server_runtime, "_pipeline_service", _FakePipelineService())
-    monkeypatch.setattr(server.server_runtime, "_render_service", SimpleNamespace(get_texture_stats=_fake_get_texture_stats))
+    monkeypatch.setattr(replay_access, "_output_target_resource_ids", _fake_output_targets)
+    monkeypatch.setattr(renderdoc_api, "_offload", _inline_offload)
+    monkeypatch.setattr(replay_access, "_get_controller", _fake_get_controller)
+    monkeypatch.setattr(live_state, "_pipeline_service", _FakePipelineService())
+    monkeypatch.setattr(live_state, "_render_service", SimpleNamespace(get_texture_stats=_fake_get_texture_stats))
 
     texture_id, texture_desc, output_slot, target_source = asyncio.run(
-        server.server_runtime._choose_visual_output_target(
+        visual_target._choose_visual_output_target(
             "sess-preview",
             66,
         )
@@ -418,11 +421,11 @@ def test_choose_visual_output_target_honors_requested_rt_index(
             ),
         )
 
-    monkeypatch.setattr(server.server_runtime, "_output_target_resource_ids", _fake_output_targets)
-    monkeypatch.setattr(server.server_runtime, "_get_texture_descriptor", _fake_get_texture_descriptor)
+    monkeypatch.setattr(replay_access, "_output_target_resource_ids", _fake_output_targets)
+    monkeypatch.setattr(replay_access, "_get_texture_descriptor", _fake_get_texture_descriptor)
 
     texture_id, texture_desc, output_slot, target_source = asyncio.run(
-        server.server_runtime._choose_visual_output_target(
+        visual_target._choose_visual_output_target(
             "sess-preview",
             1847,
             target={"rt_index": 0},
@@ -441,11 +444,11 @@ def test_choose_visual_output_target_rejects_missing_explicit_rt_index(
     async def _fake_output_targets(session_id: str, event_id: int | None):  # type: ignore[no-untyped-def]
         return []
 
-    monkeypatch.setattr(server.server_runtime, "_output_target_resource_ids", _fake_output_targets)
+    monkeypatch.setattr(replay_access, "_output_target_resource_ids", _fake_output_targets)
 
     with pytest.raises(Exception) as exc_info:
         asyncio.run(
-            server.server_runtime._choose_visual_output_target(
+            visual_target._choose_visual_output_target(
                 "sess-preview",
                 1847,
                 target={"rt_index": 0},
@@ -468,12 +471,12 @@ def test_choose_visual_output_target_rejects_unrelated_texture_when_event_has_no
     async def _unexpected_descriptor(*args: object, **kwargs: object):  # type: ignore[no-untyped-def]
         raise AssertionError("an unrelated texture must never become framebuffer evidence")
 
-    monkeypatch.setattr(server.server_runtime, "_output_target_resource_ids", _no_output_targets)
-    monkeypatch.setattr(server.server_runtime, "_binding_texture_candidates_for_event", _no_event_bindings)
-    monkeypatch.setattr(server.server_runtime, "_get_texture_descriptor", _unexpected_descriptor)
+    monkeypatch.setattr(replay_access, "_output_target_resource_ids", _no_output_targets)
+    monkeypatch.setattr(replay_access, "_binding_texture_candidates_for_event", _no_event_bindings)
+    monkeypatch.setattr(replay_access, "_get_texture_descriptor", _unexpected_descriptor)
 
     with pytest.raises(Exception) as exc_info:
-        asyncio.run(server.server_runtime._choose_visual_output_target("sess-preview", 3029))
+        asyncio.run(visual_target._choose_visual_output_target("sess-preview", 3029))
 
     assert getattr(exc_info.value, "code", "") == "preview_event_output_unavailable"
     assert "no previewable output target" in str(getattr(exc_info.value, "message", ""))
@@ -512,12 +515,12 @@ def test_choose_visual_output_target_defaults_to_rt0_before_visual_scoring(
             "has_any_inf": False,
         }
 
-    monkeypatch.setattr(server.server_runtime, "_output_target_resource_ids", _fake_output_targets)
-    monkeypatch.setattr(server.server_runtime, "_get_texture_descriptor", _fake_get_texture_descriptor)
-    monkeypatch.setattr(server.server_runtime, "_render_service", SimpleNamespace(get_texture_stats=_fake_get_texture_stats))
+    monkeypatch.setattr(replay_access, "_output_target_resource_ids", _fake_output_targets)
+    monkeypatch.setattr(replay_access, "_get_texture_descriptor", _fake_get_texture_descriptor)
+    monkeypatch.setattr(live_state, "_render_service", SimpleNamespace(get_texture_stats=_fake_get_texture_stats))
 
     texture_id, texture_desc, output_slot, target_source = asyncio.run(
-        server.server_runtime._choose_visual_output_target(
+        visual_target._choose_visual_output_target(
             "sess-preview",
             1847,
         )
@@ -558,12 +561,12 @@ def test_choose_visual_output_target_scores_available_slot_when_rt0_is_missing(
             "has_any_inf": False,
         }
 
-    monkeypatch.setattr(server.server_runtime, "_output_target_resource_ids", _fake_output_targets)
-    monkeypatch.setattr(server.server_runtime, "_get_texture_descriptor", _fake_get_texture_descriptor)
-    monkeypatch.setattr(server.server_runtime, "_render_service", SimpleNamespace(get_texture_stats=_fake_get_texture_stats))
+    monkeypatch.setattr(replay_access, "_output_target_resource_ids", _fake_output_targets)
+    monkeypatch.setattr(replay_access, "_get_texture_descriptor", _fake_get_texture_descriptor)
+    monkeypatch.setattr(live_state, "_render_service", SimpleNamespace(get_texture_stats=_fake_get_texture_stats))
 
     texture_id, texture_desc, output_slot, target_source = asyncio.run(
-        server.server_runtime._choose_visual_output_target(
+        visual_target._choose_visual_output_target(
             "sess-preview",
             1847,
         )
@@ -575,19 +578,13 @@ def test_choose_visual_output_target_scores_available_slot_when_rt0_is_missing(
     assert target_source == "event_output_slot"
 
 
-def test_preview_window_fit_helpers_cover_screen_cap_and_centering() -> None:
+def test_preview_window_fit_respects_screen_cap() -> None:
     assert fit_size_within_bounds(2048, 2048, 960, 540) == (540, 540)
     assert fit_size_within_bounds(1280, 720, 960, 540) == (960, 540)
-    assert fit_content_rect(960, 540, 2048, 2048) == {
-        "x": 210,
-        "y": 0,
-        "width": 540,
-        "height": 540,
-    }
 
 
 def test_preview_region_rects_clip_and_intersect() -> None:
-    viewport_rect, scissor_rect, effective = server.server_runtime._preview_region_rects(
+    viewport_rect, scissor_rect, effective = preview_sync._preview_region_rects(
         {"width": 2048, "height": 2048},
         viewport_rect={"x": -10, "y": 0, "width": 1034, "height": 1024},
         scissor_rect={"x": 128, "y": 64, "width": 900, "height": 700},
@@ -682,34 +679,25 @@ def test_export_screenshot_defaults_to_swapchain_present_target(
         assert action == "render_overlay"
         assert args["texture_id"] == "ResourceId::swapchain"
         assert args["event_id"] == 90
-        return json.dumps(
-            {
-                "success": True,
-                "artifact_path": str(saved_path),
-                "saved_path": str(saved_path),
-                "image_path": str(saved_path),
-                "meta": {"width": 1920, "height": 1080},
-            }
-        )
+        return envelope.success(artifact_path=str(saved_path), saved_path=str(saved_path), image_path=str(saved_path), meta={"width": 1920, "height": 1080})
 
-    monkeypatch.setattr(server.server_runtime, "_offload", _inline_offload)
-    monkeypatch.setattr(server.server_runtime, "_get_controller", _fake_get_controller)
-    monkeypatch.setattr(server.server_runtime, "_load_action_index", _fake_load_action_index)
-    monkeypatch.setattr(server.server_runtime, "_get_texture_descriptor", _fake_get_texture_descriptor)
-    monkeypatch.setattr(server.server_runtime, "_output_target_resource_ids", _fake_output_targets)
-    monkeypatch.setattr(server.server_runtime, "_render_service", SimpleNamespace(get_texture_stats=_fake_get_texture_stats))
-    monkeypatch.setattr(server.server_runtime, "_event_truth_metadata", _fake_event_truth_metadata)
-    monkeypatch.setattr(server.server_runtime, "_binding_name_index_for_event", lambda session_id, event_id: asyncio.sleep(0, result={}))
-    monkeypatch.setattr(server.server_runtime, "_dispatch_texture", _fake_dispatch_texture)
+    monkeypatch.setattr(renderdoc_api, "_offload", _inline_offload)
+    monkeypatch.setattr(replay_access, "_get_controller", _fake_get_controller)
+    monkeypatch.setattr(replay_access, "_load_action_index", _fake_load_action_index)
+    monkeypatch.setattr(replay_access, "_get_texture_descriptor", _fake_get_texture_descriptor)
+    monkeypatch.setattr(replay_access, "_output_target_resource_ids", _fake_output_targets)
+    monkeypatch.setattr(live_state, "_render_service", SimpleNamespace(get_texture_stats=_fake_get_texture_stats))
+    monkeypatch.setattr(truth_matrix, "_event_truth_metadata", _fake_event_truth_metadata)
+    monkeypatch.setattr(replay_access, "_binding_name_index_for_event", lambda session_id, event_id: asyncio.sleep(0, result={}))
+    monkeypatch.setattr(texture_ops, "dispatch", _fake_dispatch_texture)
     monkeypatch.setattr(
-        server.server_runtime,
+        renderdoc_api,
         "_get_rd",
         lambda: SimpleNamespace(ActionFlags=SimpleNamespace(Present=1024)),
     )
 
-    payload = json.loads(
-        asyncio.run(
-            server.server_runtime._dispatch_export(
+    payload = asyncio.run(
+            export_ops.dispatch(
                 "screenshot",
                 {
                     "session_id": "sess-preview",
@@ -719,14 +707,13 @@ def test_export_screenshot_defaults_to_swapchain_present_target(
                 },
             )
         )
-    )
 
-    assert payload["success"] is True
-    assert payload["resolved_event_id"] == 90
-    assert payload["present_event_id"] == 90
-    assert payload["texture_id"] == "ResourceId::swapchain"
-    assert payload["target_source"] == "swapchain_present"
-    assert payload["summary_degraded"] is False
+    assert payload.ok is True
+    assert payload.data['resolved_event_id'] == 90
+    assert payload.data['present_event_id'] == 90
+    assert payload.data['texture_id'] == "ResourceId::swapchain"
+    assert payload.data['target_source'] == "swapchain_present"
+    assert payload.data['summary_degraded'] is False
 
 
 def test_export_screenshot_falls_back_when_swapchain_target_is_unavailable(
@@ -737,7 +724,7 @@ def test_export_screenshot_falls_back_when_swapchain_target_is_unavailable(
     saved_path.write_bytes(b"png")
 
     async def _fake_resolve_swapchain_present_target(session_id: str, requested_event_id: int):  # type: ignore[no-untyped-def]
-        raise server.server_runtime._preview_error(
+        raise visual_target._preview_error(
             "swapchain_target_unavailable",
             "no present usage",
             context_id="default",
@@ -775,25 +762,16 @@ def test_export_screenshot_falls_back_when_swapchain_target_is_unavailable(
         assert action == "render_overlay"
         assert args["texture_id"] == "ResourceId::777"
         assert args["event_id"] == 103
-        return json.dumps(
-            {
-                "success": True,
-                "artifact_path": str(saved_path),
-                "saved_path": str(saved_path),
-                "image_path": str(saved_path),
-                "meta": {"width": 128, "height": 128},
-            }
-        )
+        return envelope.success(artifact_path=str(saved_path), saved_path=str(saved_path), image_path=str(saved_path), meta={"width": 128, "height": 128})
 
-    monkeypatch.setattr(server.server_runtime, "_resolve_swapchain_present_target", _fake_resolve_swapchain_present_target)
-    monkeypatch.setattr(server.server_runtime, "_choose_visual_output_target", _fake_choose_visual_output_target)
-    monkeypatch.setattr(server.server_runtime, "_event_truth_metadata", _fake_event_truth_metadata)
-    monkeypatch.setattr(server.server_runtime, "_binding_name_index_for_event", lambda session_id, event_id: asyncio.sleep(0, result={}))
-    monkeypatch.setattr(server.server_runtime, "_dispatch_texture", _fake_dispatch_texture)
+    monkeypatch.setattr(visual_target, "_resolve_swapchain_present_target", _fake_resolve_swapchain_present_target)
+    monkeypatch.setattr(visual_target, "_choose_visual_output_target", _fake_choose_visual_output_target)
+    monkeypatch.setattr(truth_matrix, "_event_truth_metadata", _fake_event_truth_metadata)
+    monkeypatch.setattr(replay_access, "_binding_name_index_for_event", lambda session_id, event_id: asyncio.sleep(0, result={}))
+    monkeypatch.setattr(texture_ops, "dispatch", _fake_dispatch_texture)
 
-    payload = json.loads(
-        asyncio.run(
-            server.server_runtime._dispatch_export(
+    payload = asyncio.run(
+            export_ops.dispatch(
                 "screenshot",
                 {
                     "session_id": "sess-preview",
@@ -804,13 +782,12 @@ def test_export_screenshot_falls_back_when_swapchain_target_is_unavailable(
                 },
             )
         )
-    )
 
-    assert payload["success"] is True
-    assert payload["target_source"] == "event_output_fallback"
-    assert payload["fallback_reason"] == "swapchain_target_unavailable"
-    assert payload["summary_degraded"] is True
-    assert "swapchain_target_unavailable" in payload["summary_degraded_reasons"]
+    assert payload.ok is True
+    assert payload.data['target_source'] == "event_output_fallback"
+    assert payload.data['fallback_reason'] == "swapchain_target_unavailable"
+    assert payload.data['summary_degraded'] is True
+    assert "swapchain_target_unavailable" in payload.data['summary_degraded_reasons']
 
 
 def test_export_screenshot_fails_when_swapchain_and_event_target_are_unavailable(
@@ -818,7 +795,7 @@ def test_export_screenshot_fails_when_swapchain_and_event_target_are_unavailable
     tmp_path: Path,
 ) -> None:
     async def _no_swapchain(session_id: str, requested_event_id: int):  # type: ignore[no-untyped-def]
-        raise server.server_runtime._preview_error(
+        raise visual_target._preview_error(
             "swapchain_target_unavailable",
             "no present usage",
             context_id="default",
@@ -827,7 +804,7 @@ def test_export_screenshot_fails_when_swapchain_and_event_target_are_unavailable
         )
 
     async def _no_event_target(session_id: str, event_id: int, *, target=None):  # type: ignore[no-untyped-def]
-        raise server.server_runtime._preview_error(
+        raise visual_target._preview_error(
             "preview_event_output_unavailable",
             "no event output or binding",
             context_id="default",
@@ -835,22 +812,22 @@ def test_export_screenshot_fails_when_swapchain_and_event_target_are_unavailable
             event_id=event_id,
         )
 
-    monkeypatch.setattr(server.server_runtime, "_resolve_swapchain_present_target", _no_swapchain)
-    monkeypatch.setattr(server.server_runtime, "_choose_visual_output_target", _no_event_target)
+    monkeypatch.setattr(visual_target, "_resolve_swapchain_present_target", _no_swapchain)
+    monkeypatch.setattr(visual_target, "_choose_visual_output_target", _no_event_target)
 
     output = tmp_path / "unavailable.png"
-    payload = json.loads(asyncio.run(server.server_runtime._dispatch_export("screenshot", {
+    payload = asyncio.run(export_ops.dispatch("screenshot", {
         "session_id": "sess-preview",
         "event_id": 103,
         "file_format": "png",
         "output_path": str(output),
         "target": {"semantic": "swapchain"},
-    })))
+    }))
 
-    assert payload["success"] is False
-    assert payload["code"] == "preview_event_output_unavailable"
-    assert payload["details"]["failure_stage"] == "resolve_visual_target"
-    assert payload["details"]["swapchain_error"]["code"] == "swapchain_target_unavailable"
+    assert payload.ok is False
+    assert payload.code == "preview_event_output_unavailable"
+    assert payload.details["failure_stage"] == "resolve_visual_target"
+    assert payload.details["swapchain_error"]["code"] == "swapchain_target_unavailable"
     assert not output.exists()
 
 
@@ -892,25 +869,16 @@ def test_export_screenshot_event_output_semantic_preserves_visual_selection(
 
     async def _fake_dispatch_texture(action: str, args: dict[str, object]):  # type: ignore[no-untyped-def]
         assert args["texture_id"] == "ResourceId::event"
-        return json.dumps(
-            {
-                "success": True,
-                "artifact_path": str(saved_path),
-                "saved_path": str(saved_path),
-                "image_path": str(saved_path),
-                "meta": {"width": 128, "height": 128},
-            }
-        )
+        return envelope.success(artifact_path=str(saved_path), saved_path=str(saved_path), image_path=str(saved_path), meta={"width": 128, "height": 128})
 
-    monkeypatch.setattr(server.server_runtime, "_resolve_swapchain_present_target", _fail_swapchain)
-    monkeypatch.setattr(server.server_runtime, "_choose_visual_output_target", _fake_choose_visual_output_target)
-    monkeypatch.setattr(server.server_runtime, "_event_truth_metadata", _fake_event_truth_metadata)
-    monkeypatch.setattr(server.server_runtime, "_binding_name_index_for_event", lambda session_id, event_id: asyncio.sleep(0, result={}))
-    monkeypatch.setattr(server.server_runtime, "_dispatch_texture", _fake_dispatch_texture)
+    monkeypatch.setattr(visual_target, "_resolve_swapchain_present_target", _fail_swapchain)
+    monkeypatch.setattr(visual_target, "_choose_visual_output_target", _fake_choose_visual_output_target)
+    monkeypatch.setattr(truth_matrix, "_event_truth_metadata", _fake_event_truth_metadata)
+    monkeypatch.setattr(replay_access, "_binding_name_index_for_event", lambda session_id, event_id: asyncio.sleep(0, result={}))
+    monkeypatch.setattr(texture_ops, "dispatch", _fake_dispatch_texture)
 
-    payload = json.loads(
-        asyncio.run(
-            server.server_runtime._dispatch_export(
+    payload = asyncio.run(
+            export_ops.dispatch(
                 "screenshot",
                 {
                     "session_id": "sess-preview",
@@ -921,12 +889,11 @@ def test_export_screenshot_event_output_semantic_preserves_visual_selection(
                 },
             )
         )
-    )
 
-    assert payload["success"] is True
-    assert payload["target_source"] == "event_output_slot"
-    assert payload["chosen_output_slot"] == 1
-    assert payload["requested_semantic"] == "event_output"
+    assert payload.ok is True
+    assert payload.data['target_source'] == "event_output_slot"
+    assert payload.data['chosen_output_slot'] == 1
+    assert payload.data['requested_semantic'] == "event_output"
 
 
 def test_export_screenshot_preserves_event_binding_target_source(
@@ -967,28 +934,15 @@ def test_export_screenshot_preserves_event_binding_target_source(
 
     async def _fake_dispatch_texture(action: str, args: dict[str, object]):  # type: ignore[no-untyped-def]
         assert action == "render_overlay"
-        return json.dumps(
-            {
-                "success": True,
-                "artifact_path": str(saved_path),
-                "saved_path": str(saved_path),
-                "image_path": str(saved_path),
-                "meta": {"width": 128, "height": 128},
-                "binding_truth_level": "binding_verified",
-                "visual_truth_level": "visual_valid",
-                "evidence_truth_level": "visual_evidence_only",
-                "summary_degraded_reasons": [],
-            }
-        )
+        return envelope.success(artifact_path=str(saved_path), saved_path=str(saved_path), image_path=str(saved_path), meta={"width": 128, "height": 128}, binding_truth_level="binding_verified", visual_truth_level="visual_valid", evidence_truth_level="visual_evidence_only", summary_degraded_reasons=[])
 
-    monkeypatch.setattr(server.server_runtime, "_choose_visual_output_target", _fake_choose_visual_output_target)
-    monkeypatch.setattr(server.server_runtime, "_event_truth_metadata", _fake_event_truth_metadata)
-    monkeypatch.setattr(server.server_runtime, "_binding_name_index_for_event", _fake_binding_name_index)
-    monkeypatch.setattr(server.server_runtime, "_dispatch_texture", _fake_dispatch_texture)
+    monkeypatch.setattr(visual_target, "_choose_visual_output_target", _fake_choose_visual_output_target)
+    monkeypatch.setattr(truth_matrix, "_event_truth_metadata", _fake_event_truth_metadata)
+    monkeypatch.setattr(replay_access, "_binding_name_index_for_event", _fake_binding_name_index)
+    monkeypatch.setattr(texture_ops, "dispatch", _fake_dispatch_texture)
 
-    payload = json.loads(
-        asyncio.run(
-            server.server_runtime._dispatch_export(
+    payload = asyncio.run(
+            export_ops.dispatch(
                 "screenshot",
                 {
                     "session_id": "sess-preview",
@@ -999,13 +953,12 @@ def test_export_screenshot_preserves_event_binding_target_source(
                 },
             )
         )
-    )
 
-    assert payload["success"] is True
-    assert payload["resolved_event_id"] == 103
-    assert payload["texture_id"] == "ResourceId::777"
-    assert payload["target_source"] == "event_binding_uav_3"
-    assert payload["saved_path"] == str(saved_path)
+    assert payload.ok is True
+    assert payload.data['resolved_event_id'] == 103
+    assert payload.data['texture_id'] == "ResourceId::777"
+    assert payload.data['target_source'] == "event_binding_uav_3"
+    assert payload.data['saved_path'] == str(saved_path)
 
 
 def test_export_screenshot_returns_structured_save_texture_failure(
@@ -1043,24 +996,15 @@ def test_export_screenshot_returns_structured_save_texture_failure(
 
     async def _fake_dispatch_texture(action: str, args: dict[str, object]):  # type: ignore[no-untyped-def]
         assert action == "render_overlay"
-        return json.dumps(
-            {
-                "success": False,
-                "error_message": "SaveTexture failed: test",
-                "code": "texture_save_failed",
-                "category": "runtime",
-                "details": {"renderdoc_status": "Failed"},
-            }
-        )
+        return envelope.failure("SaveTexture failed: test", code="texture_save_failed", category="runtime", details={"renderdoc_status": "Failed"})
 
-    monkeypatch.setattr(server.server_runtime, "_choose_visual_output_target", _fake_choose_visual_output_target)
-    monkeypatch.setattr(server.server_runtime, "_event_truth_metadata", _fake_event_truth_metadata)
-    monkeypatch.setattr(server.server_runtime, "_binding_name_index_for_event", _fake_binding_name_index)
-    monkeypatch.setattr(server.server_runtime, "_dispatch_texture", _fake_dispatch_texture)
+    monkeypatch.setattr(visual_target, "_choose_visual_output_target", _fake_choose_visual_output_target)
+    monkeypatch.setattr(truth_matrix, "_event_truth_metadata", _fake_event_truth_metadata)
+    monkeypatch.setattr(replay_access, "_binding_name_index_for_event", _fake_binding_name_index)
+    monkeypatch.setattr(texture_ops, "dispatch", _fake_dispatch_texture)
 
-    payload = json.loads(
-        asyncio.run(
-            server.server_runtime._dispatch_export(
+    payload = asyncio.run(
+            export_ops.dispatch(
                 "screenshot",
                 {
                     "session_id": "sess-preview",
@@ -1071,29 +1015,28 @@ def test_export_screenshot_returns_structured_save_texture_failure(
                 },
             )
         )
-    )
 
-    assert payload["success"] is False
-    assert payload["code"] == "texture_save_failed"
-    assert payload["category"] == "runtime"
-    assert payload["details"]["session_id"] == "sess-preview"
-    assert payload["details"]["event_id"] == 103
-    assert payload["details"]["texture_id"] == "ResourceId::777"
-    assert payload["details"]["target_source"] == "event_output_slot"
-    assert payload["details"]["chosen_output_slot"] == 1
-    assert payload["details"]["failure_stage"] == "save_texture"
+    assert payload.ok is False
+    assert payload.code == "texture_save_failed"
+    assert payload.category == "runtime"
+    assert payload.details["session_id"] == "sess-preview"
+    assert payload.details["event_id"] == 103
+    assert payload.details["texture_id"] == "ResourceId::777"
+    assert payload.details["target_source"] == "event_output_slot"
+    assert payload.details["chosen_output_slot"] == 1
+    assert payload.details["failure_stage"] == "save_texture"
 
 
 def test_set_active_waits_for_preview_sync(monkeypatch: pytest.MonkeyPatch) -> None:
-    server._runtime.replays = {
-        "sess_preview": server.ReplayHandle(
+    live_state._runtime.replays = {
+        "sess_preview": live_state.ReplayHandle(
             session_id="sess_preview",
             capture_file_id="capf_preview",
             frame_index=0,
             active_event_id=11,
         )
     }
-    server.server_runtime._set_context_runtime_session(
+    context_records._set_context_runtime_session(
         "sess_preview",
         capture_file_id="capf_preview",
         backend_type="local",
@@ -1125,13 +1068,13 @@ def test_set_active_waits_for_preview_sync(monkeypatch: pytest.MonkeyPatch) -> N
     async def _fake_preview_sync(context_id=None):  # type: ignore[no-untyped-def]
         preview_sync_calls.append(str(context_id or "default"))
 
-    monkeypatch.setattr(server.server_runtime, "_get_controller", _fake_get_controller)
-    monkeypatch.setattr(server.server_runtime, "_load_action_index", _fake_load_action_index)
-    monkeypatch.setattr(server.server_runtime, "_offload", _inline_offload)
-    monkeypatch.setattr(server.server_runtime, "_auto_sync_preview_if_enabled", _fake_preview_sync)
+    monkeypatch.setattr(replay_access, "_get_controller", _fake_get_controller)
+    monkeypatch.setattr(replay_access, "_load_action_index", _fake_load_action_index)
+    monkeypatch.setattr(renderdoc_api, "_offload", _inline_offload)
+    monkeypatch.setattr(preview_sync, "_auto_sync_preview_if_enabled", _fake_preview_sync)
 
     payload = asyncio.run(
-        server.dispatch_operation(
+        dispatch.dispatch_operation(
             "rd.event.set_active",
             {"session_id": "sess_preview", "event_id": 77},
             transport="test",
@@ -1144,8 +1087,8 @@ def test_set_active_waits_for_preview_sync(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 def test_set_frame_waits_for_preview_sync(monkeypatch: pytest.MonkeyPatch) -> None:
-    server._runtime.replays = {
-        "sess_preview": server.ReplayHandle(
+    live_state._runtime.replays = {
+        "sess_preview": live_state.ReplayHandle(
             session_id="sess_preview",
             capture_file_id="capf_preview",
             frame_index=0,
@@ -1172,16 +1115,16 @@ def test_set_frame_waits_for_preview_sync(monkeypatch: pytest.MonkeyPatch) -> No
         preview_sync_calls.append(str(context_id or "default"))
 
     async def _fake_ensure_live_session(session_id: str):  # type: ignore[no-untyped-def]
-        return server._runtime.replays[str(session_id)]
+        return live_state._runtime.replays[str(session_id)]
 
-    monkeypatch.setattr(server.server_runtime, "_get_controller", _fake_get_controller)
-    monkeypatch.setattr(server.server_runtime, "_offload", _inline_offload)
-    monkeypatch.setattr(server.server_runtime, "_pick_previewable_default_event_id", _fake_pick_previewable_default_event_id)
-    monkeypatch.setattr(server.server_runtime, "_auto_sync_preview_if_enabled", _fake_preview_sync)
-    monkeypatch.setattr(server.server_runtime, "_ensure_live_session", _fake_ensure_live_session)
+    monkeypatch.setattr(replay_access, "_get_controller", _fake_get_controller)
+    monkeypatch.setattr(renderdoc_api, "_offload", _inline_offload)
+    monkeypatch.setattr(visual_target, "_pick_previewable_default_event_id", _fake_pick_previewable_default_event_id)
+    monkeypatch.setattr(preview_sync, "_auto_sync_preview_if_enabled", _fake_preview_sync)
+    monkeypatch.setattr(replay_access, "_ensure_live_session", _fake_ensure_live_session)
 
     payload = asyncio.run(
-        server.dispatch_operation(
+        dispatch.dispatch_operation(
             "rd.replay.set_frame",
             {"session_id": "sess_preview", "frame_index": 0},
             transport="test",
@@ -1199,26 +1142,26 @@ def test_select_session_waits_for_preview_sync(tmp_path: Path, monkeypatch: pyte
     capture_a.write_text("a", encoding="utf-8")
     capture_b.write_text("b", encoding="utf-8")
 
-    server._runtime.captures = {
-        "capf_a": server.CaptureFileHandle(capture_file_id="capf_a", file_path=str(capture_a), read_only=True),
-        "capf_b": server.CaptureFileHandle(capture_file_id="capf_b", file_path=str(capture_b), read_only=True),
+    live_state._runtime.captures = {
+        "capf_a": live_state.CaptureFileHandle(capture_file_id="capf_a", file_path=str(capture_a), read_only=True),
+        "capf_b": live_state.CaptureFileHandle(capture_file_id="capf_b", file_path=str(capture_b), read_only=True),
     }
-    server._runtime.replays = {
-        "sess_a": server.ReplayHandle(session_id="sess_a", capture_file_id="capf_a", frame_index=0, active_event_id=11),
-        "sess_b": server.ReplayHandle(session_id="sess_b", capture_file_id="capf_b", frame_index=0, active_event_id=22),
+    live_state._runtime.replays = {
+        "sess_a": live_state.ReplayHandle(session_id="sess_a", capture_file_id="capf_a", frame_index=0, active_event_id=11),
+        "sess_b": live_state.ReplayHandle(session_id="sess_b", capture_file_id="capf_b", frame_index=0, active_event_id=22),
     }
-    server.server_runtime._set_context_runtime_session("sess_a", capture_file_id="capf_a", backend_type="local", frame_index=0, active_event_id=11)
-    server.server_runtime._set_context_runtime_session("sess_b", capture_file_id="capf_b", backend_type="local", frame_index=0, active_event_id=22)
+    context_records._set_context_runtime_session("sess_a", capture_file_id="capf_a", backend_type="local", frame_index=0, active_event_id=11)
+    context_records._set_context_runtime_session("sess_b", capture_file_id="capf_b", backend_type="local", frame_index=0, active_event_id=22)
 
     preview_sync_calls: list[str] = []
 
     async def _fake_preview_sync(context_id=None):  # type: ignore[no-untyped-def]
         preview_sync_calls.append(str(context_id or "default"))
 
-    monkeypatch.setattr(server.server_runtime, "_auto_sync_preview_if_enabled", _fake_preview_sync)
+    monkeypatch.setattr(preview_sync, "_auto_sync_preview_if_enabled", _fake_preview_sync)
 
     payload = asyncio.run(
-        server.dispatch_operation(
+        dispatch.dispatch_operation(
             "rd.session.select_session",
             {"session_id": "sess_a"},
             transport="test",
@@ -1260,18 +1203,18 @@ def test_resume_waits_for_preview_sync(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
     async def _fake_recover_context_sessions(context_id: str, **kwargs):  # type: ignore[no-untyped-def]
-        return server.server_runtime._context_state(context_id)
+        return context_records._context_state(context_id)
 
     preview_sync_calls: list[str] = []
 
     async def _fake_preview_sync(context_id=None):  # type: ignore[no-untyped-def]
         preview_sync_calls.append(str(context_id or "default"))
 
-    monkeypatch.setattr(server.server_runtime, "_recover_context_sessions", _fake_recover_context_sessions)
-    monkeypatch.setattr(server.server_runtime, "_auto_sync_preview_if_enabled", _fake_preview_sync)
+    monkeypatch.setattr(session_recovery, "_recover_context_sessions", _fake_recover_context_sessions)
+    monkeypatch.setattr(preview_sync, "_auto_sync_preview_if_enabled", _fake_preview_sync)
 
     payload = asyncio.run(
-        server.dispatch_operation(
+        dispatch.dispatch_operation(
             "rd.session.resume",
             {},
             transport="test",
@@ -1325,11 +1268,6 @@ def test_preview_docs_and_catalog_are_synchronized() -> None:
     assert "preview" in tools["rd.session.get_context"]["returns_raw"]
     assert "framebuffer_extent" in tools["rd.session.get_context"]["returns_raw"]
 
-    frameworks_root = repo_root.parent / ("RDC-Agent-" + "Frameworks") / "debugger"
-    if frameworks_root.is_dir():
-        cli_mode = (frameworks_root / "common" / "docs" / "cli-mode-reference.md").read_text(encoding="utf-8-sig")
-        assert "session preview on|off|status" in cli_mode
-
 
 @pytest.mark.parametrize(
     "original_event, restore_fails, expected_proof",
@@ -1343,12 +1281,11 @@ def test_export_screenshot_target_failure_restores_original_event(
     expected_proof: bool,
 ) -> None:
     state = {"event": original_event}
-    runtime = server.server_runtime
-    monkeypatch.setattr(runtime, "_active_event", lambda _session_id: state["event"])
+    monkeypatch.setattr(replay_access, "_active_event", lambda _session_id: state["event"])
 
     async def _missing_target(session_id: str, event_id: int, *, target=None):  # type: ignore[no-untyped-def]
         state["event"] = event_id
-        raise runtime._preview_error(
+        raise visual_target._preview_error(
             "preview_event_output_unavailable", "No target",
             context_id="default", session_id=session_id, event_id=event_id,
         )
@@ -1359,25 +1296,25 @@ def test_export_screenshot_target_failure_restores_original_event(
         state["event"] = event_id
         return event_id
 
-    monkeypatch.setattr(runtime, "_resolve_visual_target_for_event", _missing_target)
-    monkeypatch.setattr(runtime, "_ensure_event", _restore)
+    monkeypatch.setattr(visual_target, "_resolve_visual_target_for_event", _missing_target)
+    monkeypatch.setattr(replay_access, "_ensure_event", _restore)
     output = tmp_path / "missing.png"
-    payload = json.loads(asyncio.run(runtime._dispatch_export("screenshot", {
+    payload = asyncio.run(export_ops.dispatch("screenshot", {
         "session_id": "sess-preview", "event_id": 103,
         "output_path": str(output), "target": {"semantic": "event_output"},
-    })))
+    }))
 
-    assert payload["success"] is False
+    assert payload.ok is False
     assert not output.exists()
     if expected_proof:
-        assert payload["code"] == "preview_event_output_unavailable"
-        assert payload["details"]["replay_state_restored"] is True
-        assert payload["details"]["restored_event_id"] == original_event
-        assert payload["details"]["artifact_write_attempted"] is False
+        assert payload.code == "preview_event_output_unavailable"
+        assert payload.details["replay_state_restored"] is True
+        assert payload.details["restored_event_id"] == original_event
+        assert payload.details["artifact_write_attempted"] is False
         assert state["event"] == original_event
     elif restore_fails:
-        assert payload["code"] == "screenshot_target_recovery_failed"
-        assert payload["details"]["replay_state_restored"] is False
+        assert payload.code == "screenshot_target_recovery_failed"
+        assert payload.details["replay_state_restored"] is False
     else:
-        assert payload["code"] == "preview_event_output_unavailable"
-        assert "replay_state_restored" not in payload["details"]
+        assert payload.code == "preview_event_output_unavailable"
+        assert "replay_state_restored" not in payload.details

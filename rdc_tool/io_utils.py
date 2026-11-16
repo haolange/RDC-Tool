@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -7,8 +8,14 @@ import secrets
 import shutil
 import tempfile
 import time
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
-from typing import Any, Callable, TextIO
+from typing import Any, Callable, Iterator, TextIO
+
+from rdc_tool.core.errors import CoreError
+from rdc_tool.platform.locks import LockTimeout, path_lock
+
+STATE_LOCK_TIMEOUT_S = 10.0
 
 
 class AtomicWriteError(RuntimeError):
@@ -17,24 +24,58 @@ class AtomicWriteError(RuntimeError):
         self.details = dict(details or {})
 
 
-def _sanitize_json_value(payload: Any) -> Any:
-    if isinstance(payload, dict):
-        return {str(key): _sanitize_json_value(value) for key, value in payload.items()}
-    if isinstance(payload, list):
-        return [_sanitize_json_value(item) for item in payload]
-    if isinstance(payload, tuple):
-        return [_sanitize_json_value(item) for item in payload]
-    if isinstance(payload, str):
+@contextmanager
+def state_file_lock(lock_path: Path, context: str) -> Iterator[None]:
+    """Serialize a persisted state file across threads and processes."""
+    with ExitStack() as stack:
         try:
-            payload.encode("utf-8")
-            return payload
+            stack.enter_context(path_lock(lock_path, timeout=STATE_LOCK_TIMEOUT_S))
+        except LockTimeout as exc:
+            raise CoreError(
+                code="state_lock_timeout",
+                message=f"Timed out waiting for the state lock of context {context!r}",
+                category="runtime",
+                details={"context_id": context, "lock_path": str(lock_path), "waiting_for": exc.stage,
+                         "elapsed_seconds": exc.elapsed, "timeout_seconds": exc.timeout,
+                         "recovery_hint": "Retry after the concurrent state writer finishes; do not remove the lock file."},
+            ) from exc
+        yield
+
+
+def sha256_file(path: Path) -> str:
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def json_safe(value: Any, default: Callable[[Any], Any] = str) -> Any:
+    """Return ``value`` as plain JSON data.
+
+    Strings with unpaired surrogates are escaped, non-finite floats become
+    explicit ``"NaN"``/``"Infinity"`` markers, and any other object is
+    replaced by ``default(value)``.
+    """
+    if isinstance(value, str):
+        text = str.__str__(value)
+        try:
+            text.encode("utf-8")
+            return text
         except UnicodeEncodeError:
-            return payload.encode("utf-8", errors="backslashreplace").decode("utf-8")
-    if isinstance(payload, float) and not math.isfinite(payload):
-        if math.isnan(payload):
+            return text.encode("utf-8", errors="backslashreplace").decode("utf-8")
+    if value is None or isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return int(value)
+    if isinstance(value, float):
+        if math.isfinite(value):
+            return float(value)
+        if math.isnan(value):
             return "NaN"
-        return "Infinity" if payload > 0 else "-Infinity"
-    return payload
+        return "Infinity" if value > 0 else "-Infinity"
+    if isinstance(value, dict):
+        return {str(key): json_safe(item, default) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [json_safe(item, default) for item in value]
+    return json_safe(default(value), default)
 
 
 def safe_json_text(
@@ -44,14 +85,7 @@ def safe_json_text(
     sort_keys: bool = False,
     default: Callable[[Any], Any] = str,
 ) -> str:
-    return json.dumps(
-        _sanitize_json_value(payload),
-        ensure_ascii=False,
-        indent=indent,
-        sort_keys=sort_keys,
-        default=lambda value: _sanitize_json_value(default(value)),
-        allow_nan=False,
-    )
+    return json.dumps(json_safe(payload, default), ensure_ascii=False, indent=indent, sort_keys=sort_keys, allow_nan=False)
 
 
 def safe_stream_write(text: str, stream: TextIO) -> None:

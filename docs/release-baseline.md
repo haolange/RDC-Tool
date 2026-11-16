@@ -1,33 +1,73 @@
-﻿# Release Baseline
+﻿# 发布基线 `Release Baseline`
 
-This document is the authority for native runtime identity, release qualification, and delivery. Keep the repository's default `binaries/` tree, generated capability catalog, user documentation, and RDC-Agent consumer contract aligned with each capability change. `intermediate/` candidates support isolated validation; they never replace the repository runtime used by formal packaging.
+本文是原生运行库身份、发布资格与交付规则的唯一权威。每次能力变更都要让仓库默认 `binaries/`、生成的 catalog、用户文档与 RDC-Agent 消费契约保持一致；`intermediate/` 下的候选只用于隔离验证，不能代替正式打包使用的仓库运行库。
 
-## Runtime identity and capability scope
+## 当前原生基线
 
-- `rdc_tool/operation_definitions.py` is the source for operation contracts. `spec/tool_catalog.json` and `docs/tool-reference.md` are generated from it; the catalog fingerprint is a capability identity, not a package-version substitute.
-- `binaries/windows/x64/manifest.runtime.json` is the source of truth for the repository-bundled runtime file set and hashes. Its `native_build` receipt must identify the frozen source tree and paired outputs. `rdc_tool.runtime_identity.native_manifest_status` and `rdc-tool --json doctor` validate the recorded identity; actual loaded-module paths and hashes are separate runtime observations.
-- “Latest” means the newest committed release whose advertised capabilities and bundled runtime passed the required checks. It does not mean automatically tracking upstream RenderDoc, nor that every API, capture, driver, or device is supported.
-- A capability or behavior change must keep the repository-root `binaries/` runtime set used by default, generated catalog and reference, affected documentation, and RDC-Agent consumer integration aligned. Update affected components; unchanged validated components may retain their recorded identities and evidence. A local candidate or alternate runtime directory is evidence for testing only; it cannot stand in for the root runtime in a release.
+| 项 | 值 |
+|---|---|
+| RenderDoc | **1.48**，源码 fork `https://github.com/haolange/renderdoc` 的 `dde88226a1cf8145edfe7094a67cbcdab6363d46`（= base `f6aff93…` 与 upstream `282b28b…` 的合并） |
+| 已配对目标 | `windows-x64`（DLL/PYD）、`android-arm32`、`android-arm64`（helper APK） |
+| 已支持主机布局 | `windows-x64`（`binaries/windows/x64`）、`linux-x64`（`binaries/linux/x64`，正式产物下一轮随同源构建加入） |
 
-## Native runtime changes
+RDC-Tool 不自动跟随上游每个版本；新运行库只有在完成同源配对打包、catalog 检查、测试与发布门禁后才成为基线。capture 格式兼容性遵循上游 RenderDoc。
 
-When changing RenderDoc or helper runtime content, build from one frozen source tree and pair the Windows DLL/PYD and both Android helper APKs through one build receipt. Record source and upstream revisions, source-tree digest, build configuration/toolchain, output hashes, and runtime manifest identity. The Windows runtime file list must cover the complete native set, including `renderdoc.dll`, `renderdoc.pyd`, `renderdoc.json`, and required support files. Never copy a DLL alone into an older set, combine outputs from different source trees, or add an unverified fallback to PATH, another installation, SDK, or upstream binary.
+## 运行库身份与能力范围
 
-Verify the repository file identity and, when runtime acceptance is claimed, record which Python, PYD, DLL, and helper APK are actually loaded or used. Build metadata or a disk hash does not prove a runtime was loaded, a device presented an image, or a capture is supported. If a required signing key, build input, device, or other external condition is unavailable, report that acceptance as blocked or unverified; do not treat a candidate, manifest, or local build as a pass for the missing evidence.
+- `rdc_tool/operation_definitions.py` 是操作契约的唯一真源；`spec/tool_catalog.json` 与 `docs/tool-reference.md` 由它生成。catalog fingerprint 是能力身份，不能用包版本号代替。
+- 每个主机运行目录下的 `manifest.runtime.json` 是该目录捆绑文件集与哈希的真源（含 `bundled_python`、`bundled_tools`）。
+- `binaries/native_build.json` 是全目标共享的原生构建回执：一份冻结源码产出的所有目标都记录在这一份文件里。`rdc_tool.runtime_identity.native_manifest_status` 与 `rdc-tool --json doctor` 校验它；实际加载的模块路径与哈希是独立的运行时观察。
+- “最新”指最近一次提交且所声明能力与捆绑运行库都通过必需检查的发布，不代表自动跟随上游 RenderDoc，也不代表支持所有 API、capture、驱动或设备。
+- 能力或行为变更须同步仓库根 `binaries/` 默认运行集、生成的 catalog 与参考文档、受影响文档及 RDC-Agent 消费集成。未受影响且已验证的组件可沿用已记录的身份与证据；本地候选或其他运行目录只是测试证据，不能在发布中代替根运行库。
 
-## Release qualification and delivery
+## 原生构建回执
 
-Formal release packaging uses a clean committed checkout and the repository-root `binaries/` tree. `python scripts/package_release.py` requires a verified paired native manifest, runs the source/repository-runtime gate, builds the complete ZIP, then verifies that staged archive and its identity before accepting the output. It rejects dirty source, stale or incomplete runtime identity, package mismatch, or failed checks. Do not copy individual binaries into the package or mix artifacts from an earlier build.
+回执结构：
 
-The required release CI run must pass the full test suite, catalog/document and source gates, formal packaging, and complete package verification before uploading the verified ZIP and its SHA256 checksum as a GitHub Actions artifact. The Actions artifact is package handoff only: CI does not create or publish a GitHub Release. A later authorized Release must use that same verified ZIP and checksum; do not rebuild, repackage, or recombine binaries after CI verification. Publishing still requires explicit authorization.
+- `source`：字段必须恰好是 `repository`（https URL）、`revision`（被构建的 40 位提交）、`base_revision`、`upstream_revision`（40 位）与 `tree_sha256`（源码树摘要，64 位）。多余或缺失字段直接判为无效，打包工具同样拒绝而不是静默丢弃。
+- `tree_sha256` 由 `python scripts/native_source_digest.py <源码检出>` 计算：对该提交 `git ls-tree -r` 的每个条目按路径排序，逐条哈希 `<路径>\0<blob 的 SHA256>\n`，因此不受检出换行、未跟踪文件或构建目录影响；不带 `--revision` 时要求工作区干净。当前仓库回执里的 `bce2094…` 早于这一定义，无法从 dde8822 的 Git 内容复现（很可能取自 Windows 工作区），下一次同源重建按本定义重新记录。
+- `builds`：每个目标一项，目标名唯一且属于 `NATIVE_TARGETS`（全部主机布局 + `android-arm32`/`android-arm64`）。每项记录 `configuration`、`toolchain`、`inputs_sha256`（必须等于 `source.tree_sha256`）与 `outputs`。输出角色：主机目标为 `native_library` 与 `binding_module`（路径由主机布局决定，如 `binaries/linux/x64/librenderdoc.so`），Android 为 `helper_apk`（另记录 APK 版本、signer 证书指纹、包内原生库 SHA256 与 ELF BuildID；读取证书指纹不代表已执行密码学验签）。主机目标还必须有完整 `runtime_files`，覆盖运行目录根部的原生库、Vulkan layer JSON 与 `pymodules/` 全部文件。
 
-Local `--candidate-dir` output and `--runtime-root` are for isolated validation. They must not overwrite an existing destination and must carry a verified paired native identity. Passing a candidate check does not qualify it as the formal release package or authorize installation as an upgrade source.
+校验规则（存在即严格，缺席仅报告）：
 
-For release smoke evidence, run the CLI smoke directly through bash so commands and results are visible:
+- 列出的目标若其输出全部存在，则逐字节核对输出与 `runtime_files`，并要求 layer JSON 为合法对象；结果记为 `verified`。
+- 列出的目标若输出全部缺席，记为 `absent`（例如 Windows 发行包里不含 Linux 运行库）；部分存在直接判为 `invalid`。
+- 两个 Android helper 同时存在时，signer 证书与版本元数据必须一致。
+- 场景按需要的目标集合判定资格：正式发布要求本主机目标加两个 Android helper；本地候选要求本主机目标加其回执配对的 helper，且只随包携带被配对的 helper，绝不混入其他源码树的产物。需要的目标未列出或缺席时状态为 `unavailable`（并给出 `missing_targets`）；任何已存在的字节与回执矛盾时为 `invalid`。worker 拒绝在 `invalid` 下启动，正式打包与发布验证只接受 `verified`。
+
+## Linux 原生构建
+
+Linux 主机布局的原生库与绑定从与其他目标相同的冻结源码构建，源码树不做任何修改：
+
+| 项 | 值 |
+|---|---|
+| 源码 | 回执 `source.revision` 的干净检出（当前 dde8822），构建前后 `git status` 均为空 |
+| 配置 | `cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DENABLE_QRENDERDOC=OFF -DENABLE_PYRENDERDOC=ON -DCMAKE_CXX_FLAGS="-include vector" -DPython3_EXECUTABLE=<捆绑解释器>/bin/python3.14 -DPython3_FIND_STRATEGY=LOCATION`。绑定必须对 `scripts/python-runtimes.json` 钉住的同一个解释器编译：RenderDoc 通过 `find_package(Python3)` 选择 Python，只认 `Python3_*` 变量，否则会拿到构建机上的其他 Python，产出的 `renderdoc.so` 在捆绑的 3.14 下导入即崩溃。构建后核对 `CMakeCache.txt` 中 `FIND_PACKAGE_MESSAGE_DETAILS_Python3` 指向该解释器 |
+| `-include vector` | dde8822 的 `renderdoc/driver/vulkan/vk_pixelhistory.cpp` 用到 `std::vector` 却没有包含 `<vector>`。MSVC 与 Android NDK 的标准库会间接带入，现有 Windows 与 Android 产物就是这样构建出来的；GCC 的 libstdc++ 不会。用编译选项补齐而不改源码，Linux 产物与它们同属一个 revision，能写进同一份回执。下一次基线升级改动 fork 时，把这行 include 合入源码并删除该选项 |
+| 自定义 SWIG | 构建会下载 `baldurk/swig` 标签 `renderdoc-modified-7` 的源码包；下载受限时用 `-DRENDERDOC_SWIG_PACKAGE=<本地 zip>` 指向同一标签的源码包 |
+| 输出 | 运行目录根部的 `librenderdoc.so` 与 Vulkan layer `renderdoc_capture.json`，以及 `pymodules/renderdoc.so`；回执 `linux-x64` 项的 `toolchain` 记录 GCC、CMake、glibc、Python 与 `cxx_flags` |
+
+正式产物还须在 glibc 较老的构建环境中按此配置构建，否则用户系统必须具备构建机的 glibc 版本。
+
+## 原生运行库变更
+
+修改 RenderDoc 或 helper 运行内容时，必须从同一份冻结源码构建，并通过同一份回执配对各主机的原生库与绑定（Windows DLL/PYD、Linux `.so`）以及两个 Android helper APK。主机运行文件清单必须覆盖完整原生集合（如 Windows 的 `renderdoc.dll`、`renderdoc.pyd`、`renderdoc.json` 与支持库）。禁止把单个库拷进旧集合、混用不同源码树的产物，或向 PATH、其他安装、SDK、上游二进制添加未经验证的 fallback。
+
+声称运行时验收时，除仓库文件身份外还要记录实际加载或使用的 Python、绑定、原生库与 helper APK。构建元数据或磁盘哈希不能证明运行库已被加载、设备已呈现画面或某个 capture 受支持。签名密钥、构建输入、设备等外部条件缺失时，把对应验收记为阻塞或未验证，不得用候选、清单或本地构建冒充缺失的证据。
+
+## 发布资格与交付
+
+发行包按主机构建：`rdc-tool-<version>-<host_target>.zip` 的源码部分对所有主机相同，`binaries/` 只带本主机运行目录、两个 Android helper 与共享回执；ZIP 记录每个文件的权限位，校验时按记录还原，launcher 与解释器保持可执行。正式发布打包使用干净的已提交检出与仓库根 `binaries/`。`python scripts/package_release.py` 要求原生回执 `verified`，运行源码/仓库运行库门禁，构建完整 ZIP，再校验暂存归档及其身份后才接受输出。脏源码、过期或不完整的运行库身份、包内容不匹配或任何检查失败都会拒绝；不得向包内单独拷贝二进制或混入早期构建产物。
+
+必需的发布 CI 须通过全量测试、catalog/文档与源码门禁、正式打包和完整包校验，然后把校验过的 ZIP 与其 SHA256 作为 GitHub Actions artifact 上传。该 artifact 只是交接物：CI 不创建也不发布 GitHub Release。之后经授权的 Release 必须使用同一个已校验 ZIP 与校验和，CI 校验后不得重建、重打包或重组二进制。发布仍需明确授权。
+
+本地 `--candidate-dir` 输出与 `--runtime-root` 只用于隔离验证：不得覆盖已有目标目录，且必须带有已验证的配对原生身份。通过候选检查不等于获得正式发布资格，也不能作为升级安装来源。
+
+发布 smoke 证据直接经 bash 运行，命令与结果可见：
 
 ```bash
 bash scripts/smoke_cli.sh --context release-smoke
 bash scripts/smoke_cli.sh --rdc "C:/path/sample.rdc" --context release-smoke
 ```
 
-The smoke entry writes `intermediate/logs/smoke_cli.log`; `release_gate.py --require-smoke-reports` requires `[smoke] PASS`. Preview-geometry evidence is separate. Use an explicit `.rdc` sample for full replay smoke; committed repository fixtures are test-only and are not bundled in the release package. Smoke evidence does not replace package verification or device-presentation evidence.
+smoke 入口写入 `intermediate/logs/smoke_cli.log`，`release_gate.py --require-smoke-reports` 要求其中含 `[smoke] PASS`。preview 几何证据单独记录。完整回放 smoke 使用显式 `.rdc` 样本；仓库内 fixture 仅供测试，不随发行包分发。smoke 证据不能代替包校验或设备呈现证据。

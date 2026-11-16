@@ -1,95 +1,36 @@
-"""Helpers for the bundled Windows Python runtime shipped with rdc-tool."""
+"""The Python interpreter bundled with each host runtime.
+
+Where the interpreter's files live is the host layout's contract; the host
+manifest's ``bundled_python`` records only what was bundled (version and
+provenance). Missing files or provenance are failures, never filled in.
+"""
 
 from __future__ import annotations
 
 import json
 import sys
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from rdc_tool.runtime_paths import binaries_root
+from rdc_tool.runtime_paths import PYTHON_DIRECTORIES, binaries_root, host_layout
+
+PROVENANCE_FIELDS = ("python_version", "package", "source_url", "source_sha256")
+_STDLIB_MARKERS = ("os.py", "site.py", "encodings/__init__.py")
 
 
-@dataclass(frozen=True)
-class BundledPythonLayout:
-    root: Path
-    metadata: dict[str, Any]
-    python_exe: Path
-    pythonw_exe: Path
-    python3_dll: Path
-    python_dll: Path
-    stdlib_path: Path
-    site_packages_dir: Path
-    dll_dir: Path
-    pth_file: Path
-
-
-def runtime_manifest_path() -> Path:
-    return binaries_root() / "manifest.runtime.json"
-
-
-def bundled_python_root() -> Path:
-    return binaries_root() / "python"
-
-
-def bundled_python_executable() -> Path:
-    return bundled_python_root() / "python.exe"
-
-
-def _load_manifest() -> dict[str, Any]:
-    path = runtime_manifest_path()
+def _bundled_python_metadata() -> dict[str, Any]:
+    path = binaries_root() / "manifest.runtime.json"
     if not path.is_file():
         return {}
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-    return payload if isinstance(payload, dict) else {}
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    metadata = payload.get("bundled_python") if isinstance(payload, dict) else None
+    return dict(metadata) if isinstance(metadata, dict) else {}
 
 
-def _resolve_path_from_binaries(raw_path: str, *, label: str) -> Path:
-    text = str(raw_path or "").strip()
-    if not text:
-        raise RuntimeError(f"bundled_python metadata is missing {label}")
-    root = binaries_root().resolve()
-    path = (root / text).resolve()
-    try:
-        path.relative_to(root)
-    except ValueError as exc:
-        raise RuntimeError(f"bundled_python metadata escapes binaries root: {label}={text}") from exc
-    return path
-
-
-def resolve_bundled_python_layout() -> BundledPythonLayout:
-    manifest = _load_manifest()
-    metadata = dict(manifest.get("bundled_python") or {})
-    defaults = {
-        "python_entry": "python/python.exe",
-        "pythonw_entry": "python/pythonw.exe",
-        "python3_dll": "python/python3.dll",
-        "python_dll": "python/python314.dll",
-        "stdlib_layout": "python/Lib",
-        "site_packages": "python/Lib/site-packages",
-        "dll_dir": "python/DLLs",
-        "pth_file": "python/python314._pth",
-    }
-    effective = dict(defaults)
-    for key, value in metadata.items():
-        if isinstance(value, str) and value.strip():
-            effective[key] = value.strip()
-    return BundledPythonLayout(
-        root=bundled_python_root().resolve(),
-        metadata=metadata,
-        python_exe=_resolve_path_from_binaries(effective["python_entry"], label="python_entry"),
-        pythonw_exe=_resolve_path_from_binaries(effective["pythonw_entry"], label="pythonw_entry"),
-        python3_dll=_resolve_path_from_binaries(effective["python3_dll"], label="python3_dll"),
-        python_dll=_resolve_path_from_binaries(effective["python_dll"], label="python_dll"),
-        stdlib_path=_resolve_path_from_binaries(effective["stdlib_layout"], label="stdlib_layout"),
-        site_packages_dir=_resolve_path_from_binaries(effective["site_packages"], label="site_packages"),
-        dll_dir=_resolve_path_from_binaries(effective["dll_dir"], label="dll_dir"),
-        pth_file=_resolve_path_from_binaries(effective["pth_file"], label="pth_file"),
-    )
+def bundled_python_executable() -> Path | None:
+    """This host's bundled interpreter, or ``None`` when it is not installed."""
+    path = binaries_root() / host_layout().python["executable"]
+    return path if path.is_file() else None
 
 
 def current_python_runtime_details() -> dict[str, str]:
@@ -102,71 +43,29 @@ def current_python_runtime_details() -> dict[str, str]:
 
 
 def validate_bundled_python_layout() -> tuple[bool, list[str], dict[str, Any]]:
-    manifest = _load_manifest()
-    metadata = dict(manifest.get("bundled_python") or {})
-    required_metadata_keys = (
-        "python_version",
-        "python_entry",
-        "pythonw_entry",
-        "python3_dll",
-        "python_dll",
-        "stdlib_layout",
-        "site_packages",
-        "dll_dir",
-        "pth_file",
-    )
+    root = binaries_root()
     failures: list[str] = []
-    for key in required_metadata_keys:
-        if not str(metadata.get(key) or "").strip():
-            failures.append(f"bundled_python metadata missing {key}")
-
     try:
-        layout = resolve_bundled_python_layout()
-    except Exception as exc:
-        failures.append(str(exc))
-        return False, failures, {"bundled_python": metadata, "current_python": current_python_runtime_details()}
-
-    required_paths = {
-        "root": layout.root,
-        "python_exe": layout.python_exe,
-        "pythonw_exe": layout.pythonw_exe,
-        "python3_dll": layout.python3_dll,
-        "python_dll": layout.python_dll,
-        "site_packages_dir": layout.site_packages_dir,
-        "dll_dir": layout.dll_dir,
-        "pth_file": layout.pth_file,
-    }
-    for label, path in required_paths.items():
-        if label.endswith("_dir") or label == "root":
-            if not path.is_dir():
-                failures.append(f"missing bundled python directory: {label}={path}")
-        elif not path.is_file():
-            failures.append(f"missing bundled python file: {label}={path}")
-
-    if layout.stdlib_path.suffix.lower() == ".zip":
-        if not layout.stdlib_path.is_file():
-            failures.append(f"missing bundled python stdlib: {layout.stdlib_path}")
-    else:
-        if not layout.stdlib_path.is_dir():
-            failures.append(f"missing bundled python stdlib dir: {layout.stdlib_path}")
-        else:
-            for marker in ("os.py", "site.py", "encodings\\__init__.py"):
-                if not (layout.stdlib_path / marker).is_file():
-                    failures.append(f"missing stdlib marker: {layout.stdlib_path / marker}")
-
+        metadata = _bundled_python_metadata()
+    except (OSError, ValueError) as exc:
+        metadata = {}
+        failures.append(f"unreadable runtime manifest: {exc}")
+    failures += [f"bundled_python metadata missing {key}" for key in PROVENANCE_FIELDS
+                 if not str(metadata.get(key) or "").strip()]
+    resolved: dict[str, str] = {}
+    for role, relative in host_layout().python.items():
+        path = root / relative
+        resolved[role] = str(path)
+        if role in PYTHON_DIRECTORIES and not path.is_dir():
+            failures.append(f"missing bundled python directory: {role}={path}")
+        elif role not in PYTHON_DIRECTORIES and not path.is_file():
+            failures.append(f"missing bundled python file: {role}={path}")
+    stdlib = root / host_layout().python["stdlib"]
+    if stdlib.is_dir():
+        failures += [f"missing stdlib marker: {stdlib / marker}" for marker in _STDLIB_MARKERS
+                     if not (stdlib / marker).is_file()]
     details = {
-        "bundled_python": {
-            "root": str(layout.root),
-            "python_version": str(metadata.get("python_version") or ""),
-            "python_entry": str(layout.python_exe),
-            "pythonw_entry": str(layout.pythonw_exe),
-            "python3_dll": str(layout.python3_dll),
-            "python_dll": str(layout.python_dll),
-            "stdlib_layout": str(layout.stdlib_path),
-            "site_packages": str(layout.site_packages_dir),
-            "dll_dir": str(layout.dll_dir),
-            "pth_file": str(layout.pth_file),
-        },
+        "bundled_python": {**{key: str(metadata.get(key) or "") for key in PROVENANCE_FIELDS}, **resolved},
         "current_python": current_python_runtime_details(),
     }
-    return len(failures) == 0, failures, details
+    return not failures, failures, details

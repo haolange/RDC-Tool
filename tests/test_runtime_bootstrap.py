@@ -1,38 +1,27 @@
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
 import pytest
 
 from rdc_tool.runtime_bootstrap import bootstrap_renderdoc_runtime
-from rdc_tool.runtime_paths import pymodules_dir
+from rdc_tool.runtime_paths import binaries_root, binding_module_path, pymodules_dir
 
 
-def test_bootstrap_honors_runtime_dir_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    runtime_dir = (tmp_path / "runtime").resolve()
-    pymod_dir = (runtime_dir / "pymodules").resolve()
-    pymod_dir.mkdir(parents=True, exist_ok=True)
-
-    monkeypatch.setenv("RDC_TOOL_RUNTIME_DLL_DIR", str(runtime_dir))
-    monkeypatch.delenv("RDC_TOOL_RENDERDOC_PATH", raising=False)
-
+def test_bootstrap_uses_only_this_installations_runtime() -> None:
     report = bootstrap_renderdoc_runtime(probe_import=False)
 
-    assert report.binaries_dir == runtime_dir
-    assert report.pymodules_dir == pymod_dir
-    assert str(pymod_dir) in sys.path
-    assert os.environ.get("RDC_TOOL_RUNTIME_DLL_DIR") == str(runtime_dir)
-    assert os.environ.get("RDC_TOOL_RENDERDOC_PATH") == str(pymod_dir)
+    assert report.binaries_dir == binaries_root().resolve()
+    assert report.pymodules_dir == pymodules_dir().resolve()
+    assert str(report.pymodules_dir) in sys.path
 
 
-@pytest.mark.skipif(os.name != "nt", reason="renderdoc runtime probing is windows-specific")
 def test_bootstrap_probe_import_renderdoc() -> None:
-    if not (pymodules_dir() / "renderdoc.pyd").is_file():
-        pytest.skip("renderdoc runtime missing in binaries/windows/x64/pymodules")
+    if not binding_module_path().is_file():
+        pytest.skip(f"this host's RenderDoc binding is not installed: {binding_module_path()}")
 
     report = bootstrap_renderdoc_runtime(probe_import=True)
 
     assert report.import_ok, report.import_error
-    assert "renderdoc.pyd" in report.import_module_path.lower()
+    assert Path(report.import_module_path).resolve() == binding_module_path().resolve()

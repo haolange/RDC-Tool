@@ -17,13 +17,35 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from rdc_tool.context_snapshot import clear_context_snapshot
+from rdc_tool.platform import host as platform_host
 from rdc_tool.runtime_paths import cli_runtime_dir
 from rdc_tool.runtime_state import clear_context_state
 
-os.environ.setdefault("RDC_TOOL_ROOT", str(ROOT))
 os.environ.setdefault("RDC_TOOL_ARTIFACT_DIR", str(TEST_ROOT / "artifacts"))
-os.environ.setdefault("RDC_TOOL_RENDERDOC_PATH", str(ROOT / "binaries" / "windows" / "x64" / "pymodules"))
-os.environ.setdefault("RDC_TOOL_RUNTIME_DLL_DIR", str(ROOT / "binaries" / "windows" / "x64"))
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    group = parser.getgroup("fixture integration", "real replay of committed captures through an installation's launcher")
+    group.addoption("--fixture-integration", action="store_true",
+                    help="Run fixture_integration tests; an unusable runtime then fails instead of skipping.")
+    group.addoption("--fixture-root", default=str(ROOT),
+                    help="Installation root whose launcher and runtime the integration tests use (default: this checkout).")
+
+
+@pytest.fixture
+def fake_renderdoc(monkeypatch):
+    """Unit tests replay against the fake binding on every host; real replay is fixture_integration's job."""
+    from fakes import renderdoc
+    monkeypatch.setitem(sys.modules, "renderdoc", renderdoc)
+    return renderdoc
+
+
+@pytest.fixture
+def pin_host(monkeypatch):
+    """Make every host-dependent decision see one target, e.g. a windows-x64 package built by a test on Linux."""
+    def pin(target: str) -> None:
+        monkeypatch.setattr(platform_host, "host_target", lambda: target)
+    return pin
 
 
 @pytest.fixture(autouse=True)

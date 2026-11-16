@@ -26,9 +26,9 @@ import subprocess
 import time
 import uuid
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from rdc_tool.platform import process
 from rdc_tool.core.session_manager import SessionManager
 from rdc_tool.runtime_paths import cli_runtime_dir
 from rdc_tool.models import (
@@ -201,6 +201,13 @@ class PatchRecord:
 # ---------------------------------------------------------------------------
 # PatchEngine
 # ---------------------------------------------------------------------------
+
+# SPIR-V encodings come in Vulkan and OpenGL flavours; a request names the family.
+_ENCODING_FAMILIES: dict[str, frozenset[str]] = {
+    "spirvasm": frozenset({"spirvasm", "openglspirvasm"}),
+    "spirv": frozenset({"spirv", "openglspirv"}),
+}
+
 
 class PatchEngine:
     """在 RenderDoc replay session 中应用、跟踪并回滚 shader patches。
@@ -1035,7 +1042,7 @@ class PatchEngine:
     ) -> PatchResult:
         encoding_name = str(source_encoding or "hlsl").strip().lower() or "hlsl"
         supported_encodings = list(controller.GetTargetShaderEncodings() or []) if hasattr(controller, "GetTargetShaderEncodings") else []
-        encoding = self._encoding_from_name(encoding_name, supported_encodings)
+        encoding = self._find_requested_encoding(supported_encodings, encoding_name)
         edit_plan = self._edit_plan_for_source(
             encoding_name=encoding_name,
             disassembly_target=str(patch_spec.target or encoding_name.upper()),
@@ -1711,8 +1718,11 @@ class PatchEngine:
         source = controller.DisassembleShader(pipeline_obj, refl, target)
         if not source:
             raise RuntimeError(f"Disassembly returned empty source for target '{target}'")
-        encoding = cls._find_requested_encoding(supported_encodings, encoding_name) if encoding_name else None
-        if encoding is None:
+        if encoding_name:
+            encoding = cls._find_requested_encoding(supported_encodings, encoding_name)
+            if encoding is None:
+                raise RuntimeError(f"Requested shader encoding is unavailable: {encoding_name}")
+        else:
             encoding, _ = cls._get_best_encoding(controller, session_id)
         return (
             str(source), encoding, str(target),
@@ -1758,22 +1768,13 @@ class PatchEngine:
         encodings: List[Any],
         requested_encoding: str,
     ) -> Optional[Any]:
+        """Return the supported native encoding in the requested family, or ``None``."""
         normalized = str(requested_encoding or "").strip().lower().replace("_", "")
         if not normalized:
             return None
-        aliases = {
-            "spirvasm": {"spirvasm", "openglspirvasm", "spirvdis"},
-            "spirv": {"spirv", "openglspirv"},
-            "hlsl": {"hlsl"},
-            "glsl": {"glsl"},
-            "dxbc": {"dxbc"},
-            "dxil": {"dxil"},
-            "slang": {"slang"},
-        }
-        wanted = aliases.get(normalized, {normalized})
+        wanted = _ENCODING_FAMILIES.get(normalized, {normalized})
         for item in encodings:
-            item_name = cls._encoding_name(item).replace("_", "")
-            if item_name in wanted:
+            if cls._encoding_name(item).replace("_", "") in wanted:
                 return item
         return None
 
@@ -1806,7 +1807,7 @@ class PatchEngine:
         output_path = runtime_dir / f"{stem}.spvasm"
         try:
             source_path.write_bytes(payload)
-            proc = subprocess.run(
+            proc = process.run_tool(
                 [tool, str(source_path), "--raw-id", "-o", str(output_path)],
                 capture_output=True,
                 text=True,
@@ -1956,7 +1957,7 @@ class PatchEngine:
         output_path = runtime_dir / f"{stem}.spv"
         try:
             source_path.write_text(str(source or ""), encoding="utf-8")
-            proc = subprocess.run(
+            proc = process.run_tool(
                 [tool, str(source_path), "-o", str(output_path)],
                 capture_output=True,
                 text=True,
@@ -2105,38 +2106,6 @@ class PatchEngine:
             f"Encodings={[str(e) for e in encodings]!r}"
         )
 
-    @classmethod
-    def _encoding_from_name(cls, encoding_name: str, supported_encodings: List[Any]) -> Any:
-        normalized = str(encoding_name or "").strip().lower().replace("_", "")
-        aliases = {
-            "hlsl": "hlsl",
-            "glsl": "glsl",
-            "spirv": "spirv",
-            "spirvasm": "spirvasm",
-            "spvasm": "spirvasm",
-            "dxbc": "dxbc",
-            "dxil": "dxil",
-        }
-        wanted = aliases.get(normalized, normalized)
-        for item in supported_encodings:
-            if cls._encoding_name(item).replace("_", "") == wanted:
-                return item
-        try:
-            rd = _get_rd()
-            enum_name = {
-                "hlsl": "HLSL",
-                "glsl": "GLSL",
-                "spirv": "SPIRV",
-                "spirvasm": "SPIRVAsm",
-                "dxbc": "DXBC",
-                "dxil": "DXIL",
-            }.get(wanted)
-            candidate = getattr(rd.ShaderEncoding, enum_name) if enum_name else None
-            if candidate is not None and (not supported_encodings or candidate in supported_encodings):
-                return candidate
-        except Exception:
-            pass
-        return None
     @staticmethod
     def _build_compile_flags(refl: Any) -> Any:
         """构造 ``BuildTargetShader`` 需要的真实 ``ShaderCompileFlags`` 对象。"""

@@ -1,38 +1,47 @@
-"""Code-owned operation discovery, independent of GPU/runtime startup."""
+"""Code-owned operation discovery, independent of GPU/runtime startup.
+
+``operation_definitions.OPERATIONS`` is the only operation source; the
+generated ``spec/tool_catalog.json`` is never read at runtime.
+"""
 from __future__ import annotations
 from collections import Counter
 from copy import deepcopy
 import hashlib
 import json
-from pathlib import Path
-from typing import Any
+from types import MappingProxyType
+from typing import Any, Mapping
 from rdc_tool.operation_definitions import OPERATIONS
-from rdc_tool.runtime_paths import tools_root
+
+SOURCE_PATH = "rdc_tool/operation_definitions.py"
 
 
-def tool_catalog_path() -> Path:
-    return tools_root() / "spec" / "tool_catalog.json"
+def _index(operations: list[dict[str, Any]]) -> Mapping[str, dict[str, Any]]:
+    index = {tool["name"]: tool for tool in operations}
+    if len(index) != len(operations):
+        raise RuntimeError("Duplicate public operation definition")
+    return MappingProxyType(index)
+
+
+OPERATION_INDEX: Mapping[str, dict[str, Any]] = _index(OPERATIONS)
 
 
 def load_tool_catalog() -> list[dict[str, Any]]:
-    names = [tool["name"] for tool in OPERATIONS]
-    if len(set(names)) != len(names):
-        raise RuntimeError("Duplicate public operation definition")
+    """A caller-owned copy of every operation definition, for output."""
     return deepcopy(OPERATIONS)
 
 
 def catalog_payload() -> dict[str, Any]:
     tools = load_tool_catalog()
     digest = hashlib.sha256(json.dumps(tools, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
-    return {"schema_version": "1", "source_path": "rdc_tool/operation_definitions.py", "fingerprint": digest,
+    return {"schema_version": "1", "source_path": SOURCE_PATH, "fingerprint": digest,
             "tool_count": len(tools), "groups": dict(Counter(t["group"] for t in tools)), "tools": tools}
 
 
 def describe_operation(name: str) -> dict[str, Any]:
-    for tool in OPERATIONS:
-        if tool["name"] == name:
-            return deepcopy(tool)
-    raise ValueError(f"Unknown operation: {name}")
+    try:
+        return deepcopy(OPERATION_INDEX[name])
+    except KeyError:
+        raise ValueError(f"Unknown operation: {name}") from None
 
 
 def validate_operation_arguments(name: str, arguments: dict[str, Any]) -> None:

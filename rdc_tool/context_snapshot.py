@@ -3,16 +3,12 @@
 from __future__ import annotations
 
 import json
-import threading
 import time
-from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 
-import msvcrt
-
-from rdc_tool.io_utils import atomic_write_json
+from rdc_tool.io_utils import atomic_write_json, state_file_lock
 from rdc_tool.runtime_paths import cli_runtime_dir
 
 USER_CONTEXT_KEYS = {
@@ -32,8 +28,6 @@ RUNTIME_OWNED_KEYS = {
     "last_artifacts",
     "preview",
 }
-_CONTEXT_MUTEXES: dict[str, threading.Lock] = {}
-_CONTEXT_MUTEXES_LOCK = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -171,16 +165,6 @@ def normalize_preview_state(value: Any, *, backend: str = "local") -> Dict[str, 
     return payload
 
 
-def _context_mutex(context: Optional[str]) -> threading.Lock:
-    ctx = normalize_context_id(context)
-    with _CONTEXT_MUTEXES_LOCK:
-        lock = _CONTEXT_MUTEXES.get(ctx)
-        if lock is None:
-            lock = threading.Lock()
-            _CONTEXT_MUTEXES[ctx] = lock
-        return lock
-
-
 def normalize_context_id(context: Optional[str]) -> str:
     text = str(context or "").strip()
     if not text or text.lower() == "default":
@@ -188,7 +172,8 @@ def normalize_context_id(context: Optional[str]) -> str:
     return text
 
 
-def _sanitize_context(context: Optional[str]) -> str:
+def context_file_token(context: Optional[str]) -> str:
+    """File-name-safe form of a context id."""
     ctx = normalize_context_id(context)
     return "".join(ch if ch.isalnum() or ch in ("-", "_", ".") else "_" for ch in ctx)
 
@@ -217,26 +202,15 @@ def context_snapshot_path(context: Optional[str] = "default") -> Path:
     ctx = normalize_context_id(context)
     if ctx == "default":
         return state_dir / "context_snapshot.json"
-    return state_dir / f"context_snapshot_{_sanitize_context(ctx)}.json"
+    return state_dir / f"context_snapshot_{context_file_token(ctx)}.json"
 
 
 def _context_snapshot_lock_path(context: Optional[str] = "default") -> Path:
     return context_snapshot_path(context).with_suffix(".lock")
 
 
-@contextmanager
 def _locked_snapshot_file(context: Optional[str] = "default"):
-    lock_path = _context_snapshot_lock_path(context)
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with _context_mutex(context):
-        with open(lock_path, "a+b") as handle:
-            handle.seek(0)
-            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
-            try:
-                yield
-            finally:
-                handle.seek(0)
-                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+    return state_file_lock(_context_snapshot_lock_path(context), normalize_context_id(context))
 
 
 def default_context_snapshot(context: Optional[str] = "default") -> Dict[str, Any]:

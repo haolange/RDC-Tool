@@ -130,10 +130,10 @@ def test_upgrade_rejects_escaping_manifest_before_removal(tmp_path, relative):
 def test_source_upgrade_removes_only_receipted_obsolete_native_file(tmp_path, changed):
     import hashlib
     source, target = tmp_path / 'source', tmp_path / 'target'
-    receipt = source / 'binaries/windows/x64/manifest.runtime.json'
+    receipt = source / 'binaries/native_build.json'
     receipt.parent.mkdir(parents=True)
-    receipt.write_text(json.dumps({'native_build': {'builds': [{'target': 'windows-x64', 'runtime_files': [
-        {'path': 'binaries/windows/x64/renderdoc.dll'}]}]}}))
+    receipt.write_text(json.dumps({'builds': [{'target': 'windows-x64', 'runtime_files': [
+        {'path': 'binaries/windows/x64/renderdoc.dll'}]}]}))
     old = target / 'binaries/windows/x64/pymodules/d3dcompiler_47.dll'
     old.parent.mkdir(parents=True)
     old.write_bytes(b'user modified' if changed else b'old compiler')

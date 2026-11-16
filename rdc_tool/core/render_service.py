@@ -414,14 +414,6 @@ class RenderService:
 
         controller = session_manager.get_controller(session_id)
         output = session_manager.get_output(session_id)
-        backend_type = "unknown"
-        get_state = getattr(session_manager, "get_state", None)
-        if callable(get_state):
-            try:
-                state = get_state(session_id)
-                backend_type = str(getattr(state, "backend_type", "unknown")).lower()
-            except Exception:
-                backend_type = "unknown"
 
         # 导航到指定 event。
         await asyncio.to_thread(controller.SetFrameEvent, event_id, True)
@@ -830,31 +822,6 @@ class RenderService:
 
         return arr, stats
 
-    async def readback_texture(
-        self, session_id: str, event_id: int, texture_id: Any,
-        session_manager: SessionManager, artifact_store: ArtifactStore,
-        subresource: Optional[Dict[str, int]] = None, region: Optional[Dict[str, int]] = None,
-    ) -> Tuple[ArtifactRef, Dict[str, Any]]:
-        """Explicit numeric-container export using the shared in-memory readback."""
-        arr, stats = await self.read_texture_array(session_id, event_id, texture_id, session_manager, subresource, region)
-        # ---- Serialize to .npz --------------------------------------
-        npz_buf = io.BytesIO()
-        np.savez_compressed(npz_buf, pixels=arr)
-        npz_bytes = npz_buf.getvalue()
-
-        artifact_ref = await artifact_store.store(
-            npz_bytes,
-            mime="application/x-npz",
-            suffix=".npz",
-            meta=stats,
-        )
-
-        logger.debug(
-            "readback_texture: event=%d tex=%s shape=%s dtype=%s -> %s",
-            event_id, texture_id, arr.shape, arr.dtype, artifact_ref.uri,
-        )
-        return artifact_ref, stats
-
     # ------------------------------------------------------------------
     # pick_pixel
     # ------------------------------------------------------------------
@@ -1022,7 +989,6 @@ class RenderService:
         并返回最后一个非空 colour attachment。
         对于 ``"texture"``，会使用显式的 *texture_id*。
         """
-        rd = _get_rd()
         source = source_config.get("source", "final_output")
 
         if source == "texture":

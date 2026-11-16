@@ -9,10 +9,10 @@ from rdc_tool import cli as rdc_tool_cli
 def test_daemon_status_uses_loaded_state_before_cleanup(monkeypatch) -> None:
     captured: list[dict] = []
     cleanup_calls: list[str] = []
-    loaded_state = {"pid": 123, "token": "tok", "pipe_name": "pipe-1", "context_id": "ctx-status"}
+    loaded_state = {"pid": 123, "token": "tok", "endpoint": "pipe-1", "context_id": "ctx-status"}
 
-    monkeypatch.setattr(rdc_tool_cli, "load_daemon_state", lambda context="default": dict(loaded_state) if context == "ctx-status" else {})
-    monkeypatch.setattr(rdc_tool_cli, "cleanup_stale_daemon_states", lambda context=None: cleanup_calls.append(str(context or "")) or {"state_files": [], "session_files": [], "killed_pids": []})
+    monkeypatch.setattr(rdc_tool_cli, "load_state", lambda context="default": dict(loaded_state) if context == "ctx-status" else {})
+    monkeypatch.setattr(rdc_tool_cli, "cleanup_stale_daemon_states", lambda context=None: cleanup_calls.append(str(context or "")) or {"state_files": [], "killed_pids": []})
 
     def _fake_daemon_request(method: str, *, params=None, timeout=0.0, state=None, context="default"):
         assert method == "status"
@@ -30,3 +30,4 @@ def test_daemon_status_uses_loaded_state_before_cleanup(monkeypatch) -> None:
     assert cleanup_calls == []
     assert captured[0]["ok"] is True
     assert captured[0]["data"]["state"]["pid"] == 123
+    assert "token" not in captured[0]["data"]["state"]

@@ -37,16 +37,6 @@ class NotFoundError(CoreError):
         )
 
 
-class AssertionFailedError(CoreError):
-    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None) -> None:
-        super().__init__(
-            code="assertion_failed",
-            message=message,
-            category="assertion_failed",
-            details=dict(details or {}),
-        )
-
-
 class RuntimeToolError(CoreError):
     def __init__(self, message: str, details: Optional[Dict[str, Any]] = None) -> None:
         super().__init__(

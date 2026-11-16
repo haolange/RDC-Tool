@@ -6,8 +6,9 @@ import json
 import os
 from pathlib import Path
 
-from rdc_tool import server
 from rdc_tool.daemon import worker as daemon_worker
+from rdc_tool.runtime import runtime_lifecycle
+from rdc_tool.runtime import dispatch as runtime_dispatch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -49,7 +50,7 @@ def _prepare_runtime_source(tmp_path: Path) -> Path:
 
 def test_worker_uses_source_runtime_directly(tmp_path: Path, monkeypatch) -> None:
     source_root = _prepare_runtime_source(tmp_path)
-    monkeypatch.setenv("RDC_TOOL_ROOT", str(ROOT))
+    monkeypatch.setattr(daemon_worker, "tools_root", lambda: source_root.parents[2])
     monkeypatch.setattr(daemon_worker, "binaries_root", lambda: source_root)
     monkeypatch.setattr(daemon_worker, "pymodules_dir", lambda: source_root / "pymodules")
 
@@ -77,10 +78,9 @@ def test_worker_uses_source_runtime_directly(tmp_path: Path, monkeypatch) -> Non
     try:
         env = captured["env"]
         assert isinstance(env, dict)
-        assert env["RDC_TOOL_RUNTIME_DLL_DIR"] == str(source_root.resolve())
-        assert env["RDC_TOOL_RENDERDOC_PATH"] == str((source_root / "pymodules").resolve())
-        assert env["RDC_TOOL_WORKER_SOURCE_MANIFEST"] == str((source_root / "manifest.runtime.json").resolve())
+        assert env["PYTHONPATH"].split(os.pathsep)[0] == str(ROOT)
         assert env["RDC_TOOL_DAEMON_PID"] == str(os.getpid())
+        assert env["RDC_TOOL_DAEMON_BIRTH"] == daemon_worker.process.self_identity().birth
         if os.name == "nt":
             options = captured["kwargs"]
             assert options["creationflags"] == (daemon_worker.subprocess.CREATE_NEW_CONSOLE | daemon_worker.subprocess.CREATE_NEW_PROCESS_GROUP)
@@ -93,8 +93,6 @@ def test_worker_uses_source_runtime_directly(tmp_path: Path, monkeypatch) -> Non
         worker_state = worker.snapshot()
         assert worker_state["binaries_dir"] == str(source_root.resolve())
         assert worker_state["pymodules_dir"] == str((source_root / "pymodules").resolve())
-        removed_fields = {"runtime_" + "id", "cache_" + "root"}
-        assert removed_fields.isdisjoint(worker_state)
     finally:
         worker._proc = None
         worker._runtime = None
@@ -103,10 +101,8 @@ def test_worker_uses_source_runtime_directly(tmp_path: Path, monkeypatch) -> Non
 def test_worker_rejects_declared_but_invalid_native_set_before_spawn(tmp_path, monkeypatch):
     import pytest
     source = _prepare_runtime_source(tmp_path)
-    manifest = source / "manifest.runtime.json"
-    payload = json.loads(manifest.read_text(encoding="utf-8"))
-    payload["native_build"] = {"source": {}, "builds": []}
-    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    (source.parents[1] / "native_build.json").write_text(json.dumps({"source": {}, "builds": []}), encoding="utf-8")
+    monkeypatch.setattr(daemon_worker, "tools_root", lambda: source.parents[2])
     monkeypatch.setattr(daemon_worker, "binaries_root", lambda: source)
     monkeypatch.setattr(daemon_worker.subprocess, "Popen", lambda *a, **kw: pytest.fail("unverified runtime was spawned"))
     worker = daemon_worker.RuntimeWorkerProcess(context_id="invalid-native")
@@ -116,26 +112,26 @@ def test_worker_rejects_declared_but_invalid_native_set_before_spawn(tmp_path, m
 
 
 def test_mixed_loaded_runtime_rejects_new_work_but_keeps_cleanup_available(monkeypatch):
-    from types import SimpleNamespace
-    import rdc_tool
-    from rdc_tool import runtime_identity, runtime_worker
+    from rdc_tool import runtime_identity
+    from rdc_tool.runtime import worker_main
     called = []
     async def dispatch(operation, *args, **kwargs):
         called.append(operation)
         return {"closed": True}
     async def shutdown(**kwargs):
         called.append("shutdown")
-    monkeypatch.setattr(rdc_tool, "server", SimpleNamespace(dispatch_operation=dispatch, runtime_shutdown=shutdown))
+    monkeypatch.setattr(runtime_dispatch, "dispatch_operation", dispatch)
+    monkeypatch.setattr(runtime_lifecycle, "runtime_shutdown", shutdown)
     monkeypatch.setattr(runtime_identity, "loaded_runtime_identity", lambda *args: {"status": "mismatch"})
     requests = [
         {"id": "query", "method": "exec", "params": {"operation": "rd.texture.get_pixel_history"}},
         {"id": "clear", "method": "clear_context"},
         {"id": "stop", "method": "shutdown"},
     ]
-    monkeypatch.setattr(runtime_worker.sys, "stdin", io.StringIO("\n".join(json.dumps(item) for item in requests)))
+    monkeypatch.setattr(worker_main.sys, "stdin", io.StringIO("\n".join(json.dumps(item) for item in requests)))
     outputs = []
-    monkeypatch.setattr(runtime_worker, "_emit", outputs.append)
-    assert runtime_worker.main(["--context-id", "mixed-runtime"]) == 0
+    monkeypatch.setattr(worker_main, "_emit", outputs.append)
+    assert worker_main.main(["--context-id", "mixed-runtime"]) == 0
     assert outputs[1]["ok"] is False
     assert "configured runtime" in outputs[1]["error"]["message"]
     assert called == ["rd.core.shutdown", "shutdown"]
@@ -145,9 +141,7 @@ def test_worker_keeps_loop_and_native_thread_across_requests_and_shutdown(monkey
     import asyncio
     import threading
     import time
-    from types import SimpleNamespace
-    import rdc_tool
-    from rdc_tool import runtime_worker
+    from rdc_tool.runtime import worker_main
     monkeypatch.setenv("RDC_TOOL_CONTEXT_ID", "default")
     loops=[]
     native_threads=[]
@@ -161,28 +155,27 @@ def test_worker_keeps_loop_and_native_thread_across_requests_and_shutdown(monkey
     async def shutdown(**kwargs):
         loops.append(id(asyncio.get_running_loop()))
         await asyncio.to_thread(native)
-    monkeypatch.setattr(rdc_tool, "server", SimpleNamespace(dispatch_operation=dispatch, runtime_shutdown=shutdown))
+    monkeypatch.setattr(runtime_dispatch, "dispatch_operation", dispatch)
+    monkeypatch.setattr(runtime_lifecycle, "runtime_shutdown", shutdown)
     requests=[{"id":str(i),"method":method,"params":{"operation":"rd.test"}} for i,method in enumerate(["exec","exec","shutdown"])]
-    monkeypatch.setattr(runtime_worker.sys,"stdin",io.StringIO("\n".join(json.dumps(x) for x in requests)))
+    monkeypatch.setattr(worker_main.sys,"stdin",io.StringIO("\n".join(json.dumps(x) for x in requests)))
     outputs=[]
-    monkeypatch.setattr(runtime_worker,"_emit",outputs.append)
-    assert runtime_worker.main(["--context-id","thread-test"]) == 0
+    monkeypatch.setattr(worker_main, "_emit",outputs.append)
+    assert worker_main.main(["--context-id","thread-test"]) == 0
     assert len(loops) == 3 and len(set(loops)) == 1
     assert len(native_threads) == 5 and len(set(native_threads)) == 1
     assert outputs[-1]["result"] == {"stopped": True}
 
 
 def test_worker_eof_shuts_down_before_thread_executor_closes(monkeypatch):
-    from types import SimpleNamespace
-    import rdc_tool
-    from rdc_tool import runtime_worker
+    from rdc_tool.runtime import worker_main
     monkeypatch.setenv("RDC_TOOL_CONTEXT_ID", "default")
     closed=[]
     async def shutdown(**kwargs): closed.append(kwargs)
-    monkeypatch.setattr(rdc_tool,"server",SimpleNamespace(runtime_shutdown=shutdown))
-    monkeypatch.setattr(runtime_worker.sys,"stdin",io.StringIO(""))
-    monkeypatch.setattr(runtime_worker,"_emit",lambda result: None)
-    assert runtime_worker.main(["--context-id","eof-test"]) == 0
+    monkeypatch.setattr(runtime_lifecycle, "runtime_shutdown", shutdown)
+    monkeypatch.setattr(worker_main.sys,"stdin",io.StringIO(""))
+    monkeypatch.setattr(worker_main, "_emit",lambda result: None)
+    assert worker_main.main(["--context-id","eof-test"]) == 0
     assert closed == [{"clear_context_state":False}]
 
 
@@ -196,19 +189,16 @@ def test_request_does_not_implicitly_spawn_a_missing_worker(monkeypatch):
 
 def test_worker_shutdown_uses_real_facade_and_preserves_daemon_context(monkeypatch):
     import asyncio
-    from types import SimpleNamespace
-    import rdc_tool
-    from rdc_tool import runtime_worker
+    from rdc_tool.runtime import worker_main
     calls, outputs = [], []
     monkeypatch.setenv("RDC_TOOL_CONTEXT_ID", "default")
     async def shutdown(*, clear_context_state: bool = True):
         calls.append(clear_context_state)
-    monkeypatch.setattr(server, "_runtime_module", lambda: SimpleNamespace(runtime_shutdown=shutdown))
-    monkeypatch.setattr(rdc_tool, "server", server)
-    monkeypatch.setattr(runtime_worker.sys, "stdin", io.StringIO('{"id":"stop","method":"shutdown"}\n'))
-    monkeypatch.setattr(runtime_worker, "_emit", outputs.append)
-    assert runtime_worker.main(["--context-id", "shutdown-facade"]) == 0
+    monkeypatch.setattr(runtime_lifecycle, "runtime_shutdown", shutdown)
+    monkeypatch.setattr(worker_main.sys, "stdin", io.StringIO('{"id":"stop","method":"shutdown"}\n'))
+    monkeypatch.setattr(worker_main, "_emit", outputs.append)
+    assert worker_main.main(["--context-id", "shutdown-facade"]) == 0
     assert outputs[-1] == {"id": "stop", "ok": True, "result": {"stopped": True}}
     assert calls == [False]
-    asyncio.run(server.runtime_shutdown())
+    asyncio.run(runtime_lifecycle.runtime_shutdown())
     assert calls == [False, True]

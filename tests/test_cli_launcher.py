@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -24,13 +25,6 @@ def _cmd_exe() -> str:
     return str(Path(system_root) / "System32" / "cmd.exe")
 
 
-def _launcher_env() -> dict[str, str]:
-    env = os.environ.copy()
-    env.setdefault("RDC_TOOL_ROOT", str(ROOT))
-    env.pop("RDC_TOOL_PYTHON", None)
-    return env
-
-
 def _run_cmd(*args: str) -> tuple[int, dict, str]:
     proc = subprocess.run(
         [_cmd_exe(), "/c", str(ROOT / "bin" / "rdc-tool.cmd"), *args],
@@ -41,7 +35,6 @@ def _run_cmd(*args: str) -> tuple[int, dict, str]:
         encoding="utf-8",
         errors="replace",
         timeout=90,
-        env=_launcher_env(),
         check=False,
     )
     combined = (proc.stdout or "") + (proc.stderr or "")
@@ -58,7 +51,6 @@ def _run_cmd_from_cwd(cwd: Path, *args: str) -> tuple[int, dict, str]:
         encoding="utf-8",
         errors="replace",
         timeout=90,
-        env=_launcher_env(),
         check=False,
     )
     combined = (proc.stdout or "") + (proc.stderr or "")
@@ -76,7 +68,6 @@ def _cleanup_context(context_id: str) -> None:
             encoding="utf-8",
             errors="replace",
             timeout=60,
-            env=_launcher_env(),
             check=False,
         )
 
@@ -116,7 +107,6 @@ def test_noninteractive_unknown_command_uses_cli_usage_error() -> None:
         encoding="utf-8",
         errors="replace",
         timeout=90,
-        env=_launcher_env(),
         check=False,
     )
     combined = (proc.stdout or "") + (proc.stderr or "")
@@ -127,9 +117,9 @@ def test_noninteractive_unknown_command_uses_cli_usage_error() -> None:
 
 @pytest.mark.skipif(os.name != "nt", reason="bin/rdc-tool.cmd launcher tests are windows-specific")
 def test_launcher_missing_command_returns_usage_error() -> None:
-    proc = subprocess.run([_cmd_exe(), "/c", str(ROOT / "bin" / "rdc-tool.cmd")], cwd=ROOT, stdin=subprocess.DEVNULL, capture_output=True, text=True, env=_launcher_env(), timeout=30)
+    proc = subprocess.run([_cmd_exe(), "/c", str(ROOT / "bin" / "rdc-tool.cmd")], cwd=ROOT, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30)
     assert proc.returncode == 2
-    assert "missing command" in proc.stderr
+    assert "the following arguments are required: command" in proc.stderr
 
 
 @pytest.mark.skipif(os.name != "nt", reason="bin/rdc-tool.cmd launcher tests are windows-specific")
@@ -144,7 +134,6 @@ def test_noninteractive_version_and_completion_are_available() -> None:
         encoding="utf-8",
         errors="replace",
         timeout=90,
-        env=_launcher_env(),
         check=False,
     )
 
@@ -208,3 +197,50 @@ def test_noninteractive_tools_search_runs_from_caller_cwd(tmp_path: Path) -> Non
     assert payload["ok"] is True
     assert payload["result_kind"] == "rdc_tool.tools.search"
     assert payload["data"]["tool_count"] >= 1
+
+
+def _posix_launcher(tmp_path: Path, uname_s: str, uname_m: str, *, interpreter: str | None) -> tuple[Path, dict[str, str]]:
+    root = tmp_path / "install root"
+    (root / "bin").mkdir(parents=True)
+    shutil.copy2(ROOT / "bin" / "rdc-tool", root / "bin" / "rdc-tool")
+    if interpreter is not None:
+        python = root / interpreter
+        python.parent.mkdir(parents=True)
+        python.write_text('#!/bin/sh\nprintf "%s\\n" "$@"\necho "PYTHONPATH=${PYTHONPATH-unset} PYTHONHOME=${PYTHONHOME-unset}"\nexit 7\n')
+        python.chmod(0o755)
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    uname = fake_bin / "uname"
+    uname.write_text(f'#!/bin/sh\ncase "$1" in -s) echo {uname_s} ;; -m) echo {uname_m} ;; esac\n')
+    uname.chmod(0o755)
+    env = {**os.environ, "PATH": f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}",
+           "PYTHONPATH": "/elsewhere", "PYTHONHOME": "/elsewhere"}
+    return root, env
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX shell launcher")
+def test_posix_launcher_runs_this_installations_python_without_inherited_python_env(tmp_path: Path) -> None:
+    root, env = _posix_launcher(tmp_path, "Linux", "x86_64", interpreter="binaries/linux/x64/python/bin/python3.14")
+    proc = subprocess.run(["sh", str(root / "bin" / "rdc-tool"), "--json", "a b"], cwd=tmp_path, env=env,
+                          capture_output=True, text=True, timeout=30, check=False)
+    assert proc.returncode == 7, proc.stderr
+    assert proc.stdout.splitlines() == ["-s", str(root / "cli" / "run_cli.py"), "--json", "a b",
+                                        "PYTHONPATH=unset PYTHONHOME=unset"]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX shell launcher")
+@pytest.mark.parametrize(("uname_s", "uname_m", "message"), [
+    ("Darwin", "arm64", "no runtime for host Darwin-arm64"),
+    ("Linux", "x86_64", "Bundled Python is missing"),
+])
+def test_posix_launcher_refuses_hosts_and_installs_it_cannot_run(tmp_path: Path, uname_s: str, uname_m: str, message: str) -> None:
+    root, env = _posix_launcher(tmp_path, uname_s, uname_m, interpreter=None)
+    proc = subprocess.run(["sh", str(root / "bin" / "rdc-tool"), "version"], cwd=tmp_path, env=env,
+                          capture_output=True, text=True, timeout=30, check=False)
+    assert proc.returncode == 2
+    assert message in proc.stderr
+
+
+def test_launchers_export_no_rdc_tool_variables() -> None:
+    for name in ("rdc-tool", "rdc-tool.cmd"):
+        assert "RDC_TOOL_" not in (ROOT / "bin" / name).read_text(encoding="utf-8")

@@ -1,301 +1,50 @@
 ﻿#!/usr/bin/env python3
-"""Copy runtime binaries into rdc-tool/binaries and generate manifest."""
+"""Assemble one host's runtime under binaries/ and write its manifest.
+
+A runtime directory holds three independently owned parts: the paired native
+set (build receipt), the bundled interpreter (pinned archive + hash-locked
+dependencies) and the host tools (provenance file). Each input replaces only
+its own part; everything is staged, verified and then published as a whole.
+"""
 
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import shutil
 import struct
-import subprocess
 import sys
+import tarfile
 import tempfile
 import zipfile
-from pathlib import Path
-from typing import Iterable
+from pathlib import Path, PurePosixPath
+from typing import Any, Iterable
 
 SCRIPT_ROOT = Path(__file__).resolve().parents[1]
 if str(SCRIPT_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPT_ROOT))
 
-from rdc_tool.host_tools import BUNDLED_HOST_FILES
-from rdc_tool.runtime_requirements import should_bundle_site_package
-from rdc_tool import runtime_identity
-from scripts.distribution_metadata import write_distribution_metadata
-from scripts._shared import ensure_within_root, resolve_repo_path, task_directory, tools_root, write_text
+from rdc_tool import runtime_identity  # noqa: E402
+from rdc_tool.host_tools import bundled_host_files  # noqa: E402
+from rdc_tool.io_utils import sha256_file  # noqa: E402
+from rdc_tool.platform import process  # noqa: E402
+from rdc_tool.platform import host as platform_host  # noqa: E402
+from rdc_tool.runtime_paths import HOST_LAYOUTS, HostLayout, tools_root  # noqa: E402
+from scripts._shared import ensure_within_root, resolve_repo_path, task_directory, write_text  # noqa: E402
+from scripts.distribution_metadata import write_distribution_metadata  # noqa: E402
 
-
+PYTHON_PINS = SCRIPT_ROOT / "scripts" / "python-runtimes.json"
+DEPENDENCY_LOCK = SCRIPT_ROOT / "scripts" / "runtime-dependencies.lock"
+MANIFEST = "manifest.runtime.json"
+HOST_TOOL_PROVENANCE = "bundled_tools.json"
 DENY_SUFFIXES = {".pdb", ".lib", ".exp", ".ilk", ".h"}
-ALLOW_PATTERNS = (
-    "*.dll",
-    "*.json",
-)
-ALLOW_PYMODULE_PATTERNS = (
-    "*.pyd",
-    "*.dll",
-    "*.json",
-)
-SKIP_STDLIB_TOP_LEVEL = {"site-packages", "test", "tests", "idlelib", "turtledemo", "ensurepip", "venv", "__pycache__"}
-PYTHON_BASE_FILES = (
-    "python.exe",
-    "pythonw.exe",
-    "python3.dll",
-    "vcruntime140.dll",
-    "vcruntime140_1.dll",
-    "LICENSE.txt",
-)
-
-
-def _tools_root() -> Path:
-    return tools_root(__file__)
+SKIP_SUFFIXES = {".pyc", ".md", ".rst", ".chm"}
+SKIP_STDLIB_TOP_LEVEL = {"site-packages", "test", "tests", "idlelib", "turtledemo", "ensurepip", "venv", "tkinter", "__pycache__"}
 
 
 def _resolve_input_path(root: Path, raw_path: str, *, label: str, allow_outside_root: bool = False) -> Path:
     resolved = resolve_repo_path(root, raw_path)
-    if allow_outside_root:
-        return resolved
-    return ensure_within_root(root, resolved, label=label)
-
-
-def _iter_allowed_files(src: Path) -> Iterable[Path]:
-    for pattern in ALLOW_PATTERNS:
-        for p in sorted(src.glob(pattern)):
-            if p.is_file():
-                yield p
-    pymod = src / "pymodules"
-    if pymod.is_dir():
-        for pattern in ALLOW_PYMODULE_PATTERNS:
-            for p in sorted(pymod.glob(pattern)):
-                if p.is_file():
-                    yield p
-
-
-def _sha256(path: Path) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as f:
-        while True:
-            chunk = f.read(1024 * 1024)
-            if not chunk:
-                break
-            h.update(chunk)
-    return h.hexdigest()
-
-
-def _copy_tree_filtered(src: Path, dst: Path, *, skip_top_level: set[str] | None = None) -> None:
-    skip_top_level = {item.lower() for item in (skip_top_level or set())}
-    for path in src.rglob("*"):
-        if path.is_dir():
-            continue
-        rel = path.relative_to(src)
-        parts = [part.lower() for part in rel.parts]
-        if any(part == "__pycache__" for part in parts):
-            continue
-        if path.suffix.lower() in (".pyc", ".md", ".rst", ".chm"):
-            continue
-        if rel.parts and rel.parts[0].lower() in skip_top_level:
-            continue
-        target = dst / rel
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(path, target)
-
-
-def _copy_site_packages(src: Path, dst: Path) -> None:
-    dst.mkdir(parents=True, exist_ok=True)
-    for child in sorted(src.iterdir()):
-        if not should_bundle_site_package(child.name):
-            continue
-        target = dst / child.name
-        if child.is_dir():
-            _copy_tree_filtered(child, target)
-        else:
-            if child.suffix.lower() in (".pyc", ".md", ".rst", ".chm"):
-                continue
-            shutil.copy2(child, target)
-
-
-def _probe_python_version(python_home: Path) -> str:
-    python_exe = python_home / "python.exe"
-    if not python_exe.is_file():
-        raise RuntimeError(f"missing python.exe in python home: {python_exe}")
-    proc = subprocess.run(
-        [str(python_exe), "-c", "import sys; print('.'.join(map(str, sys.version_info[:3])))"],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        check=False,
-    )
-    if proc.returncode != 0:
-        raise RuntimeError(f"failed to probe python version from {python_exe}: {(proc.stdout or '')}{(proc.stderr or '')}".strip())
-    return str(proc.stdout or "").strip()
-
-
-def _python_tag(python_version: str) -> str:
-    parts = str(python_version or "").strip().split(".")
-    if len(parts) < 2:
-        raise RuntimeError(f"invalid python version: {python_version}")
-    return f"{parts[0]}{parts[1]}"
-
-
-def _bundle_python_runtime(root: Path, out_root: Path, python_home_raw: str, site_packages_raw: str | None, python_version_raw: str | None) -> dict[str, str]:
-    python_home = _resolve_input_path(root, python_home_raw, label="python home", allow_outside_root=True)
-    if not python_home.is_dir():
-        raise RuntimeError(f"missing python home: {python_home}")
-
-    site_packages_source: Path | None = None
-    if site_packages_raw:
-        site_packages_source = _resolve_input_path(root, site_packages_raw, label="site-packages source")
-        if not site_packages_source.is_dir():
-            raise RuntimeError(f"missing site-packages source: {site_packages_source}")
-
-    python_version = str(python_version_raw or "").strip() or _probe_python_version(python_home)
-    tag = _python_tag(python_version)
-    python_dir = out_root / "python"
-    if site_packages_source is not None:
-        site_packages_resolved = site_packages_source.resolve()
-        python_dir_resolved = python_dir.resolve()
-        try:
-            site_packages_resolved.relative_to(python_dir_resolved)
-        except ValueError:
-            pass
-        else:
-            raise RuntimeError(
-                f"site-packages source must not point inside the bundled python output tree: {site_packages_resolved}"
-            )
-    if python_dir.exists():
-        shutil.rmtree(python_dir)
-    python_dir.mkdir(parents=True, exist_ok=True)
-
-    for name in PYTHON_BASE_FILES:
-        src = python_home / name
-        if src.is_file():
-            shutil.copy2(src, python_dir / name)
-    versioned_dll = python_home / f"python{tag}.dll"
-    if not versioned_dll.is_file():
-        raise RuntimeError(f"missing versioned python dll: {versioned_dll}")
-    shutil.copy2(versioned_dll, python_dir / versioned_dll.name)
-
-    dll_dir = python_home / "DLLs"
-    if dll_dir.is_dir():
-        _copy_tree_filtered(dll_dir, python_dir / "DLLs")
-
-    lib_dir = python_home / "Lib"
-    if not lib_dir.is_dir():
-        raise RuntimeError(f"missing stdlib directory: {lib_dir}")
-    _copy_tree_filtered(lib_dir, python_dir / "Lib", skip_top_level=SKIP_STDLIB_TOP_LEVEL)
-
-    bundled_site_packages = python_dir / "Lib" / "site-packages"
-    bundled_site_packages.mkdir(parents=True, exist_ok=True)
-    if site_packages_source is not None:
-        _copy_site_packages(site_packages_source, bundled_site_packages)
-
-    if (bundled_site_packages / "win32").is_dir() and (bundled_site_packages / "pywin32_system32").is_dir():
-        write_text(
-            bundled_site_packages / "pywin32.pth",
-            "win32\nwin32\\lib\npywin32_system32\n",
-            encoding="utf-8",
-        )
-
-    pth_lines = [
-        ".",
-        "DLLs",
-        "Lib",
-        "Lib/site-packages",
-        "..\\..\\..\\..",
-        "import site",
-        "",
-    ]
-    write_text(python_dir / f"python{tag}._pth", "\n".join(pth_lines), encoding="utf-8")
-
-    return {
-        "python_version": python_version,
-        "python_entry": "python/python.exe",
-        "pythonw_entry": "python/pythonw.exe",
-        "python3_dll": "python/python3.dll",
-        "python_dll": f"python/python{tag}.dll",
-        "stdlib_layout": "python/Lib",
-        "site_packages": "python/Lib/site-packages",
-        "dll_dir": "python/DLLs",
-        "pth_file": f"python/python{tag}._pth",
-    }
-
-
-def _existing_bundled_python_metadata(out_root: Path) -> dict[str, str]:
-    python_dir = out_root / "python"
-    python_exe = python_dir / "python.exe"
-    if not python_exe.is_file():
-        return {}
-    try:
-        python_version = _probe_python_version(python_dir)
-        tag = _python_tag(python_version)
-    except RuntimeError:
-        return {}
-    metadata = {
-        "python_version": python_version,
-        "python_entry": "python/python.exe",
-        "pythonw_entry": "python/pythonw.exe",
-        "python3_dll": "python/python3.dll",
-        "python_dll": f"python/python{tag}.dll",
-        "stdlib_layout": "python/Lib",
-        "site_packages": "python/Lib/site-packages",
-        "dll_dir": "python/DLLs",
-        "pth_file": f"python/python{tag}._pth",
-    }
-    required = ("python_entry", "python_dll", "stdlib_layout", "site_packages", "pth_file")
-    for key in required:
-        if not (out_root / metadata[key]).exists():
-            return {}
-    return metadata
-
-
-def _iter_manifest_files(out_root: Path) -> Iterable[Path]:
-    for path in sorted(out_root.rglob("*")):
-        if not path.is_file():
-            continue
-        rel = path.relative_to(out_root).as_posix()
-        if rel == "manifest.runtime.json":
-            continue
-        if "__pycache__/" in rel or path.suffix.lower() == ".pyc":
-            continue
-        if path.suffix.lower() in DENY_SUFFIXES:
-            continue
-        if rel in BUNDLED_HOST_FILES:
-            yield path
-            continue
-        if rel.startswith("python/"):
-            yield path
-            continue
-        if rel.startswith("pymodules/"):
-            yield path
-            continue
-        if "/" in rel:
-            continue
-        if path.name.lower().startswith("python"):
-            continue
-        yield path
-
-
-def _manifest_entry(path: Path, out_root: Path) -> dict[str, object]:
-    rel = path.relative_to(out_root).as_posix()
-    return {
-        "path": rel,
-        "size": int(path.stat().st_size),
-        "sha256": _sha256(path),
-    }
-
-
-def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Package runtime binaries for rdc-tool")
-    parser.add_argument("--source", dest="renderdoc_source", default="", help="Repo-relative staging directory under the rdc-tool root")
-    parser.add_argument("--python-home", default="", help="Absolute or repo-relative CPython home used to build the bundled runtime")
-    parser.add_argument("--site-packages-source", default=".venv/Lib/site-packages", help="Repo-relative site-packages source for the bundled runtime")
-    parser.add_argument("--python-version", default="", help="Override the bundled CPython version metadata")
-    parser.add_argument("--arm32-apk", default="", help="Matching arm32 helper APK build output")
-    parser.add_argument("--arm64-apk", default="", help="Matching arm64 helper APK build output")
-    parser.add_argument("--build-receipt", default="", help="JSON receipt for all three builds from one frozen source tree")
-    parser.add_argument("--output-root", default="", help="Assemble a new runtime root under intermediate/ or dist/ without replacing the current runtime")
-    return parser.parse_args(argv)
+    return resolved if allow_outside_root else ensure_within_root(root, resolved, label=label)
 
 
 def _reject_links(root: Path) -> None:
@@ -304,187 +53,322 @@ def _reject_links(root: Path) -> None:
             raise RuntimeError(f"Runtime input contains a link: {path}")
 
 
-def _windows_runtime_inputs(root: Path, source: Path, args: argparse.Namespace) -> list[dict[str, object]]:
-    receipt_path = _resolve_input_path(root, args.build_receipt, label="build receipt")
-    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
-    builds = [build for build in receipt["builds"] if build["target"] == "windows-x64"]
-    if len(builds) != 1:
-        raise ValueError("Build receipt requires exactly one Windows build")
-    files = builds[0]["runtime_files"]
-    actual = {path.relative_to(source).as_posix(): path for path in _iter_allowed_files(source)}
-    if "manifest.runtime.json" in actual:
+# --- native set -------------------------------------------------------------
+
+def _host_runtime_inputs(source: Path, build: dict[str, Any]) -> list[dict[str, Any]]:
+    files = build["runtime_files"]
+    actual = runtime_identity.native_runtime_files(source)
+    if MANIFEST in actual:
         raise ValueError("Native source must not supply the generated runtime manifest")
     if len(files) != len(actual) or {item["path"] for item in files} != set(actual):
-        raise ValueError("Windows native source file set differs from its complete build receipt")
+        raise ValueError(f"{build['target']} native source file set differs from its complete build receipt")
     for item in files:
         if runtime_identity.file_identity(actual[item["path"]]) != {"size": item["size"], "sha256": item["sha256"]}:
-            raise ValueError(f"Windows native input changed after receipt: {item['path']}")
+            raise ValueError(f"{build['target']} native input changed after receipt: {item['path']}")
     return files
 
 
-def _native_build_receipt(root: Path, staged_root: Path, args: argparse.Namespace) -> dict[str, object]:
+def _install_native_set(root: Path, staged_root: Path, args: argparse.Namespace) -> dict[str, Any]:
+    """Replace this host's native set and the paired helper APKs; return the packaged receipt."""
     receipt_path = _resolve_input_path(root, args.build_receipt, label="build receipt")
     receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
-    builds = []
-    for build in receipt["builds"]:
-        target = build["target"]
-        if target not in runtime_identity.NATIVE_OUTPUTS:
-            raise ValueError(f"Unknown native build target: {target}")
+    source = receipt["source"]
+    if set(source) != runtime_identity.SOURCE_FIELDS:
+        raise ValueError(f"Build receipt source fields must be exactly {sorted(runtime_identity.SOURCE_FIELDS)}")
+    builds = {build["target"]: build for build in receipt["builds"]}
+    if len(builds) != len(receipt["builds"]) or not set(builds) <= set(runtime_identity.NATIVE_TARGETS):
+        raise ValueError(f"Build receipt targets must be unique and known: {[b['target'] for b in receipt['builds']]}")
+    if args.host not in builds:
+        raise ValueError(f"Build receipt has no {args.host} build")
+    apks = {abi: raw for abi, raw in (("arm32", args.arm32_apk), ("arm64", args.arm64_apk)) if raw}
+    paired_abis = {target.removeprefix("android-") for target in builds if target in runtime_identity.ANDROID_TARGETS}
+    if set(apks) != paired_abis:
+        raise ValueError(f"Helper APK inputs {sorted(apks)} must match the receipt's Android builds {sorted(paired_abis)}")
+
+    native_source = _resolve_input_path(root, args.renderdoc_source, label="runtime source")
+    if not native_source.is_dir():
+        raise RuntimeError(f"missing source directory: {native_source}")
+    _reject_links(native_source)
+    files = _host_runtime_inputs(native_source, builds[args.host])
+    out_root = staged_root / HOST_LAYOUTS[args.host].runtime_dir
+    out_root.mkdir(parents=True, exist_ok=True)
+    # Replace the native-owned set completely; Python and host tools have separate owners.
+    for old in runtime_identity.native_runtime_files(out_root).values():
+        if old.parent == out_root:
+            old.unlink()
+    shutil.rmtree(out_root / "pymodules", ignore_errors=True)
+    (out_root / "pymodules").mkdir()
+    for item in files:
+        destination = out_root / str(item["path"])
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(native_source / str(item["path"]), destination)
+    for abi, raw in apks.items():
+        destination = staged_root / runtime_identity.ANDROID_TARGETS[f"android-{abi}"]["helper_apk"]
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(_resolve_input_path(root, raw, label=f"{abi} APK", allow_outside_root=True), destination)
+
+    packaged = []
+    for target, build in builds.items():
         if not isinstance(build["configuration"], str) or not build["configuration"].strip():
             raise ValueError(f"Build configuration is missing: {target}")
         if not isinstance(build["toolchain"], dict) or not build["toolchain"]:
             raise ValueError(f"Build toolchain is missing: {target}")
+        # Other host targets were built and packaged on their own host; only their staged bytes are checked here.
+        built_here = target == args.host or target in runtime_identity.ANDROID_TARGETS
         outputs = []
         for item in build["outputs"]:
             role = item["role"]
-            destination = runtime_identity.NATIVE_OUTPUTS[target][role]
-            original = Path(item["path"])
-            if not original.is_absolute():
-                original = receipt_path.parent / original
+            destination = runtime_identity.NATIVE_TARGETS[target][role]
             expected = {"size": item["size"], "sha256": item["sha256"]}
-            if runtime_identity.file_identity(original) != expected:
-                raise ValueError(f"Build output changed after receipt: {target}/{role}")
-            packaged = staged_root / destination
-            if runtime_identity.file_identity(packaged) != expected:
+            if built_here:
+                original = Path(item["path"])
+                original = original if original.is_absolute() else receipt_path.parent / original
+                if runtime_identity.file_identity(original) != expected:
+                    raise ValueError(f"Build output changed after receipt: {target}/{role}")
+            if runtime_identity.file_identity(staged_root / destination) != expected:
                 raise ValueError(f"Runtime input differs from build output: {target}/{role}")
             output = {"role": role, "path": destination, **expected}
-            if target.startswith("android-"):
-                output["apk"] = runtime_identity.apk_native_identity(packaged, target.removeprefix("android-"))
+            if target in runtime_identity.ANDROID_TARGETS:
+                output["apk"] = runtime_identity.apk_native_identity(staged_root / destination, target.removeprefix("android-"))
             outputs.append(output)
-        packaged_build = {"target": target, "configuration": build["configuration"],
-                          "toolchain": build["toolchain"], "inputs_sha256": build["inputs_sha256"], "outputs": outputs}
-        if target == "windows-x64":
-            source = _resolve_input_path(root, args.renderdoc_source, label="runtime source")
-            files = _windows_runtime_inputs(root, source, args)
-            packaged_files = []
-            for item in files:
-                destination = "binaries/windows/x64/" + str(item["path"])
-                expected = {"size": item["size"], "sha256": item["sha256"]}
-                if runtime_identity.file_identity(staged_root / destination) != expected:
-                    raise ValueError(f"Packaged Windows input differs from build receipt: {item['path']}")
-                packaged_files.append({"path": destination, **expected})
-            packaged_build["runtime_files"] = packaged_files
-        builds.append(packaged_build)
-    return {"source": {key: receipt["source"][key] for key in ("base_revision", "upstream_revision", "tree_sha256")},
-            "builds": builds}
+        entry = {"target": target, "configuration": build["configuration"], "toolchain": build["toolchain"],
+                 "inputs_sha256": build["inputs_sha256"], "outputs": outputs}
+        if target in HOST_LAYOUTS:
+            runtime_dir = HOST_LAYOUTS[target].runtime_dir
+            entry["runtime_files"] = [{"path": f"{runtime_dir}/{item['path']}", "size": item["size"], "sha256": item["sha256"]}
+                                      for item in build["runtime_files"]]
+        packaged.append(entry)
+    return {"source": {key: source[key] for key in ("repository", "revision", "base_revision", "upstream_revision", "tree_sha256")},
+            "builds": packaged}
 
 
-def _assemble_runtime(tools_root_path: Path, staged_root: Path, args: argparse.Namespace) -> int:
-    out_root = staged_root / "binaries/windows/x64"
-    out_root.mkdir(parents=True, exist_ok=True)
-    (out_root / "pymodules").mkdir(parents=True, exist_ok=True)
-    manifest_path = out_root / "manifest.runtime.json"
-    previous = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.is_file() else {}
-    bundled_python: dict[str, str] = {}
-    renderdoc_source_raw = str(args.renderdoc_source or "").strip()
-    if renderdoc_source_raw:
-        src = _resolve_input_path(tools_root_path, renderdoc_source_raw, label="runtime source")
-        if not src.is_dir():
-            raise RuntimeError(f"missing source directory: {src}")
-        _reject_links(src)
-        files = _windows_runtime_inputs(tools_root_path, src, args)
-        # This is only the isolated staging copy. Replace the native-owned file
-        # set completely; Python and host-tool directories have separate owners.
-        for old in runtime_identity.windows_native_files(out_root).values():
-            if old.parent == out_root:
-                old.unlink()
-        modules = out_root / "pymodules"
-        shutil.rmtree(modules)
-        modules.mkdir()
-        for item in files:
-            rel = Path(str(item["path"]))
-            src_file = src / rel
-            dst_file = out_root / rel
-            dst_file.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src_file, dst_file)
-        for abi, raw in (("arm32", args.arm32_apk), ("arm64", args.arm64_apk)):
-            source = _resolve_input_path(tools_root_path, raw, label=f"{abi} APK", allow_outside_root=True)
-            destination = staged_root / f"binaries/android/{abi}/org.renderdoc.renderdoccmd.{abi}.apk"
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, destination)
-    python_home_raw = str(args.python_home or "").strip()
-    if python_home_raw:
-        try:
-            bundled_python = _bundle_python_runtime(
-                tools_root_path,
-                out_root,
-                python_home_raw,
-                str(args.site_packages_source or "").strip() or None,
-                str(args.python_version or "").strip() or None,
-            )
-        except RuntimeError:
-            raise
+# --- bundled interpreter ----------------------------------------------------
+
+def _interpreter_version(python: Path) -> str:
+    completed = process.run_tool([str(python), "-I", "-c", "import sys; print('.'.join(map(str, sys.version_info[:3])))"],
+                                 capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
+    if completed.returncode != 0:
+        raise RuntimeError(f"Pinned interpreter does not run on this host: {python}: {completed.stderr.strip()}")
+    return completed.stdout.strip()
+
+
+def _install_dependencies(python: Path, site_packages: Path, lock: Path) -> None:
+    """Install exactly the hash-locked wheels, using the pinned interpreter itself."""
+    command = [str(python), "-I", "-m", "pip", "install", "--no-deps", "--require-hashes", "--only-binary=:all:",
+               "--no-compile", "--disable-pip-version-check", "--no-input", "--target", str(site_packages), "-r", str(lock)]
+    completed = process.run_tool(command, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
+    if completed.returncode != 0:
+        raise RuntimeError(f"Locked dependency installation failed: {(completed.stdout + completed.stderr).strip()[-2000:]}")
+    # Console scripts point at the temporary build interpreter; they are not part of the runtime.
+    shutil.rmtree(site_packages / "bin", ignore_errors=True)
+
+
+def _extract(archive: Path, destination: Path) -> None:
+    if zipfile.is_zipfile(archive):
+        with zipfile.ZipFile(archive) as bundle:
+            for member in bundle.namelist():
+                if PurePosixPath(member).is_absolute() or ".." in PurePosixPath(member).parts:
+                    raise ValueError(f"Interpreter archive member escapes extraction: {member}")
+            bundle.extractall(destination)
     else:
-        bundled_python = _existing_bundled_python_metadata(out_root)
+        with tarfile.open(archive) as bundle:
+            bundle.extractall(destination, filter="data")
 
-    if bundled_python:
-        write_distribution_metadata(tools_root_path, out_root / 'python' / 'Lib' / 'site-packages')
-    manifest_entries = [_manifest_entry(path, out_root) for path in _iter_manifest_files(out_root)]
 
-    if not manifest_entries:
-        print("[pack] no runtime files found to package")
-        return 1
+def _copy_interpreter_entry(home: Path, entry: str, python_dir: Path, stdlib: PurePosixPath) -> None:
+    """Copy regular files only; aliases (symlinks), caches, docs and unused stdlib packages stay behind."""
+    source = home / entry
+    if source.is_symlink() or not source.exists():
+        raise ValueError(f"Interpreter archive lacks pinned entry: {entry}")
+    for path in [source] if source.is_file() else sorted(source.rglob("*")):
+        if path.is_symlink() or not path.is_file():
+            continue
+        relative = PurePosixPath(path.relative_to(home).as_posix())
+        if "__pycache__" in relative.parts or path.suffix.lower() in SKIP_SUFFIXES or path.name.startswith("_tkinter"):
+            continue
+        if relative.is_relative_to(stdlib):
+            top = relative.relative_to(stdlib).parts[0]
+            if top in SKIP_STDLIB_TOP_LEVEL or top.startswith("config-"):
+                continue
+        target = python_dir / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, target)
 
-    manifest = {
-        "file_count": len(manifest_entries),
-        "files": manifest_entries,
-    }
+
+def _path_config_lines(layout: HostLayout) -> list[str]:
+    """A `._pth` file replaces sys.path next to the executable; a site `.pth` appends to it."""
+    here = PurePosixPath(layout.python["path_config"]).parent
+    root = "/".join([".."] * len(PurePosixPath(layout.runtime_dir, here).parts))
+    if not layout.python["path_config"].endswith("._pth"):
+        return [root]
+    entries = [PurePosixPath(layout.python[role]).relative_to(here).as_posix()
+               for role in ("extension_modules", "stdlib", "site_packages")]
+    return [".", *entries, root, "import site"]
+
+
+def _bundle_python(root: Path, out_root: Path, layout: HostLayout, args: argparse.Namespace, work: Path) -> dict[str, str]:
+    pin = json.loads(PYTHON_PINS.read_text(encoding="utf-8"))[args.host]
+    archive = _resolve_input_path(root, args.python_archive, label="interpreter archive", allow_outside_root=True)
+    if sha256_file(archive) != pin["source_sha256"]:
+        raise ValueError(f"Interpreter archive does not match the {args.host} pin in {PYTHON_PINS.name}")
+    extracted = work / "interpreter"
+    _extract(archive, extracted)
+    home = extracted / pin["archive_root"]
+    executable = home / PurePosixPath(layout.python["executable"]).relative_to("python")
+    version = _interpreter_version(executable)
+    if version != pin["python_version"]:
+        raise ValueError(f"Interpreter archive reports Python {version}, pinned {pin['python_version']}")
+
+    python_dir = out_root / "python"
+    shutil.rmtree(python_dir, ignore_errors=True)
+    stdlib = PurePosixPath(layout.python["stdlib"]).relative_to("python")
+    for entry in pin["include"]:
+        _copy_interpreter_entry(home, entry, python_dir, stdlib)
+    site_packages = out_root / layout.python["site_packages"]
+    site_packages.mkdir(parents=True, exist_ok=True)
+    _install_dependencies(executable, site_packages, DEPENDENCY_LOCK)
+    write_distribution_metadata(root, site_packages)
+    write_text(out_root / layout.python["path_config"], "\n".join(_path_config_lines(layout)) + "\n")
+    return {"python_version": version, "package": pin["package"], "source_url": pin["source_url"],
+            "source_sha256": pin["source_sha256"], "dependency_lock_sha256": sha256_file(DEPENDENCY_LOCK)}
+
+
+# --- host tools -------------------------------------------------------------
+
+def _install_host_tools(root: Path, out_root: Path, layout: HostLayout, raw: str) -> dict[str, Any]:
+    source = _resolve_input_path(root, raw, label="host tools", allow_outside_root=True)
+    _reject_links(source)
+    provenance = json.loads((source / HOST_TOOL_PROVENANCE).read_text(encoding="utf-8"))
+    if set(provenance) != set(layout.host_tools):
+        raise ValueError(f"Host tool provenance must describe exactly {sorted(layout.host_tools)}")
+    tools: dict[str, Any] = {}
+    for name, record in provenance.items():
+        if not all(str(record.get(key) or "").strip() for key in ("version", "source_url", "source_sha256", "license")):
+            raise ValueError(f"Incomplete third-party provenance: {name}")
+        if record.get("license_path") not in layout.host_tool_files:
+            raise ValueError(f"{name} license_path must name a bundled license file: {record.get('license_path')}")
+        tools[name] = {**record, "license_path": f"{layout.runtime_dir}/{record['license_path']}", "path": layout.host_tools[name]}
+    files = bundled_host_files(layout)
+    for relative in files:
+        if not (source / relative).is_file():
+            raise ValueError(f"Missing host tool input: {relative}")
+    for directory in {PurePosixPath(relative).parts[0] for relative in files}:
+        shutil.rmtree(out_root / directory, ignore_errors=True)
+    for relative in files:
+        (out_root / relative).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source / relative, out_root / relative)
+    return tools
+
+
+# --- manifest ---------------------------------------------------------------
+
+def _owned_files(out_root: Path, layout: HostLayout) -> Iterable[Path]:
+    """Every file a part owns; anything else is rejected, never skipped or certified."""
+    native = set(runtime_identity.native_runtime_files(out_root).values())
+    host_files = set(bundled_host_files(layout))
+    for path in sorted(out_root.rglob("*")):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(out_root).as_posix()
+        if relative == MANIFEST or "__pycache__" in path.parts or path.suffix.lower() == ".pyc":
+            continue
+        if relative.startswith("python/"):
+            yield path  # installed wheels stay byte-for-byte as their RECORD describes them
+            continue
+        if path.suffix.lower() in DENY_SUFFIXES:
+            raise ValueError(f"Build-only file in runtime: {relative}")
+        if path in native or relative in host_files:
+            yield path
+            continue
+        raise ValueError(f"Runtime directory holds a file no part owns: {relative}")
+
+
+def _assemble_runtime(root: Path, staged_root: Path, args: argparse.Namespace, work: Path) -> None:
+    layout = HOST_LAYOUTS[args.host]
+    out_root = staged_root / layout.runtime_dir
+    out_root.mkdir(parents=True, exist_ok=True)
+    manifest_path = out_root / MANIFEST
+    previous = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.is_file() else {}
+    receipt = _install_native_set(root, staged_root, args) if args.renderdoc_source else None
+    bundled_python = _bundle_python(root, out_root, layout, args, work) if args.python_archive else previous.get("bundled_python")
+    bundled_tools = _install_host_tools(root, out_root, layout, args.host_tools) if args.host_tools else previous.get("bundled_tools")
+
+    files = [{"path": path.relative_to(out_root).as_posix(), "size": path.stat().st_size, "sha256": sha256_file(path)}
+             for path in _owned_files(out_root, layout)]
+    if not files:
+        raise RuntimeError("no runtime files found to package")
+    manifest: dict[str, Any] = {"file_count": len(files), "files": files}
     if bundled_python:
         manifest["bundled_python"] = bundled_python
-    for key in ("bundled_tools", "native_build"):
-        if key in previous:
-            manifest[key] = previous[key]
-    if renderdoc_source_raw:
-        manifest["native_build"] = _native_build_receipt(tools_root_path, staged_root, args)
+    if bundled_tools:
+        manifest["bundled_tools"] = bundled_tools
     write_text(manifest_path, json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
-    if manifest.get("native_build"):
-        status = runtime_identity.native_manifest_status(staged_root)
+
+    receipt_path = staged_root / runtime_identity.RECEIPT_PATH
+    if receipt is not None:
+        write_text(receipt_path, json.dumps(receipt, ensure_ascii=False, indent=2) + "\n")
+    if receipt_path.is_file():
+        listed = [build["target"] for build in json.loads(receipt_path.read_text(encoding="utf-8"))["builds"]]
+        status = runtime_identity.native_manifest_status(staged_root, required=listed)
         if status["status"] != "verified":
             raise RuntimeError(f"Paired native runtime verification failed: {status}")
-    return 0
+
+
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Assemble this host's rdc-tool runtime")
+    parser.add_argument("--host", default=platform_host.host_target(), choices=sorted(HOST_LAYOUTS),
+                        help="Runtime layout to assemble; must be this host, whose interpreter installs the dependencies")
+    parser.add_argument("--source", dest="renderdoc_source", default="",
+                        help="Repo-relative staging directory with this host's native set")
+    parser.add_argument("--build-receipt", default="", help="JSON receipt for the builds from one frozen source tree")
+    parser.add_argument("--arm32-apk", default="", help="arm32 helper APK, when the receipt pairs it")
+    parser.add_argument("--arm64-apk", default="", help="arm64 helper APK, when the receipt pairs it")
+    parser.add_argument("--python-archive", default="", help=f"Interpreter archive pinned in {PYTHON_PINS.name}")
+    parser.add_argument("--host-tools", default="",
+                        help=f"Directory with the layout's host-tool files and {HOST_TOOL_PROVENANCE}")
+    parser.add_argument("--output-root", default="",
+                        help="Assemble a new runtime root under intermediate/ or dist/ without replacing the current runtime")
+    return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
-    root = _tools_root().resolve()
+    if args.host != platform_host.host_target():
+        print(f"[pack] --host {args.host} differs from this host ({platform_host.host_target()}); assemble each runtime on its own host")
+        return 1
+    if bool(args.renderdoc_source) != bool(args.build_receipt) or ((args.arm32_apk or args.arm64_apk) and not args.renderdoc_source):
+        print("[pack] Native replacement requires --source with --build-receipt (and the APKs the receipt pairs)")
+        return 1
+    root = tools_root().resolve()
     if (root / "binaries").is_symlink() or (root / "binaries").is_junction():
         print("[pack] Runtime output must not be a link")
         return 1
     output = task_directory(root, args.output_root, label="runtime output root", new=True) if args.output_root else None
     destination = output if output is not None else ensure_within_root(root, root / "binaries", label="runtime output")
-    native_inputs = (args.renderdoc_source, args.arm32_apk, args.arm64_apk, args.build_receipt)
-    if any(native_inputs) and not all(native_inputs):
-        print("[pack] Native replacement requires --source, both --arm32-apk/--arm64-apk and --build-receipt")
-        return 1
     if output is not None:
-        for raw in (args.renderdoc_source, args.python_home, args.site_packages_source if args.python_home else ""):
+        for raw in (args.renderdoc_source, args.python_archive, args.host_tools):
             if raw:
                 source = resolve_repo_path(root, raw)
                 if source.is_relative_to(output) or output.is_relative_to(source):
                     raise ValueError(f"Runtime output root overlaps a build input: {source}")
-    if args.python_home:
-        site = _resolve_input_path(root, args.site_packages_source, label="site-packages source")
-        if output is None and site.is_relative_to(root / "binaries/windows/x64/python"):
-            print(f"[pack] site-packages source must not point inside the bundled python output tree: {site}")
-            return 1
     stage_parent = output.parent if output is not None else root
     stage_parent.mkdir(parents=True, exist_ok=True)
     stage = Path(tempfile.mkdtemp(prefix=".runtime-stage-", dir=stage_parent))
+    staged_root = stage / "tree"
     backup = stage / "previous-binaries"
     retain = False
     try:
         inherited = root / "binaries" if output is not None else destination
         if inherited.exists():
             _reject_links(inherited)
-            shutil.copytree(inherited, stage / "binaries", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
-        if _assemble_runtime(root, stage, args) != 0:
-            return 1
+            shutil.copytree(inherited, staged_root / "binaries", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        _assemble_runtime(root, staged_root, args, stage / "work")
         if output is not None and destination.exists():
             raise FileExistsError(f"Refusing to overwrite runtime output root: {destination}")
         if destination.exists():
             destination.rename(backup)
         try:
-            (stage if output is not None else stage / "binaries").rename(destination)
+            (staged_root if output is not None else staged_root / "binaries").rename(destination)
         except BaseException:
             if backup.exists():
                 try:
@@ -501,7 +385,8 @@ def main(argv: list[str] | None = None) -> int:
                 raise RuntimeError(f"New complete runtime published; previous runtime retained for cleanup at {backup}") from cleanup
         print(f"[pack] published verified runtime at {destination}")
         return 0
-    except (OSError, ValueError, KeyError, TypeError, IndexError, RuntimeError, struct.error, zipfile.BadZipFile) as exc:
+    except (OSError, ValueError, KeyError, TypeError, IndexError, RuntimeError, struct.error,
+            zipfile.BadZipFile, tarfile.TarError) as exc:
         print(f"[pack] {exc}")
         return 1
     finally:

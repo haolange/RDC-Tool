@@ -1,19 +1,9 @@
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 from pathlib import Path, PureWindowsPath
 from typing import Any
-
-
-def tools_root(anchor_file: str) -> Path:
-    env_root = os.environ.get("RDC_TOOL_ROOT", "").strip()
-    if env_root:
-        env_path = Path(env_root).expanduser().resolve()
-        if env_path.is_dir():
-            return env_path
-    return Path(anchor_file).resolve().parents[1]
 
 
 def resolve_repo_path(root: Path, raw_path: str) -> Path:
@@ -62,16 +52,6 @@ def write_text(path: Path, text: str, *, encoding: str = "utf-8") -> None:
     path.write_text(text, encoding=encoding)
 
 
-def load_json(path: Path, *, encoding: str = "utf-8") -> dict[str, Any]:
-    if not path.is_file():
-        return {}
-    try:
-        payload = json.loads(path.read_text(encoding=encoding))
-    except Exception:
-        return {}
-    return payload if isinstance(payload, dict) else {}
-
-
 def extract_json_payload(text: str) -> dict[str, Any] | None:
     if not text:
         return None
@@ -84,11 +64,6 @@ def extract_json_payload(text: str) -> dict[str, Any] | None:
     except Exception:
         return None
     return payload if isinstance(payload, dict) else None
-
-
-def trim_text(text: str, *, limit: int = 8000) -> str:
-    value = (text or "").replace("\r", "").strip()
-    return value if len(value) <= limit else value[: limit - 3] + "..."
 
 
 def run_subprocess(

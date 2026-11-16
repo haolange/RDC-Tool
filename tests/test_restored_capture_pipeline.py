@@ -4,7 +4,7 @@ from enum import IntEnum
 import pytest
 
 from rdc_tool.core import pipeline_service as pipeline
-from rdc_tool.core.capture_queries import query_calls, read_thumbnail, structured_object
+from rdc_tool.core.capture_queries import query_calls, read_thumbnail
 from rdc_tool.core.native_values import native_value
 from rdc_tool.models import GraphicsAPI, ShaderStage
 

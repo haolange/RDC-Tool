@@ -201,20 +201,6 @@ class EventGraphService:
         self._collect_draws(event_tree, result)
         return result
 
-    def get_event_range(
-        self,
-        event_tree: List[EventNode],
-    ) -> Tuple[int, int]:
-        """返回全树范围内的 ``(min_event_id, max_event_id)``。
-
-        对空树返回 ``(0, 0)``。
-        """
-        ids: List[int] = []
-        self._collect_ids(event_tree, ids)
-        if not ids:
-            return (0, 0)
-        return (min(ids), max(ids))
-
     def find_event(
         self,
         event_tree: List[EventNode],
@@ -231,21 +217,6 @@ class EventGraphService:
             if found is not None:
                 return found
         return None
-
-    def get_event_path(
-        self,
-        event_tree: List[EventNode],
-        event_id: int,
-    ) -> List[int]:
-        """返回从树根到 *event_id* 的路径。
-
-        返回列表包含从顶层节点到目标节点（含目标）的所有 ``event_id``。
-        若找不到 *event_id* 则返回空列表。
-        """
-        path: List[int] = []
-        if self._build_path(event_tree, event_id, path):
-            return path
-        return []
 
     # -- Pass inference（Pass 推断）----------------------------------------
 

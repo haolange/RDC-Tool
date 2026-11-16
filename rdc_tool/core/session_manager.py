@@ -6,13 +6,15 @@ import hashlib
 import logging
 import re
 import shlex
-import subprocess
 import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from rdc_tool.platform import process
+from rdc_tool.platform import host as platform_host
+from rdc_tool.core.errors import CoreError
 from rdc_tool.core.renderdoc_status import build_renderdoc_error_details, status_ok as _rd_status_ok, status_text as _rd_status_text
 from rdc_tool.models import (
     BackendType,
@@ -276,15 +278,6 @@ class SessionManager:
     def get_state(self, session_id: str) -> SessionState:
         return self._require_state(session_id)
 
-    async def get_session(self, session_id: str) -> SessionInfo:
-        state = self._require_state(session_id)
-        return SessionInfo(
-            session_id=state.session_id,
-            backend_type=state.backend_type,
-            capabilities=state.capabilities,
-            created_at=state.created_at,
-        )
-
     def list_sessions(self) -> List[SessionInfo]:
         return [
             SessionInfo(
@@ -378,6 +371,20 @@ class SessionManager:
             fix_hint="Verify that the .rdc file is valid and supported by this RenderDoc runtime.",
         )
         state.capture_file = cap
+        if await self._offload(cap.LocalReplaySupport) == rd.ReplaySupport.Unsupported:
+            capture_api = str(await self._offload(cap.DriverName))
+            raise CoreError(
+                code="local_replay_unsupported",
+                message=f"This host's RenderDoc runtime cannot replay {capture_api} captures locally",
+                category="capability",
+                details={
+                    "capture_api": capture_api,
+                    "host_target": platform_host.host_target(),
+                    "capture_path": str(rdc_path),
+                    "recovery_hint": "Replay on a host whose runtime supports this API, or connect a remote target "
+                                     "with rd.remote.connect and pass options.remote_id.",
+                },
+            )
 
         status, controller = await self._offload(cap.OpenCapture, rd.ReplayOptions(), None)
         _check_status(
@@ -482,7 +489,7 @@ class SessionManager:
             return base_cmd + ["shell", "run-as", package_name, *args]
 
         def run(command: list[str]) -> Any:
-            return subprocess.run(command, check=False, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30)
+            return process.run_tool(command, check=False, capture_output=True, text=True, timeout=30)
 
         private_root = run(app_command("pwd"))
         remote_root = str(private_root.stdout or "").strip()
@@ -532,8 +539,8 @@ class SessionManager:
         # ADB sync transfers file bytes without sending them through shell stdin,
         # whose Windows transport can normalize CRLF even without a PTY.
         try:
-            pushed = subprocess.run(base_cmd + ["push", str(rdc_path), shell_source], check=False,
-                                    stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=240)
+            pushed = process.run_tool(base_cmd + ["push", str(rdc_path), shell_source], check=False,
+                                      capture_output=True, text=True, timeout=240)
         except BaseException as error:
             raise RuntimeError(f"Android capture sync outcome unconfirmed; retain {shell_dir}: {error}") from error
         if pushed.returncode:
@@ -554,8 +561,7 @@ class SessionManager:
         command = base_cmd + ["shell", f"cat {shlex.quote(shell_source)} | "
                               f"run-as {package_name} sh -c {shlex.quote(script)}"]
         try:
-            transferred = subprocess.run(command, check=False, stdin=subprocess.DEVNULL,
-                                         capture_output=True, text=True, timeout=60)
+            transferred = process.run_tool(command, check=False, capture_output=True, text=True, timeout=60)
         except BaseException as error:
             # Killing/joining an ADB client is not a device-writer exit receipt.
             # Retain the exact recovery asset rather than unlinking a live file.

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import ctypes
 import json
 import logging
 import os
@@ -13,6 +12,8 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from rdc_tool.platform import process
+from rdc_tool.platform import host as platform_host
 from rdc_tool.core.assert_service import AssertService
 from rdc_tool import __version__ as TOOL_VERSION
 from rdc_tool.core.contracts import SCHEMA_VERSION, canonical_error, canonical_success
@@ -24,20 +25,24 @@ from rdc_tool.daemon.client import (
     detach_client,
     ensure_daemon,
     heartbeat_client,
-    load_daemon_state,
     stop_daemon,
 )
+from rdc_tool.daemon.state import load_state, public_view
 from rdc_tool.io_utils import safe_json_text, safe_stream_write
-from rdc_tool.python_runtime import current_python_runtime_details, validate_bundled_python_layout
-from rdc_tool.runtime_catalog import load_tool_catalog, tool_catalog_path, catalog_payload, describe_operation
+from rdc_tool.python_runtime import bundled_python_executable, current_python_runtime_details, validate_bundled_python_layout
+from rdc_tool.runtime_catalog import SOURCE_PATH, catalog_payload, describe_operation, load_tool_catalog
 from rdc_tool.runtime_paths import (
+    HOST_LAYOUTS,
+    UnsupportedHost,
     android_binaries_root,
     artifacts_dir,
     binaries_root,
-    bundled_python_executable,
+    binding_module_path,
     cli_runtime_dir,
     ensure_runtime_dirs,
+    host_layout,
     logs_dir,
+    native_library_path,
     pymodules_dir,
     runtime_root,
     tools_root,
@@ -60,52 +65,6 @@ def _write_stdout(text: str) -> None:
     safe_stream_write(text + "\n", sys.stdout)
 
 
-def _print_launcher_help() -> None:
-    for line in (
-        "usage: rdc-tool [--json] [--daemon-context <id>] <command> ...",
-        "commands:",
-        "  version",
-        "  doctor",
-        "  tools list|search|describe",
-        "  daemon start|stop|status",
-        "  context status|update|list|clear",
-        "  session preview on|off|status",
-        "  completion powershell|bash|zsh|fish",
-        "  call <operation> [--args-json ... | --args-file ...] [--format json|tsv] [--remote]",
-        "  batch <jsonl> [--remote]",
-        "  capture open|status",
-        "  vfs ls|cat|tree|resolve",
-        "  event list|show",
-        "  pipeline show|section",
-        "  shader source|disasm|constants",
-        "  export screenshot|texture|buffer|mesh",
-        "  pixel value|history",
-        "  resource list|show|usage",
-        "  diff pipeline|image",
-        "  assert pipeline|image",
-        "",
-        "examples:",
-        "  rdc-tool --version",
-        "  rdc-tool version --json",
-        "  rdc-tool --json doctor",
-        "  rdc-tool completion powershell",
-        "  rdc-tool tools search pipeline --json",
-        "  rdc-tool daemon start --daemon-context local",
-        "  rdc-tool context status --daemon-context local --json",
-        "  rdc-tool context update --daemon-context local --key notes --value triaged --json",
-        "  rdc-tool context clear --daemon-context local",
-        "  rdc-tool capture open --file D:\\path\\capture.rdc --frame-index 0 --preview",
-        "  rdc-tool session preview on",
-        "  rdc-tool call rd.session.get_context --args-file .\\args.json --format json",
-        "  rdc-tool vfs ls --path / --format tsv",
-        "  rdc-tool event list --format tsv",
-        "  rdc-tool pipeline show --event-id 42",
-        "  rdc-tool shader source --event-id 42 --stage ps",
-        "  rdc-tool export screenshot --event-id 42 --out .\\frame.png",
-    ):
-        _write_stdout(line)
-
-
 def _exception_error_payload(result_kind: str, exc: Exception, *, transport: str = "cli") -> Dict[str, Any]:
     code = str(getattr(exc, "code", "") or "runtime_error")
     category = str(getattr(exc, "category", "") or "runtime")
@@ -125,17 +84,6 @@ def _parse_json_object(raw: str, *, source: str) -> Dict[str, Any]:
     if not isinstance(parsed, dict):
         raise ValueError(f"{source} must be a JSON object")
     return parsed
-
-
-def _windows_command_line() -> str:
-    if os.name != "nt":
-        return ""
-    try:
-        get_command_line = ctypes.windll.kernel32.GetCommandLineW
-        get_command_line.restype = ctypes.c_wchar_p
-        return str(get_command_line() or "")
-    except Exception:
-        return ""
 
 
 def _extract_raw_args_json_from_command_line(command_line: str) -> str:
@@ -184,7 +132,7 @@ def _extract_raw_args_json_from_command_line(command_line: str) -> str:
 
 
 def _recover_args_json_from_command_line() -> str:
-    return _extract_raw_args_json_from_command_line(_windows_command_line())
+    return _extract_raw_args_json_from_command_line(process.raw_command_line() or "")
 
 
 def _load_call_args(*, args_json: Optional[str] = None, args_file: Optional[str] = None) -> Dict[str, Any]:
@@ -267,25 +215,25 @@ def _daemon_exec(
 
 
 def _daemon_status_payload(context: str) -> Dict[str, Any]:
-    state = load_daemon_state(context=context)
+    state = load_state(context=context)
     if not state:
         cleanup_stale_daemon_states(context=context)
-        state = load_daemon_state(context=context)
+        state = load_state(context=context)
     if not state:
         return canonical_success(
             result_kind="rdc_tool.daemon.status",
-            data={"running": False, "state": {"context_id": context, "daemon_context": context}},
+            data={"running": False, "state": {"context_id": context}},
             transport="cli",
         )
     try:
         resp = daemon_request("status", params={}, context=context, state=state)
     except Exception as exc:
         cleaned = cleanup_stale_daemon_states(context=context)
-        refreshed = load_daemon_state(context=context)
+        refreshed = load_state(context=context)
         if not refreshed:
             return canonical_success(
                 result_kind="rdc_tool.daemon.status",
-                data={"running": False, "state": {"context_id": context, "daemon_context": context}, "cleaned": cleaned},
+                data={"running": False, "state": {"context_id": context}, "cleaned": cleaned},
                 transport="cli",
             )
         return canonical_error(
@@ -294,7 +242,7 @@ def _daemon_status_payload(context: str) -> Dict[str, Any]:
             category=str(getattr(exc, "category", "") or "runtime"),
             message="daemon status failed",
             details={
-                "state": refreshed,
+                "state": public_view(refreshed),
                 "cleaned": cleaned,
                 **(getattr(exc, "details", {}) if isinstance(getattr(exc, "details", {}), dict) else {}),
             },
@@ -305,7 +253,7 @@ def _daemon_status_payload(context: str) -> Dict[str, Any]:
     daemon_state = result.get("state") if isinstance(result, dict) else {}
     return canonical_success(
         result_kind="rdc_tool.daemon.status",
-        data={"running": running, "state": daemon_state if isinstance(daemon_state, dict) else state},
+        data={"running": running, "state": public_view(daemon_state if isinstance(daemon_state, dict) else state)},
         transport="cli",
     )
 
@@ -414,29 +362,24 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     root = tools_root().resolve()
     ensure_runtime_dirs()
 
+    try:
+        layout = host_layout()
+    except UnsupportedHost as exc:
+        _print_json(canonical_error(result_kind="rdc_tool.doctor", code=exc.code, category="capability", message=str(exc),
+                                    details={"host_target": exc.target, "supported_hosts": sorted(HOST_LAYOUTS)}, transport="cli"))
+        return EXIT_RUNTIME_ERR
     dependencies_missing = missing_dependencies()
     python_ok, python_failures, python_details = validate_bundled_python_layout()
 
-    renderdoc_dll = binaries_root() / "renderdoc.dll"
-    renderdoc_json = binaries_root() / "renderdoc.json"
-    renderdoc_pyd = pymodules_dir() / "renderdoc.pyd"
-    renderdoc_failures = [
-        str(path)
-        for path in (renderdoc_dll, renderdoc_json, renderdoc_pyd)
-        if not path.is_file()
-    ]
+    native_library = native_library_path()
+    binding_module = binding_module_path()
+    renderdoc_failures = [str(path) for path in (native_library, binding_module) if not path.is_file()]
 
     android_failures = [str(android_binaries_root() / abi / f"org.renderdoc.renderdoccmd.{abi}.apk")
                         for abi in ("arm32", "arm64")
                         if not (android_binaries_root() / abi / f"org.renderdoc.renderdoccmd.{abi}.apk").is_file()]
 
-    catalog_error = ""
-    catalog_count = 0
-    try:
-        catalog = load_tool_catalog()
-        catalog_count = len(catalog)
-    except Exception as exc:  # noqa: BLE001
-        catalog_error = str(exc)
+    catalog = catalog_payload()
 
     try:
         daemon_status = _daemon_status_payload(context)
@@ -450,11 +393,8 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
             transport="cli",
         )
 
-    launcher_paths = {
-        "windows_cmd": str(root / "bin/rdc-tool.cmd"),
-        "posix_shell": str(root / "bin" / "rdc-tool"),
-        "python_cli": str(root / "cli" / "run_cli.py"),
-    }
+    launcher = root / layout.launcher
+    python_cli = root / "cli" / "run_cli.py"
     from rdc_tool.host_tools import host_tools_status, validate_bundled_host_tools
     host_tools = host_tools_status()
     host_tools_ok, host_tool_failures = validate_bundled_host_tools()
@@ -462,8 +402,10 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     spirv_dis = host_tools["spirv_dis"]["path"]
     native_build = native_manifest_status(root)
     loaded_runtime = loaded_runtime_identity(binaries_root(), pymodules_dir())
+    bundled_python = bundled_python_executable()
     details = {
         "product": "rdc-tool",
+        "host_target": platform_host.host_target(),
         "tools_root": str(root),
         "context_id": context,
         "python": {
@@ -471,7 +413,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
             "bundled": python_details,
             "bundled_python_ok": python_ok,
             "bundled_python_failures": python_failures,
-            "bundled_python_executable": str(bundled_python_executable()),
+            "bundled_python_executable": str(bundled_python) if bundled_python else None,
         },
         "dependencies": {
             "missing": dependencies_missing,
@@ -482,9 +424,8 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
             "loaded_runtime": loaded_runtime,
             "layout_ok": not renderdoc_failures,
             "failures": renderdoc_failures,
-            "renderdoc_dll": str(renderdoc_dll),
-            "renderdoc_json": str(renderdoc_json),
-            "renderdoc_pyd": str(renderdoc_pyd),
+            "native_library": str(native_library),
+            "binding_module": str(binding_module),
         },
         "android_apk_failures": android_failures,
         "host_tools": host_tools,
@@ -506,9 +447,9 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
             },
         },
         "catalog": {
-            "path": str(tool_catalog_path()),
-            "tool_count": catalog_count,
-            "error": catalog_error,
+            "source": SOURCE_PATH,
+            "fingerprint": catalog["fingerprint"],
+            "tool_count": catalog["tool_count"],
         },
         "runtime_dirs": {
             "runtime_root": str(runtime_root()),
@@ -517,10 +458,10 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
             "logs_dir": str(logs_dir()),
         },
         "launchers": {
-            **launcher_paths,
-            "windows_cmd_exists": (root / "bin/rdc-tool.cmd").is_file(),
-            "posix_shell_exists": (root / "bin" / "rdc-tool").is_file(),
-            "python_cli_exists": (root / "cli" / "run_cli.py").is_file(),
+            "launcher": str(launcher),
+            "launcher_exists": launcher.is_file(),
+            "python_cli": str(python_cli),
+            "python_cli_exists": python_cli.is_file(),
         },
         "daemon": daemon_status,
     }
@@ -533,10 +474,8 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         and not renderdoc_failures
         and native_build["status"] != "invalid"
         and loaded_runtime["status"] != "mismatch"
-        and not catalog_error
-        and (root / "bin/rdc-tool.cmd").is_file()
-        and (root / "bin" / "rdc-tool").is_file()
-        and (root / "cli" / "run_cli.py").is_file()
+        and launcher.is_file()
+        and python_cli.is_file()
     )
     if ok:
         _print_json(canonical_success(result_kind="rdc_tool.doctor", data=details, transport="cli"))
@@ -561,7 +500,7 @@ def _version_payload() -> Dict[str, Any]:
         data={
             "tool_version": TOOL_VERSION,
             "schema_version": SCHEMA_VERSION,
-            "platform": "windows-x64" if os.name == "nt" else sys.platform,
+            "platform": platform_host.host_target(),
             "tools_root": str(root),
             "public_commands": ["rdc-tool"],
             "entrypoints": {
@@ -586,81 +525,21 @@ def _cmd_version(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _parser_words(parser: argparse.ArgumentParser) -> set[str]:
+    words: set[str] = set()
+    for action in parser._actions:
+        words.update(option for option in action.option_strings if option.startswith("--"))
+        if isinstance(action, argparse._SubParsersAction):
+            for name, subparser in action.choices.items():
+                words.add(name)
+                words |= _parser_words(subparser)
+    return words
+
+
 def _completion_words() -> list[str]:
-    static_words = [
-        "doctor",
-        "version",
-        "tools",
-        "list",
-        "search",
-        "daemon",
-        "start",
-        "stop",
-        "status",
-        "context",
-        "clear",
-        "session",
-        "preview",
-        "on",
-        "off",
-        "capture",
-        "open",
-        "call",
-        "vfs",
-        "event",
-        "show",
-        "pipeline",
-        "section",
-        "shader",
-        "source",
-        "disasm",
-        "constants",
-        "export",
-        "screenshot",
-        "texture",
-        "buffer",
-        "mesh",
-        "pixel",
-        "value",
-        "history",
-        "resource",
-        "ls",
-        "cat",
-        "tree",
-        "resolve",
-        "diff",
-        "pipeline",
-        "image",
-        "assert",
-        "completion",
-        "powershell",
-        "bash",
-        "zsh",
-        "fish",
-        "--json",
-        "--daemon-context",
-        "--version",
-        "--help",
-        "--file",
-        "--frame-index",
-        "--args-json",
-        "--args-file",
-        "--format",
-        "--remote",
-        "--session-id",
-        "--event-id",
-        "--stage",
-        "--resource-id",
-        "--out",
-        "--slot",
-        "--x",
-        "--y",
-    ]
-    try:
-        tool_names = [str(item.get("name") or "") for item in load_tool_catalog()]
-    except Exception:
-        tool_names = []
-    return sorted({word for word in [*static_words, *tool_names] if word})
+    """Every subcommand and long option the parser accepts, plus operation names."""
+    tool_names = {str(item["name"]) for item in load_tool_catalog()}
+    return sorted(_parser_words(_build_parser()) | tool_names)
 
 
 def _completion_script(shell: str) -> str:
@@ -696,10 +575,10 @@ def _completion_script(shell: str) -> str:
         return "\n".join(
             [
                 "#compdef rdc-tool",
-                "_rdx() {",
+                "_rdc_tool() {",
                 f"  compadd -- {joined}",
                 "}",
-                "_rdx \"$@\"",
+                "_rdc_tool \"$@\"",
                 "",
             ]
         )
@@ -1440,8 +1319,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_daemon = sub.add_parser("daemon", help="Daemon lifecycle")
     s_daemon = p_daemon.add_subparsers(dest="daemon_cmd", required=True)
-    p_daemon_start = s_daemon.add_parser("start")
-    p_daemon_start.add_argument("--pipe-name", default=None)
+    s_daemon.add_parser("start")
     s_daemon.add_parser("stop")
     s_daemon.add_parser("status")
     p_daemon_attach = s_daemon.add_parser("attach", help=argparse.SUPPRESS)
@@ -1660,12 +1538,11 @@ async def _main_async(args: argparse.Namespace) -> int:
     if args.command == "daemon":
         if args.daemon_cmd == "start":
             ok, message, state = ensure_daemon(
-                pipe_name=args.pipe_name,
                 context=ctx,
                 owner_pid=_cli_owner_pid,
             )
             owner_pid = int((state or {}).get("owner_pid") or _cli_owner_pid or 0)
-            payload = canonical_success(result_kind="rdc_tool.daemon.start", data={"message": message, "state": state, "context_id": ctx, "owner_pid": owner_pid}, transport="cli") if ok else canonical_error(result_kind="rdc_tool.daemon.start", code="runtime_error", category="runtime", message=message, transport="cli")
+            payload = canonical_success(result_kind="rdc_tool.daemon.start", data={"message": message, "state": public_view(state or {}), "context_id": ctx, "owner_pid": owner_pid}, transport="cli") if ok else canonical_error(result_kind="rdc_tool.daemon.start", code="runtime_error", category="runtime", message=message, transport="cli")
             _print_json(payload)
             return EXIT_OK if ok else EXIT_RUNTIME_ERR
         if args.daemon_cmd == "stop":
@@ -1686,7 +1563,7 @@ async def _main_async(args: argparse.Namespace) -> int:
                 lease_timeout_seconds=int(args.lease_timeout_seconds or 120),
                 owner_pid=_cli_owner_pid,
             )
-            _print_json(canonical_success(result_kind="rdc_tool.daemon.attach_client", data={"message": message, "state": state}, transport="cli") if ok else canonical_error(result_kind="rdc_tool.daemon.attach_client", code="runtime_error", category="runtime", message=message, details={"state": state}, transport="cli"))
+            _print_json(canonical_success(result_kind="rdc_tool.daemon.attach_client", data={"message": message, "state": public_view(state)}, transport="cli") if ok else canonical_error(result_kind="rdc_tool.daemon.attach_client", code="runtime_error", category="runtime", message=message, details={"state": public_view(state)}, transport="cli"))
             return EXIT_OK if ok else EXIT_RUNTIME_ERR
         if args.daemon_cmd == "heartbeat":
             ok, message, state = heartbeat_client(
@@ -1694,14 +1571,14 @@ async def _main_async(args: argparse.Namespace) -> int:
                 client_id=str(args.client_id),
                 pid=int(args.pid or 0),
             )
-            _print_json(canonical_success(result_kind="rdc_tool.daemon.heartbeat", data={"message": message, "state": state}, transport="cli") if ok else canonical_error(result_kind="rdc_tool.daemon.heartbeat", code="runtime_error", category="runtime", message=message, details={"state": state}, transport="cli"))
+            _print_json(canonical_success(result_kind="rdc_tool.daemon.heartbeat", data={"message": message, "state": public_view(state)}, transport="cli") if ok else canonical_error(result_kind="rdc_tool.daemon.heartbeat", code="runtime_error", category="runtime", message=message, details={"state": public_view(state)}, transport="cli"))
             return EXIT_OK if ok else EXIT_RUNTIME_ERR
         if args.daemon_cmd == "detach":
             ok, message, state = detach_client(
                 context=ctx,
                 client_id=str(args.client_id),
             )
-            _print_json(canonical_success(result_kind="rdc_tool.daemon.detach_client", data={"message": message, "state": state}, transport="cli") if ok else canonical_error(result_kind="rdc_tool.daemon.detach_client", code="runtime_error", category="runtime", message=message, details={"state": state}, transport="cli"))
+            _print_json(canonical_success(result_kind="rdc_tool.daemon.detach_client", data={"message": message, "state": public_view(state)}, transport="cli") if ok else canonical_error(result_kind="rdc_tool.daemon.detach_client", code="runtime_error", category="runtime", message=message, details={"state": public_view(state)}, transport="cli"))
             return EXIT_OK if ok else EXIT_RUNTIME_ERR
         if args.daemon_cmd == "cleanup":
             cleaned = cleanup_stale_daemon_states()
@@ -1717,6 +1594,9 @@ async def _main_async(args: argparse.Namespace) -> int:
             return _cmd_context_list(args)
         if args.context_cmd == "clear":
             ok, message, details = clear_context(context=ctx)
+            details = dict(details) if isinstance(details, dict) else {}
+            if isinstance(details.get("state"), dict):
+                details["state"] = public_view(details["state"])
             if not ok:
                 _print_json(
                     canonical_error(
@@ -1780,12 +1660,8 @@ async def _main_async(args: argparse.Namespace) -> int:
 
 
 def main() -> None:
-    from rdc_tool.environment import validate_environment
-    try:
-        validate_environment()
-    except ValueError as exc:
-        _print_json(canonical_error(result_kind="rdc_tool.cli", code="setup_failure", category="validation", message=str(exc), transport="cli"))
-        raise SystemExit(2)
+    for stream in (sys.stdout, sys.stderr):
+        stream.reconfigure(encoding="utf-8")
     parser = _build_parser()
     args = parser.parse_args()
     logging.getLogger().setLevel(getattr(logging, os.environ.get("RDC_TOOL_LOG_LEVEL", "WARNING").upper(), logging.WARNING))

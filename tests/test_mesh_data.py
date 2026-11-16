@@ -3,6 +3,9 @@ import struct
 import pytest
 from rdc_tool.core.mesh_data import decode_format, vertex_input, input_obj
 from rdc_tool.core.replay_facts import post_transform_outputs
+from rdc_tool.runtime import renderdoc_api, replay_access, texture_export
+from rdc_tool.runtime.operations import buffer as buffer_ops
+from rdc_tool.runtime.operations import mesh as mesh_ops
 
 
 def fmt(kind='Float', width=4, count=3):
@@ -78,17 +81,16 @@ def test_regular_bgra_and_read_failures_are_not_unsupported():
 
 
 def test_obj_handler_preserves_buffer_failure(monkeypatch, tmp_path):
-    import asyncio,json
-    from rdc_tool import server_runtime as server
+    import asyncio
     from rdc_tool.core import mesh_data
-    monkeypatch.setattr(server,'_get_controller',lambda _:asyncio.sleep(0,result=object()))
-    monkeypatch.setattr(server,'_ensure_event',lambda *_:asyncio.sleep(0,result=10))
-    monkeypatch.setattr(server,'_get_rd',lambda:object())
+    monkeypatch.setattr(replay_access,'_get_controller',lambda _:asyncio.sleep(0,result=object()))
+    monkeypatch.setattr(replay_access,'_ensure_event',lambda *_:asyncio.sleep(0,result=10))
+    monkeypatch.setattr(renderdoc_api,'_get_rd',lambda:object())
     def fail(*_): raise mesh_data.MeshReadError('Incomplete vertex readback')
     monkeypatch.setattr(mesh_data,'vertex_input',fail)
     target=tmp_path/'missing.obj'
-    result=json.loads(asyncio.run(server._export_mesh_file({'session_id':'s','event_id':10,'output_path':str(target),'space':'vs_input','include_attributes':True})))
-    assert result['success'] is False and result['code']=='mesh_input_failed'
+    result=asyncio.run(texture_export._export_mesh_file({'session_id':'s','event_id':10,'output_path':str(target),'space':'vs_input','include_attributes':True}))
+    assert result.ok is False and result.code=='mesh_input_failed'
     assert not target.exists()
 
 
@@ -158,8 +160,7 @@ def test_vulkan_vs_output_preserves_nonfinite_and_rejects_incomplete_raw_bytes()
 
 @pytest.mark.parametrize('stage', ['vs', 'gs'])
 def test_post_transform_runtime_routes_only_vulkan_vs_to_proven_layout(monkeypatch, stage):
-    import asyncio, json
-    from rdc_tool import server_runtime as server
+    import asyncio
     from rdc_tool.core import replay_facts
     sig = vulkan_output_signature()
     mesh = NS(vertexResourceId='post-vs-buffer', vertexByteOffset=0, vertexByteSize=64, vertexByteStride=64)
@@ -167,18 +168,18 @@ def test_post_transform_runtime_routes_only_vulkan_vs_to_proven_layout(monkeypat
     controller = NS(GetPostVSData=lambda *_: mesh, GetBufferData=lambda *_: bytes(64),
                     GetPipelineState=lambda: pipe, GetAPIProperties=lambda: NS(pipelineType=3))
     async def inline(fn, *args, **kwargs): return fn(*args, **kwargs)
-    monkeypatch.setattr(server, '_offload', inline)
-    monkeypatch.setattr(server, '_get_controller', lambda _: asyncio.sleep(0, result=controller))
-    monkeypatch.setattr(server, '_ensure_event', lambda *_: asyncio.sleep(0, result=10))
-    monkeypatch.setattr(server, '_get_rd', lambda: NS(MeshDataStage=NS(VSOut='vs', GSOut='gs'), GraphicsAPI=NS(D3D11=1, D3D12=2, Vulkan=3)))
-    monkeypatch.setattr(server, '_rd_stage', lambda value: value)
-    monkeypatch.setattr(server, '_mesh_format_payload', lambda _: {})
+    monkeypatch.setattr(renderdoc_api, '_offload', inline)
+    monkeypatch.setattr(replay_access, '_get_controller', lambda _: asyncio.sleep(0, result=controller))
+    monkeypatch.setattr(replay_access, '_ensure_event', lambda *_: asyncio.sleep(0, result=10))
+    monkeypatch.setattr(renderdoc_api, '_get_rd', lambda: NS(MeshDataStage=NS(VSOut='vs', GSOut='gs'), GraphicsAPI=NS(D3D11=1, D3D12=2, Vulkan=3)))
+    monkeypatch.setattr(renderdoc_api, '_rd_stage', lambda value: value)
+    monkeypatch.setattr(texture_export, '_mesh_format_payload', lambda _: {})
     monkeypatch.setattr(replay_facts, 'mesh_attributes', lambda *_: {})
-    response = json.loads(asyncio.run(server._dispatch_mesh('get_post_transform_data', {
+    response = asyncio.run(mesh_ops.dispatch('get_post_transform_data', {
         'session_id': 's', 'event_id': 10, 'stage': stage, 'max_vertices': 1,
-    })))
-    assert response['success'] is True
-    data = response['mesh_data']
+    }))
+    assert response.ok is True
+    data = response.data['mesh_data']
     assert data['outputs']['status'] == ('present' if stage == 'vs' else 'unsupported')
     if stage == 'vs': assert data['vertex_rows'][0]['outputs']['location:7'] == [0, 0, 0]
     else: assert 'outputs' not in data['vertex_rows'][0]
@@ -257,37 +258,34 @@ def test_post_transform_restart_candidate_and_nonindexed_rows_are_explicit():
 
 
 def test_buffer_missing_resource_reports_proven_pre_effect_rejection(monkeypatch):
-    import asyncio, json
-    from rdc_tool import server_runtime as server
+    import asyncio
     def forbidden(*_): raise AssertionError('No frame mutation or data read before resource resolution')
     controller = NS(GetTextures=lambda: [], GetBuffers=lambda: [], GetResources=lambda: [],
                     GetBufferData=forbidden, SetFrameEvent=forbidden)
     async def inline(fn, *args, **kwargs): return fn(*args, **kwargs)
-    monkeypatch.setattr(server, '_offload', inline)
-    monkeypatch.setattr(server, '_get_controller', lambda _: asyncio.sleep(0, result=controller))
-    response = json.loads(asyncio.run(server._dispatch_mesh('decode_index_data', {
+    monkeypatch.setattr(renderdoc_api, '_offload', inline)
+    monkeypatch.setattr(replay_access, '_get_controller', lambda _: asyncio.sleep(0, result=controller))
+    response = asyncio.run(mesh_ops.dispatch('decode_index_data', {
         'session_id': 's', 'index_buffer_id': 'not-in-inventory', 'format': 'u16', 'index_count': 3,
-    })))
-    assert response['success'] is False and response['category'] == 'validation'
-    assert response['details'] == {'session_id': 's', 'failure_stage': 'resolve_buffer',
+    }))
+    assert response.ok is False and response.category == 'validation'
+    assert response.details == {'session_id': 's', 'failure_stage': 'resolve_buffer',
                                    'effects_attempted': False, 'context_preserved': True}
 
 
 def test_native_inventory_failure_is_not_blessed_as_pre_effect_validation(monkeypatch):
     import asyncio
-    from rdc_tool import server_runtime as server
     def fail(): raise ValueError('native inventory failed')
     controller = NS(GetTextures=fail)
     async def inline(fn, *args, **kwargs): return fn(*args, **kwargs)
-    monkeypatch.setattr(server, '_offload', inline)
-    monkeypatch.setattr(server, '_get_controller', lambda _: asyncio.sleep(0, result=controller))
+    monkeypatch.setattr(renderdoc_api, '_offload', inline)
+    monkeypatch.setattr(replay_access, '_get_controller', lambda _: asyncio.sleep(0, result=controller))
     with pytest.raises(ValueError, match='native inventory failed'):
-        asyncio.run(server._dispatch_buffer('get_data', {'session_id': 's', 'buffer_id': 'id', 'size': 4}))
+        asyncio.run(buffer_ops.dispatch('get_data', {'session_id': 's', 'buffer_id': 'id', 'size': 4}))
 
 
 def test_post_transform_runtime_window_keeps_raw_mapping_and_absolute_vertex_identity(monkeypatch):
-    import asyncio, json
-    from rdc_tool import server_runtime as server
+    import asyncio
     from rdc_tool.core import replay_facts
     mesh, controller, calls = post_transform_window_fixture()
     sig = [NS(stream=0, varType='Float', systemValue='Position', regIndex=0xffffffff, compCount=4, varName='p', regChannelMask=15, perPrimitiveRate=False),
@@ -297,18 +295,18 @@ def test_post_transform_runtime_window_keeps_raw_mapping_and_absolute_vertex_ide
     controller.GetAPIProperties = lambda: NS(pipelineType=3)
     async def inline(fn, *args, **kwargs): return fn(*args, **kwargs)
     async def forbidden(*_): raise AssertionError('No generic resource lookup for a native mesh window')
-    monkeypatch.setattr(server, '_offload', inline)
-    monkeypatch.setattr(server, '_get_controller', lambda _: asyncio.sleep(0, result=controller))
-    monkeypatch.setattr(server, '_ensure_event', lambda *_: asyncio.sleep(0, result=10))
-    monkeypatch.setattr(server, '_resolve_resource_id', forbidden)
-    monkeypatch.setattr(server, '_get_rd', lambda: NS(MeshDataStage=NS(VSOut='vs', GSOut='gs'), GraphicsAPI=NS(D3D11=1, D3D12=2, Vulkan=3)))
-    monkeypatch.setattr(server, '_rd_stage', lambda value: value)
+    monkeypatch.setattr(renderdoc_api, '_offload', inline)
+    monkeypatch.setattr(replay_access, '_get_controller', lambda _: asyncio.sleep(0, result=controller))
+    monkeypatch.setattr(replay_access, '_ensure_event', lambda *_: asyncio.sleep(0, result=10))
+    monkeypatch.setattr(replay_access, '_resolve_resource_id', forbidden)
+    monkeypatch.setattr(renderdoc_api, '_get_rd', lambda: NS(MeshDataStage=NS(VSOut='vs', GSOut='gs'), GraphicsAPI=NS(D3D11=1, D3D12=2, Vulkan=3)))
+    monkeypatch.setattr(renderdoc_api, '_rd_stage', lambda value: value)
     monkeypatch.setattr(replay_facts, 'mesh_attributes', lambda *_: {})
-    response = json.loads(asyncio.run(server._dispatch_mesh('get_post_transform_data', {
+    response = asyncio.run(mesh_ops.dispatch('get_post_transform_data', {
         'session_id': 's', 'stage': 'vs', 'max_vertices': 2, 'first_index': 4097, 'index_count': 3,
-    })))
-    assert response['success'] is True
-    data = response['mesh_data']
+    }))
+    assert response.ok is True
+    data = response.data['mesh_data']
     assert data['mesh_format']['base_vertex'] == -5
     assert data['index_window']['first_index'] == 4097
     assert data['index_window']['complete'] is True and data['truncated'] is True
@@ -319,31 +317,29 @@ def test_post_transform_runtime_window_keeps_raw_mapping_and_absolute_vertex_ide
 
 
 def test_post_transform_invalid_window_is_rejected_before_replay_effects(monkeypatch):
-    import asyncio, json
-    from rdc_tool import server_runtime as server
+    import asyncio
     async def forbidden(*_): raise AssertionError('Invalid window must not acquire or move replay')
-    monkeypatch.setattr(server, '_get_controller', forbidden)
-    monkeypatch.setattr(server, '_ensure_event', forbidden)
-    response = json.loads(asyncio.run(server._dispatch_mesh('get_post_transform_data', {
+    monkeypatch.setattr(replay_access, '_get_controller', forbidden)
+    monkeypatch.setattr(replay_access, '_ensure_event', forbidden)
+    response = asyncio.run(mesh_ops.dispatch('get_post_transform_data', {
         'session_id': 's', 'stage': 'vs', 'max_vertices': 0, 'first_index': 0, 'index_count': 3,
-    })))
-    assert response['success'] is False and response['category'] == 'validation'
-    assert response['details']['effects_attempted'] is False
-    assert response['details']['context_preserved'] is True
+    }))
+    assert response.ok is False and response.category == 'validation'
+    assert response.details['effects_attempted'] is False
+    assert response.details['context_preserved'] is True
 
 
 @pytest.mark.parametrize('failure,stage', [('not_buffer','resolve_buffer'), ('range','validate_buffer_range'), ('budget','validate_buffer_read_budget')])
 def test_buffer_pre_read_rejections_preserve_context_without_data_read(monkeypatch, failure, stage):
-    import asyncio, json
-    from rdc_tool import server_runtime as server
+    import asyncio
     def forbidden(*_): raise AssertionError('No data read or event mutation on pre-read rejection')
     length = 2097152 if failure == 'budget' else 16
     controller = NS(GetBuffers=lambda: [] if failure == 'not_buffer' else [NS(resourceId='rid',length=length)], GetBufferData=forbidden, SetFrameEvent=forbidden)
     async def inline(fn, *args, **kwargs): return fn(*args, **kwargs)
-    monkeypatch.setattr(server, '_offload', inline)
-    monkeypatch.setattr(server, '_get_controller', lambda _: asyncio.sleep(0, result=controller))
-    monkeypatch.setattr(server, '_resolve_resource_id', lambda *_: asyncio.sleep(0, result='rid'))
-    monkeypatch.setattr(server, '_read_at_capture_state', forbidden)
-    response = json.loads(asyncio.run(server._dispatch_buffer('get_data', {'session_id':'s', 'buffer_id':'rid', 'size':length+1 if failure == 'range' else length, 'as_base64':True})))
-    assert response['success'] is False and response['category'] == 'validation'
-    assert response['details'] == {'session_id':'s', 'failure_stage':stage, 'effects_attempted':False, 'context_preserved':True}
+    monkeypatch.setattr(renderdoc_api, '_offload', inline)
+    monkeypatch.setattr(replay_access, '_get_controller', lambda _: asyncio.sleep(0, result=controller))
+    monkeypatch.setattr(replay_access, '_resolve_resource_id', lambda *_: asyncio.sleep(0, result='rid'))
+    monkeypatch.setattr(texture_export, '_read_at_capture_state', forbidden)
+    response = asyncio.run(buffer_ops.dispatch('get_data', {'session_id':'s', 'buffer_id':'rid', 'size':length+1 if failure == 'range' else length, 'as_base64':True}))
+    assert response.ok is False and response.category == 'validation'
+    assert response.details == {'session_id':'s', 'failure_stage':stage, 'effects_attempted':False, 'context_preserved':True}

@@ -6,7 +6,7 @@
 
 - 先核对当前工作区改动、实际调用链、公开契约和已有证据，再实现；不覆盖其他工作，不重复已完成工作。若代码、文档、catalog 或测试不一致，结合用户要求与真实行为判断错误方并同步修正，不能只因文档写错就修改运行语义。
 - 用户当前明确要求优先；本文件维护长期工程规则，任务状态与验收事实放现有 Task 和主题文档。不要把临时禁令、机器路径、PID、某轮延期或进度流水账写成永久规则。
-- 按主题读取并同步文档：公共契约 `docs/public-contract.md`；会话生命周期 `docs/session-model.md`；Agent 工作流 `docs/agent-model.md`；故障恢复 `docs/troubleshooting.md`；文档生成 `docs/doc-governance.md`；Android 验证 `docs/android-remote-cli-smoke-prompt.md`。
+- 按主题读取并同步文档：架构与分层 `ARCHITECTURE.md`；公共契约 `docs/public-contract.md`；会话生命周期 `docs/session-model.md`；Agent 工作流 `docs/agent-model.md`；故障恢复 `docs/troubleshooting.md`；文档生成 `docs/doc-governance.md`；Android 验证 `docs/android-remote-cli-smoke-prompt.md`。
 
 ## 实现与收敛
 
@@ -15,8 +15,9 @@
 - 按稳定职责命名，不以 V1/V2、new/old、final/final2 建立长期并行体系。包发布号仅作安装信息，不能代替接口能力校验；仍有实际解析用途的协议/存储格式标识须核对调用契约后处理，禁止凭名字删除。
 - 不为将来可能使用而增加抽象、配置和扩展点。抽象须能减少重复、降低错误或符合既有设计；工具价值由真实独立能力决定，不以数量多为目标。
 - `rdc_tool/operation_definitions.py` 是操作名称、参数、结果、前置条件及影响声明的唯一真源；通过生成器同步注册、catalog、CLI discovery 和 `docs/tool-reference.md`，不恢复提取输入、metadata overlay 或手工副本。数量从实际集合计算，调用方校验真实定义与指纹。
-- 发布与原生运行库身份以 `docs/release-baseline.md` 为准：功能变更同步根 `binaries/` 完整运行集、生成 catalog/docs 与 Agent 消费者；candidate 只作隔离验证。原生变更以同一冻结源码和 receipt 配对 DLL/PYD 与双 APK，并记录实际加载证据；缺外部条件要标为阻塞，禁止单文件混拷、旧产物混入或无依据 fallback。
+- 发布与原生运行库身份以 `docs/release-baseline.md` 为准：功能变更同步根 `binaries/` 完整运行集、生成 catalog/docs 与 Agent 消费者；candidate 只作隔离验证。原生变更以同一冻结源码和共享 receipt（`binaries/native_build.json`）配对各主机原生库与绑定（Windows DLL/PYD、Linux `.so`）及双 APK，并记录实际加载证据；缺外部条件要标为阻塞，禁止单文件混拷、旧产物混入或无依据 fallback。
 - 生命周期、身份和安全约束由代码保证；专业流程、报告组织和判断方法交给 Skill。Skill 提供知识，不能替代运行时参数、权限和前置条件校验。
+- 操作系统差异只在 `rdc_tool/platform/` 内实现：每个契约一套共享逻辑加 Windows/POSIX 原语，业务代码不判断主机；进程存活与终止只按 `(pid, birth)` 身份决定，不可读的身份不当作已退出。
 - CLI facade、VFS、独立 preview 与内嵌消费者复用同一套有效实现。管线 facade/VFS 使用 `rd.pipeline.get_state`，事件浏览使用 `rd.event.get_action_tree`；应用完整轻量事件索引使用 `rd.session.get_replay_events`。
 - 合法空结果、读取失败和不支持必须区分；不以空值、固定零值或假成功掩盖失败，观察事实与推断分别表达。
 - 时间点读取与回放测量必须在串行边界内验证并恢复事件及 replacement 身份；取消也须等待恢复完成，恢复失败隔离会话。初始内容以捕获保存的来源证明，整帧时间以完整 GPU 测量范围证明，不使用当前字节、事件耗时之和或 CPU 调用耗时替代。

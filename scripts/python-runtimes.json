@@ -1,0 +1,31 @@
+{
+  "windows-x64": {
+    "python_version": "3.14.3",
+    "package": "official CPython NuGet python 3.14.3",
+    "source_url": "https://api.nuget.org/v3-flatcontainer/python/3.14.3/python.3.14.3.nupkg",
+    "source_sha256": "ef63a18b486268cbfd1fa59e7b6094c42521b25f0184af8b267e1718dd0cb3a5",
+    "archive_root": "tools",
+    "include": [
+      "python.exe",
+      "pythonw.exe",
+      "python3.dll",
+      "python314.dll",
+      "vcruntime140.dll",
+      "vcruntime140_1.dll",
+      "LICENSE.txt",
+      "DLLs",
+      "Lib"
+    ]
+  },
+  "linux-x64": {
+    "python_version": "3.14.6",
+    "package": "python-build-standalone 20260718 cpython-3.14.6 x86_64-unknown-linux-gnu install_only_stripped",
+    "source_url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260718/cpython-3.14.6%2B20260718-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
+    "source_sha256": "86bf107f65fc30b56f2b263b26797fcbb1661f5315910cdbf27f733eb8738b74",
+    "archive_root": "python",
+    "include": [
+      "bin/python3.14",
+      "lib/python3.14"
+    ]
+  }
+}

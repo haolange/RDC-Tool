@@ -4,7 +4,7 @@ import pytest
 
 from rdc_tool.core.errors import CoreError
 from rdc_tool.runtime_state import default_context_state, list_context_ids, save_context_state
-from rdc_tool.server_runtime import _ensure_context_capacity
+from rdc_tool.runtime.context_records import _ensure_context_capacity
 
 
 def test_empty_state_files_do_not_consume_capacity() -> None:

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import json
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,7 +9,10 @@ from types import SimpleNamespace
 import pytest
 
 from rdc_tool import remote_bootstrap as android
-from rdc_tool import server_runtime as runtime
+from rdc_tool import remote_bootstrap
+from rdc_tool.core.errors import RuntimeToolError
+from rdc_tool.runtime import live_state, remote_records, remote_session, remote_target, renderdoc_api
+from rdc_tool.runtime.operations import remote as remote_ops
 
 
 HEADER = "Num       RefCount Protocol Flags    Type St Inode Path\n"
@@ -38,7 +40,7 @@ class Control:
 
 
 def handle(**kwargs):
-    return runtime.RemoteHandle("remote-target-test", "127.0.0.1", 60656, True, **kwargs)
+    return live_state.RemoteHandle("remote-target-test", "127.0.0.1", 60656, True, **kwargs)
 
 
 @pytest.fixture
@@ -55,15 +57,15 @@ def native(monkeypatch):
     def enumerate_targets(*args):
         enumerates.append(args)
         return next(ids)
-    monkeypatch.setattr(runtime, "_get_rd", lambda: SimpleNamespace(
+    monkeypatch.setattr(renderdoc_api, "_get_rd", lambda: SimpleNamespace(
         CreateTargetControl=create, EnumerateRemoteTargets=enumerate_targets))
-    monkeypatch.setattr(runtime, "_drain_target_control_messages_sync", lambda *a, **kw: [])
+    monkeypatch.setattr(remote_target, "_drain_target_control_messages_sync", lambda *a, **kw: [])
     return controls, creates, enumerates
 
 
 def test_tcp_scan_and_control_use_host_only_and_release(native):
     remote = handle()
-    targets = runtime._remote_list_targets_sync(remote)
+    targets = remote_target._remote_list_targets_sync(remote)
     controls, creates, enumerates = native
     assert enumerates == [("127.0.0.1", 0), ("127.0.0.1", 38920)]
     assert creates == [("127.0.0.1", 38920, "rdc-tool-remote-target-test", False)]
@@ -74,8 +76,8 @@ def test_tcp_scan_and_control_use_host_only_and_release(native):
 
 def test_successful_empty_scan_does_not_return_stale_cached_targets(monkeypatch):
     remote = handle(known_targets={"38920": {"target_id": "38920", "ident": 38920}})
-    monkeypatch.setattr(runtime, "_get_rd", lambda: SimpleNamespace(EnumerateRemoteTargets=lambda *a: 0))
-    assert runtime._remote_list_targets_sync(remote) == []
+    monkeypatch.setattr(renderdoc_api, "_get_rd", lambda: SimpleNamespace(EnumerateRemoteTargets=lambda *a: 0))
+    assert remote_target._remote_list_targets_sync(remote) == []
     assert remote.known_targets == {}
 
 
@@ -83,9 +85,9 @@ def test_successful_empty_scan_does_not_return_stale_cached_targets(monkeypatch)
 def test_unsupported_host_shape_cannot_succeed_with_empty_scan(host, monkeypatch):
     remote = handle()
     remote.host = host
-    monkeypatch.setattr(runtime, "_get_rd", lambda: pytest.fail("native API must not receive unsupported URL"))
-    with pytest.raises(runtime.RuntimeToolError, match="hostname"):
-        runtime._remote_list_targets_sync(remote)
+    monkeypatch.setattr(renderdoc_api, "_get_rd", lambda: pytest.fail("native API must not receive unsupported URL"))
+    with pytest.raises(RuntimeToolError, match="hostname"):
+        remote_target._remote_list_targets_sync(remote)
 
 
 @pytest.mark.parametrize("stdout,stderr,code", [
@@ -121,8 +123,8 @@ def test_android_maps_logical_ident_and_releases_control_before_forward(native, 
     remote = handle(transport="adb_android", device_serial="chosen-serial")
     bridge = android.AndroidBootstrapResult("canonical-adb", "chosen-serial", "", "", "", "127.0.0.1",
                                             62001, 38922, "", "tcp:62001", created_forward=True)
-    monkeypatch.setattr(runtime, "resolve_adb_path", lambda: "canonical-adb")
-    monkeypatch.setattr(runtime, "list_android_target_idents", lambda adb, serial: [38922])
+    monkeypatch.setattr(remote_bootstrap, "resolve_adb_path", lambda: "canonical-adb")
+    monkeypatch.setattr(remote_bootstrap, "list_android_target_idents", lambda adb, serial: [38922])
     calls = []
     def forward(*args):
         calls.append(args)
@@ -132,9 +134,9 @@ def test_android_maps_logical_ident_and_releases_control_before_forward(native, 
         assert controls[0].shutdowns == 1
         receipt.created_forward = False
         return []
-    monkeypatch.setattr(runtime, "forward_android_target", forward)
-    monkeypatch.setattr(runtime, "cleanup_android_remote", cleanup)
-    targets = runtime._remote_list_targets_sync(remote)
+    monkeypatch.setattr(remote_bootstrap, "forward_android_target", forward)
+    monkeypatch.setattr(remote_bootstrap, "cleanup_android_remote", cleanup)
+    targets = remote_target._remote_list_targets_sync(remote)
     assert targets[0]["ident"] == 38922
     assert targets[0]["target_id"] == "38922"
     assert creates[0][:2] == ("127.0.0.1", 62001)
@@ -162,9 +164,9 @@ def test_busy_target_never_forces_or_captures(monkeypatch, queued):
     def create(*args):
         creates.append(args)
         return control
-    monkeypatch.setattr(runtime, "_get_rd", lambda: SimpleNamespace(CreateTargetControl=create))
-    with pytest.raises(runtime.RuntimeToolError, match="busy"):
-        runtime._trigger_remote_capture_sync(remote, target_id="38920", num_frames=1, queued=queued)
+    monkeypatch.setattr(renderdoc_api, "_get_rd", lambda: SimpleNamespace(CreateTargetControl=create))
+    with pytest.raises(RuntimeToolError, match="busy"):
+        remote_target._trigger_remote_capture_sync(remote, target_id="38920", num_frames=1, queued=queued)
     assert creates[0][-1] is False
     assert not control.triggers and not control.queues
     assert control.shutdowns == 1
@@ -172,11 +174,11 @@ def test_busy_target_never_forces_or_captures(monkeypatch, queued):
 
 def test_busy_target_scan_preserves_busy_metadata_without_reading_messages(native, monkeypatch):
     control = Control(busy="user-client")
-    monkeypatch.setattr(runtime, "_get_rd", lambda: SimpleNamespace(
+    monkeypatch.setattr(renderdoc_api, "_get_rd", lambda: SimpleNamespace(
         EnumerateRemoteTargets=lambda host, prior: 38920 if prior == 0 else 0,
         CreateTargetControl=lambda *a: control))
-    monkeypatch.setattr(runtime, "_drain_target_control_messages_sync", lambda *a, **kw: pytest.fail("busy drain"))
-    assert runtime._remote_list_targets_sync(handle())[0]["busy_client"] == "user-client"
+    monkeypatch.setattr(remote_target, "_drain_target_control_messages_sync", lambda *a, **kw: pytest.fail("busy drain"))
+    assert remote_target._remote_list_targets_sync(handle())[0]["busy_client"] == "user-client"
     assert control.shutdowns == 1
 
 
@@ -185,10 +187,10 @@ def test_scope_shutdown_on_success_and_exception(native, failure):
     remote = handle()
     if failure:
         with pytest.raises(ValueError, match="action failed"):
-            with runtime._target_control_scope_sync(remote, 38920):
+            with remote_target._target_control_scope_sync(remote, 38920):
                 raise ValueError("action failed")
     else:
-        with runtime._target_control_scope_sync(remote, 38920):
+        with remote_target._target_control_scope_sync(remote, 38920):
             pass
     assert native[0][0].shutdowns == 1
     assert not remote.target_control_leases
@@ -197,31 +199,31 @@ def test_scope_shutdown_on_success_and_exception(native, failure):
 def test_failed_shutdown_retains_control_and_disconnect_retries(monkeypatch):
     control = Control(fail_shutdown=True)
     remote = handle()
-    monkeypatch.setattr(runtime, "_get_rd", lambda: SimpleNamespace(CreateTargetControl=lambda *a: control))
-    with pytest.raises(runtime.RuntimeToolError, match="cleanup failed"):
-        with runtime._target_control_scope_sync(remote, 38920):
+    monkeypatch.setattr(renderdoc_api, "_get_rd", lambda: SimpleNamespace(CreateTargetControl=lambda *a: control))
+    with pytest.raises(RuntimeToolError, match="cleanup failed"):
+        with remote_target._target_control_scope_sync(remote, 38920):
             pass
     assert remote.target_control_leases[0]["control"] is control
-    assert runtime._disconnect_remote_handle_sync(remote)
+    assert remote_target._disconnect_remote_handle_sync(remote)
     control.fail_shutdown = False
-    assert runtime._disconnect_remote_handle_sync(remote) == []
+    assert remote_target._disconnect_remote_handle_sync(remote) == []
     assert not remote.target_control_leases
 
 
 def test_failed_forward_cleanup_retains_receipt_after_control_shutdown(native, monkeypatch):
     remote = handle(transport="adb_android", device_serial="chosen-serial")
     bridge = SimpleNamespace(host="127.0.0.1", port=62001, created_forward=True)
-    monkeypatch.setattr(runtime, "resolve_adb_path", lambda: "canonical-adb")
-    monkeypatch.setattr(runtime, "forward_android_target", lambda *a: bridge)
-    monkeypatch.setattr(runtime, "cleanup_android_remote", lambda receipt: ["ownership changed"])
-    with pytest.raises(runtime.RuntimeToolError, match="cleanup failed"):
-        with runtime._target_control_scope_sync(remote, 38920):
+    monkeypatch.setattr(remote_bootstrap, "resolve_adb_path", lambda: "canonical-adb")
+    monkeypatch.setattr(remote_bootstrap, "forward_android_target", lambda *a: bridge)
+    monkeypatch.setattr(remote_bootstrap, "cleanup_android_remote", lambda receipt: ["ownership changed"])
+    with pytest.raises(RuntimeToolError, match="cleanup failed"):
+        with remote_target._target_control_scope_sync(remote, 38920):
             pass
     assert native[0][0].shutdowns == 1
     assert remote.target_control_leases[0] == {"control": None, "bridge": bridge}
-    assert runtime._disconnect_remote_handle_sync(remote) == ["ownership changed"]
-    monkeypatch.setattr(runtime, "cleanup_android_remote", lambda receipt: [])
-    assert runtime._disconnect_remote_handle_sync(remote) == []
+    assert remote_target._disconnect_remote_handle_sync(remote) == ["ownership changed"]
+    monkeypatch.setattr(remote_bootstrap, "cleanup_android_remote", lambda receipt: [])
+    assert remote_target._disconnect_remote_handle_sync(remote) == []
     assert native[0][0].shutdowns == 1
 
 
@@ -239,7 +241,7 @@ def test_foreign_forward_is_never_removed(monkeypatch):
 
 def test_trigger_uses_one_control_for_capture_and_poll(native):
     remote = handle(known_targets={"38920": {"target_id": "38920", "ident": 38920}})
-    runtime._trigger_remote_capture_sync(remote, target_id="38920", num_frames=2)
+    remote_target._trigger_remote_capture_sync(remote, target_id="38920", num_frames=2)
     assert len(native[0]) == 1
     assert native[0][0].triggers == [2]
     assert native[0][0].shutdowns == 1
@@ -264,15 +266,15 @@ def test_capture_operations_release_the_control(native, monkeypatch, tmp_path, o
         if fail and operation == "poll":
             raise OSError("action failed")
         return [{"type": "CaptureCopied", "capture": {"capture_id": "1"}}]
-    monkeypatch.setattr(runtime, "_get_rd", lambda: SimpleNamespace(CreateTargetControl=create))
-    monkeypatch.setattr(runtime, "_drain_target_control_messages_sync", drain)
+    monkeypatch.setattr(renderdoc_api, "_get_rd", lambda: SimpleNamespace(CreateTargetControl=create))
+    monkeypatch.setattr(remote_target, "_drain_target_control_messages_sync", drain)
     def invoke():
         if operation == "poll":
-            runtime._poll_captures_for_target_sync(remote, target_id="38920")
+            remote_target._poll_captures_for_target_sync(remote, target_id="38920")
         elif operation == "copy":
-            runtime._copy_remote_capture_sync(remote, 38920, 1, destination)
+            remote_target._copy_remote_capture_sync(remote, 38920, 1, destination)
         else:
-            runtime._delete_remote_capture_sync(remote, 38920, 1)
+            remote_target._delete_remote_capture_sync(remote, 38920, 1)
     if fail:
         with pytest.raises(OSError, match="action failed"):
             invoke()
@@ -296,11 +298,11 @@ def test_copy_first_capture_completes_through_real_message_drain(monkeypatch, tm
         Path(path).write_bytes(b"capture-zero")
     control.CopyCapture = copy
     control.ReceiveMessage = lambda progress: next(messages)
-    monkeypatch.setattr(runtime, "_get_rd", lambda: SimpleNamespace(
+    monkeypatch.setattr(renderdoc_api, "_get_rd", lambda: SimpleNamespace(
         CreateTargetControl=lambda *args: control,
         TargetControlMessageType=SimpleNamespace(Noop=0, CaptureCopied=1, Disconnected=2),
     ))
-    runtime._copy_remote_capture_sync(remote, 38920, 0, destination)
+    remote_target._copy_remote_capture_sync(remote, 38920, 0, destination)
     assert copies == [(0, str(destination))]
     assert remote.known_captures["0"]["capture_id"] == "0"
     assert remote.known_captures["0"]["message_type"] == "CaptureCopied"
@@ -312,7 +314,7 @@ def test_copy_first_capture_completes_through_real_message_drain(monkeypatch, tm
 @pytest.mark.parametrize("message_type", ["NewCapture", "CaptureCopied"])
 def test_registry_preserves_explicit_capture_zero(message_type):
     remote = handle()
-    record = runtime._update_remote_capture_registry_from_message(
+    record = remote_target._update_remote_capture_registry_from_message(
         remote, target_id="38920", message_type=message_type,
         message=SimpleNamespace(newCapture=SimpleNamespace(captureId=0)),
     )
@@ -325,7 +327,7 @@ def test_registry_preserves_explicit_capture_zero(message_type):
                                      SimpleNamespace(captureId=False)])
 def test_registry_rejects_missing_negative_or_malformed_capture_ids(capture):
     remote = handle()
-    assert runtime._update_remote_capture_registry_from_message(
+    assert remote_target._update_remote_capture_registry_from_message(
         remote, target_id="38920", message_type="CaptureCopied",
         message=SimpleNamespace(newCapture=capture),
     ) is None
@@ -334,39 +336,39 @@ def test_registry_rejects_missing_negative_or_malformed_capture_ids(capture):
 
 def test_disconnect_failure_keeps_handle_and_context_ownership(monkeypatch):
     remote = handle(remote_server=object())
-    monkeypatch.setattr(runtime._runtime, "remotes", {remote.remote_id: remote})
-    monkeypatch.setattr(runtime, "_remote_consumed_payload", lambda remote_id: None)
-    monkeypatch.setattr(runtime, "_assert_remote_handle_context", lambda remote: None)
-    monkeypatch.setattr(runtime, "_remote_active_session_ids", lambda remote: [])
-    monkeypatch.setattr(runtime, "_clear_context_remote_live", lambda remote_id: pytest.fail("ownership cleared"))
-    monkeypatch.setattr(runtime, "_disconnect_remote_handle_sync", lambda remote: ["owned forward removal failed"])
-    result = json.loads(asyncio.run(runtime._dispatch_remote("disconnect", {"remote_id": remote.remote_id})))
-    assert not result["success"]
-    assert result["code"] == "remote_disconnect_failed"
-    assert runtime._runtime.remotes[remote.remote_id] is remote
+    monkeypatch.setattr(live_state._runtime, "remotes", {remote.remote_id: remote})
+    monkeypatch.setattr(remote_session, "_remote_consumed_payload", lambda remote_id: None)
+    monkeypatch.setattr(remote_session, "_assert_remote_handle_context", lambda remote: None)
+    monkeypatch.setattr(remote_records, "_remote_active_session_ids", lambda remote: [])
+    monkeypatch.setattr(remote_session, "_clear_context_remote_live", lambda remote_id: pytest.fail("ownership cleared"))
+    monkeypatch.setattr(remote_target, "_disconnect_remote_handle_sync", lambda remote: ["owned forward removal failed"])
+    result = asyncio.run(remote_ops.dispatch("disconnect", {"remote_id": remote.remote_id}))
+    assert not result.ok
+    assert result.code == "remote_disconnect_failed"
+    assert live_state._runtime.remotes[remote.remote_id] is remote
 
 
 def test_disconnect_retry_does_not_reuse_a_closed_native_remote(monkeypatch):
     shutdowns = []
     remote = handle(transport="adb_android", remote_server=SimpleNamespace(
         ShutdownConnection=lambda: shutdowns.append("shutdown")), bootstrap_result=object())
-    monkeypatch.setattr(runtime, "cleanup_android_remote", lambda receipt: ["forward remove failed"])
-    assert runtime._disconnect_remote_handle_sync(remote) == ["forward remove failed"]
+    monkeypatch.setattr(remote_bootstrap, "cleanup_android_remote", lambda receipt: ["forward remove failed"])
+    assert remote_target._disconnect_remote_handle_sync(remote) == ["forward remove failed"]
     assert remote.remote_server is None and not remote.connected
-    monkeypatch.setattr(runtime, "cleanup_android_remote", lambda receipt: [])
-    assert runtime._disconnect_remote_handle_sync(remote) == []
+    monkeypatch.setattr(remote_bootstrap, "cleanup_android_remote", lambda receipt: [])
+    assert remote_target._disconnect_remote_handle_sync(remote) == []
     assert shutdowns == ["shutdown"]
 
 
 def test_scan_cleanup_failure_cannot_be_reported_as_successful_target(monkeypatch):
     remote = handle()
     control = Control(fail_shutdown=True)
-    monkeypatch.setattr(runtime, "_get_rd", lambda: SimpleNamespace(
+    monkeypatch.setattr(renderdoc_api, "_get_rd", lambda: SimpleNamespace(
         EnumerateRemoteTargets=lambda host, prior: 38920 if prior == 0 else 0,
         CreateTargetControl=lambda *a: control))
-    monkeypatch.setattr(runtime, "_drain_target_control_messages_sync", lambda *a, **kw: [])
-    with pytest.raises(runtime.RuntimeToolError, match="cleanup failed"):
-        runtime._remote_list_targets_sync(remote)
+    monkeypatch.setattr(remote_target, "_drain_target_control_messages_sync", lambda *a, **kw: [])
+    with pytest.raises(RuntimeToolError, match="cleanup failed"):
+        remote_target._remote_list_targets_sync(remote)
     assert len(remote.target_control_leases) == 1
 
 
@@ -381,7 +383,7 @@ def test_cancel_joins_native_target_cleanup_before_returning():
         finally:
             cleaned.set()
     async def scenario():
-        task = asyncio.create_task(runtime._offload_target_operation(work))
+        task = asyncio.create_task(remote_target._offload_target_operation(work))
         while not entered.is_set():
             await asyncio.sleep(0.01)
         task.cancel()
@@ -395,10 +397,10 @@ def test_cancel_joins_native_target_cleanup_before_returning():
 
 
 def test_native_control_creation_has_one_scoped_call_site():
-    source = inspect.getsource(runtime)
+    source = inspect.getsource(remote_target)
     assert source.count(".CreateTargetControl(") == 1
     assert "_create_target_control_sync" not in source
-    assert ".CreateTargetControl(" in inspect.getsource(runtime._target_control_scope_sync)
+    assert ".CreateTargetControl(" in inspect.getsource(remote_target._target_control_scope_sync)
 
 
 @pytest.fixture
@@ -424,19 +426,19 @@ def capture_options_binding(monkeypatch):
             instances.append(self)
 
     binding = SimpleNamespace(CaptureOptions=CaptureOptions)
-    monkeypatch.setattr(runtime, "_get_rd", lambda: binding)
+    monkeypatch.setattr(renderdoc_api, "_get_rd", lambda: binding)
     return binding, instances
 
 
 def test_capture_options_use_current_binding_constructor_and_fresh_defaults(capture_options_binding):
-    options, applied = runtime._capture_options_from_dict({
+    options, applied = remote_target._capture_options_from_dict({
         "allow_vsync": "false", "api_validation": "true", "delay_for_debugger": "7",
     })
     assert applied == {"allow_vsync": False, "api_validation": True, "delay_for_debugger": 7}
     assert options.allowVSync is False and options.apiValidation is True
     assert options.delayForDebugger == 7
     assert options.allowFullscreen is True and options.debugOutputMute is True
-    fresh, applied = runtime._capture_options_from_dict({})
+    fresh, applied = remote_target._capture_options_from_dict({})
     assert fresh is not options and applied == {}
     assert fresh.allowVSync is True and fresh.apiValidation is False
     assert fresh.delayForDebugger == 0
@@ -444,14 +446,14 @@ def test_capture_options_use_current_binding_constructor_and_fresh_defaults(capt
 
 def test_set_capture_options_uses_current_binding_without_target(capture_options_binding, monkeypatch):
     remote = handle(remote_server=object(), default_capture_options={"allow_fullscreen": False})
-    monkeypatch.setattr(runtime._runtime, "remotes", {remote.remote_id: remote})
-    monkeypatch.setattr(runtime, "_remote_consumed_payload", lambda remote_id: None)
-    monkeypatch.setattr(runtime, "_assert_remote_handle_context", lambda remote: None)
-    result = json.loads(asyncio.run(runtime._dispatch_remote("set_capture_options", {
+    monkeypatch.setattr(live_state._runtime, "remotes", {remote.remote_id: remote})
+    monkeypatch.setattr(remote_session, "_remote_consumed_payload", lambda remote_id: None)
+    monkeypatch.setattr(remote_session, "_assert_remote_handle_context", lambda remote: None)
+    result = asyncio.run(remote_ops.dispatch("set_capture_options", {
         "remote_id": remote.remote_id, "options": {"api_validation": True, "delay_for_debugger": 3},
-    })))
-    assert result["success"] is True
-    assert result["applied"] == {"api_validation": True, "delay_for_debugger": 3}
+    }))
+    assert result.ok is True
+    assert result.data['applied'] == {"api_validation": True, "delay_for_debugger": 3}
     assert remote.default_capture_options == {
         "allow_fullscreen": False, "api_validation": True, "delay_for_debugger": 3,
     }
@@ -463,7 +465,7 @@ def test_launch_passes_current_capture_options_with_explicit_override(capture_op
     executed = []
     control = Control()
     binding.CreateTargetControl = lambda *args: control
-    monkeypatch.setattr(runtime, "_drain_target_control_messages_sync", lambda *args, **kwargs: [])
+    monkeypatch.setattr(remote_target, "_drain_target_control_messages_sync", lambda *args, **kwargs: [])
 
     def execute(*args):
         executed.append(args)
@@ -471,7 +473,7 @@ def test_launch_passes_current_capture_options_with_explicit_override(capture_op
 
     remote = handle(remote_server=SimpleNamespace(ExecuteAndInject=execute),
                     default_capture_options={"allow_vsync": False, "api_validation": True})
-    target = runtime._launch_remote_app_sync(
+    target = remote_target._launch_remote_app_sync(
         remote, exe_path="test-app", working_dir="", cmdline="", env={},
         capture_options={"allow_vsync": True, "delay_for_debugger": 5},
     )

@@ -10,6 +10,11 @@ import pytest
 from scripts import package_release, verify_release_package as verify
 
 
+@pytest.fixture(autouse=True)
+def _windows_package(pin_host):
+    pin_host("windows-x64")  # these fixtures build windows-x64 packages
+
+
 def identity_fixture(root: Path) -> Path:
     source = root / 'source'
     package = root / 'package'
@@ -29,7 +34,7 @@ def identity_fixture(root: Path) -> Path:
 
 
 def test_license_bytes_cannot_be_replaced_by_inventory_claim(tmp_path, monkeypatch):
-    monkeypatch.setattr(verify, 'native_manifest_status', lambda root: {'status': 'verified'})
+    monkeypatch.setattr(verify, 'native_manifest_status', lambda root, required=None: {'status': 'verified'})
     package = identity_fixture(tmp_path)
     verify._verify_release_identity(package, tmp_path / 'source')
     (package / 'LICENSE').write_bytes(b'Apache-2.0 truncated')
@@ -48,14 +53,14 @@ def test_replaced_zip_license_fails_even_with_recomputed_manifest_and_checksum(t
     package = identity_fixture(tmp_path)
     (package / 'LICENSE').write_bytes(b'replaced license')
     manifest = json.loads((package / 'RELEASE_MANIFEST.json').read_text(encoding='utf-8'))
-    manifest['files'] = [{'path': 'LICENSE', 'size': 16, 'sha256': verify._sha256(package / 'LICENSE')}]
+    manifest['files'] = [{'path': 'LICENSE', 'size': 16, 'sha256': verify.sha256_file(package / 'LICENSE')}]
     (package / 'RELEASE_MANIFEST.json').write_text(json.dumps(manifest), encoding='utf-8')
     archive = tmp_path / 'candidate.zip'
     with zipfile.ZipFile(archive, 'w') as zipped:
         for file in package.rglob('*'):
             if file.is_file():
                 zipped.write(file, file.relative_to(package))
-    (tmp_path / 'SHA256SUMS').write_text(f'{verify._sha256(archive)}  candidate.zip\n', encoding='utf-8')
+    (tmp_path / 'SHA256SUMS').write_text(f'{verify.sha256_file(archive)}  candidate.zip\n', encoding='utf-8')
     verify._verify_archive_checksum(archive)
     extracted = tmp_path / 'extracted'
     with zipfile.ZipFile(archive) as zipped:
@@ -86,7 +91,7 @@ def test_metadata_version_mismatch_fails(tmp_path, filename):
 
 def test_staging_is_removed_on_success_and_archive_failure(tmp_path, monkeypatch):
     staging = []
-    monkeypatch.setattr(package_release, '_tools_root', lambda: tmp_path)
+    monkeypatch.setattr(package_release, 'tools_root', lambda: tmp_path)
     monkeypatch.setattr(package_release, '_source_revision', lambda root: 'a' * 40)
     monkeypatch.setattr(package_release, '_qualify_source', lambda root: None)
     monkeypatch.setattr(package_release, '_qualify_package', lambda path: None)
@@ -112,7 +117,7 @@ def test_staging_is_removed_on_success_and_archive_failure(tmp_path, monkeypatch
 
 def test_staging_is_removed_on_copy_failure(tmp_path, monkeypatch):
     staging = []
-    monkeypatch.setattr(package_release, '_tools_root', lambda: tmp_path)
+    monkeypatch.setattr(package_release, 'tools_root', lambda: tmp_path)
     monkeypatch.setattr(package_release, '_source_revision', lambda root: 'a' * 40)
     monkeypatch.setattr(package_release, '_qualify_source', lambda root: None)
     def fail_copy(root, destination):
@@ -166,20 +171,20 @@ def candidate_source_fixture(root, monkeypatch):
     from scripts import package_runtime
     from test_runtime_identity import native_inputs
     inputs = native_inputs(root)
-    monkeypatch.setattr(package_runtime, '_tools_root', lambda: root)
+    monkeypatch.setattr(package_runtime, 'tools_root', lambda: root)
     assert package_runtime.main(inputs) == 0
     for name in ('LICENSE', 'README.md'):
         (root / name).write_text('fixture\n', encoding='utf-8')
     (root / 'CHANGELOG.md').write_text(f'## {verify.TOOL_VERSION}\n', encoding='utf-8')
     (root / 'pyproject.toml').write_text(f'[project]\nversion="{verify.TOOL_VERSION}"\n', encoding='utf-8')
-    for name in verify.EXPECTED_ENTRYPOINTS:
+    for name in package_release.ENTRYPOINTS:
         path = root / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text('fixture', encoding='utf-8')
     metadata = root / f'binaries/windows/x64/python/Lib/site-packages/rdc_tool-{verify.TOOL_VERSION}.dist-info/METADATA'
     metadata.parent.mkdir(parents=True)
     metadata.write_text(f'Version: {verify.TOOL_VERSION}\n', encoding='utf-8')
-    monkeypatch.setattr(package_release, '_tools_root', lambda: root)
+    monkeypatch.setattr(package_release, 'tools_root', lambda: root)
     monkeypatch.setattr(package_release, '_candidate_source', lambda root: {'base_revision': 'a' * 40, 'working_diff_sha256': 'd' * 64})
 
 

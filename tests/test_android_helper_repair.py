@@ -8,9 +8,10 @@ import threading
 import pytest
 
 from rdc_tool import remote_bootstrap as rb
-from rdc_tool import server
 from rdc_tool.android_apk_identity import read_apk_identity
 from rdc_tool.core.errors import CoreError
+from rdc_tool import remote_bootstrap
+from rdc_tool.runtime import dispatch, live_state, oplog, remote_target, renderdoc_api, runtime_lifecycle
 
 
 @pytest.fixture(autouse=True)
@@ -116,16 +117,15 @@ def test_cancel_after_package_commit_retains_installation_fact(monkeypatch, tmp_
 
 
 def test_native_busy_does_not_enter_repair(monkeypatch):
-    runtime = server.server_runtime
     bootstrap = SimpleNamespace(host="127.0.0.1", port=1234)
-    monkeypatch.setattr(runtime, "bootstrap_android_remote", lambda **k: bootstrap)
-    monkeypatch.setattr(runtime, "describe_android_remote", lambda _: {})
-    monkeypatch.setattr(runtime, "_renderdoc_version_value", lambda: "v1.45")
-    monkeypatch.setattr(runtime, "_wait_for_remote_endpoint", lambda *a: (_ for _ in ()).throw(CoreError("remote_busy", "busy", "runtime")))
-    monkeypatch.setattr(runtime, "repair_incompatible_android_helper", lambda *a: pytest.fail("busy cannot repair"))
-    monkeypatch.setattr(runtime, "cleanup_android_remote", lambda _: [])
+    monkeypatch.setattr(remote_bootstrap, "bootstrap_android_remote", lambda **k: bootstrap)
+    monkeypatch.setattr(remote_bootstrap, "describe_android_remote", lambda _: {})
+    monkeypatch.setattr(renderdoc_api, "_renderdoc_version_value", lambda: "v1.45")
+    monkeypatch.setattr(remote_target, "_wait_for_remote_endpoint", lambda *a: (_ for _ in ()).throw(CoreError("remote_busy", "busy", "runtime")))
+    monkeypatch.setattr(remote_bootstrap, "repair_incompatible_android_helper", lambda *a: pytest.fail("busy cannot repair"))
+    monkeypatch.setattr(remote_bootstrap, "cleanup_android_remote", lambda _: [])
     with pytest.raises(CoreError) as error:
-        asyncio.run(runtime._connect_remote_endpoint("host", 38920, "adb_android", {"device_serial": "device"}, 3000))
+        asyncio.run(remote_target._connect_remote_endpoint("host", 38920, "adb_android", {"device_serial": "device"}, 3000))
     assert error.value.code == "remote_busy"
 
 
@@ -149,31 +149,29 @@ def test_install_requires_positive_package_manager_result(monkeypatch, tmp_path)
 
 
 def test_native_mismatch_refreshes_owned_helper_once_and_pings(monkeypatch):
-    runtime = server.server_runtime
     remote = SimpleNamespace(Ping=lambda: SimpleNamespace(OK=lambda: True), ShutdownConnection=lambda: None)
     bootstrap = SimpleNamespace(host="127.0.0.1", port=1234, package_name="helper")
     observed = []
-    monkeypatch.setattr(runtime, "bootstrap_android_remote", lambda **k: bootstrap)
-    monkeypatch.setattr(runtime, "describe_android_remote", lambda _: {})
-    monkeypatch.setattr(runtime, "_renderdoc_version_value", lambda: "v1.45")
+    monkeypatch.setattr(remote_bootstrap, "bootstrap_android_remote", lambda **k: bootstrap)
+    monkeypatch.setattr(remote_bootstrap, "describe_android_remote", lambda _: {})
+    monkeypatch.setattr(renderdoc_api, "_renderdoc_version_value", lambda: "v1.45")
     def wait(*args):
         observed.append("verify")
         if observed.count("verify") == 1:
             raise CoreError("remote_version_mismatch", "mismatch", "runtime")
-    monkeypatch.setattr(runtime, "_wait_for_remote_endpoint", wait)
-    monkeypatch.setattr(runtime, "repair_incompatible_android_helper", lambda *a: observed.append("repair"))
-    monkeypatch.setattr(runtime, "_prepare_android_service", lambda *a: bootstrap)
-    monkeypatch.setattr(runtime, "_create_remote_server_connection", lambda *a: remote)
-    monkeypatch.setattr(runtime, "_status_ok", lambda _: True)
-    monkeypatch.setattr(runtime, "_collect_remote_server_info", lambda *a, **k: {})
-    assert asyncio.run(runtime._connect_remote_endpoint("host", 38920, "adb_android", {}, 3000))[1] is remote
+    monkeypatch.setattr(remote_target, "_wait_for_remote_endpoint", wait)
+    monkeypatch.setattr(remote_bootstrap, "repair_incompatible_android_helper", lambda *a: observed.append("repair"))
+    monkeypatch.setattr(remote_bootstrap, "_prepare_android_service", lambda *a: bootstrap)
+    monkeypatch.setattr(remote_target, "_create_remote_server_connection", lambda *a: remote)
+    monkeypatch.setattr(renderdoc_api, "_status_ok", lambda _: True)
+    monkeypatch.setattr(remote_target, "_collect_remote_server_info", lambda *a, **k: {})
+    assert asyncio.run(remote_target._connect_remote_endpoint("host", 38920, "adb_android", {}, 3000))[1] is remote
     assert observed == ["verify", "repair", "verify"]
 
 
 @pytest.mark.parametrize("install_timeout", [False, True])
 def test_connect_cancel_after_package_commit_publishes_joined_installation_receipt(monkeypatch, tmp_path, install_timeout):
     from rdc_tool.progress import ProgressReporter
-    runtime = server.server_runtime
     current = result(tmp_path)
     current.uninstalled_existing = install_timeout
     identity(monkeypatch)
@@ -194,17 +192,17 @@ def test_connect_cancel_after_package_commit_publishes_joined_installation_recei
     monkeypatch.setattr(rb, "_list_renderdoc_socket_ports", lambda *a: [])
     monkeypatch.setattr(rb, "_adb_shell", lambda *a, **k: SimpleNamespace(stdout="", stderr=""))
     monkeypatch.setattr(rb, "cleanup_android_remote", lambda item: cleaned.append(item) or [])
-    monkeypatch.setattr(runtime, "bootstrap_android_remote", bootstrap)
-    monkeypatch.setattr(runtime, "_create_remote_server_connection", lambda *a: pytest.fail("cancelled install cannot connect"))
+    monkeypatch.setattr(remote_bootstrap, "bootstrap_android_remote", bootstrap)
+    monkeypatch.setattr(remote_target, "_create_remote_server_connection", lambda *a: pytest.fail("cancelled install cannot connect"))
     # Exercise the actual install and bootstrap error receipt through the full
     # async connect boundary, including cancellation while PackageManager runs.
     async def run():
-        await server.runtime_startup()
-        runtime._record_operation_start(runtime._runtime_context_id(), trace_id="cancel-install", operation="rd.remote.connect", transport="test", args={})
+        await runtime_lifecycle.runtime_startup()
+        oplog._record_operation_start(live_state._runtime_context_id(), trace_id="cancel-install", operation="rd.remote.connect", transport="test", args={})
         reporter = ProgressReporter(trace_id="cancel-install", operation="rd.remote.connect", sink=Sink())
-        token = runtime._CURRENT_PROGRESS_REPORTER.set(reporter)
+        token = live_state._CURRENT_PROGRESS_REPORTER.set(reporter)
         try:
-            task = asyncio.create_task(runtime._connect_remote_endpoint("host", 1, "adb_android", {"device_serial": "device"}, 3000))
+            task = asyncio.create_task(remote_target._connect_remote_endpoint("host", 1, "adb_android", {"device_serial": "device"}, 3000))
             while not entered.is_set():
                 await asyncio.sleep(0)
             task.cancel()
@@ -222,7 +220,7 @@ def test_connect_cancel_after_package_commit_publishes_joined_installation_recei
                 assert receipt.details["device_action"]["state"] == "unconfirmed"
             assert cleaned == [current]
             assert current.installed_apk is not install_timeout
-            history = await server.dispatch_operation("rd.core.get_operation_history", {"operation": "rd.remote.connect"}, transport="test")
+            history = await dispatch.dispatch_operation("rd.core.get_operation_history", {"operation": "rd.remote.connect"}, transport="test")
             assert history["ok"] is True
             entry = next(item for item in history["data"]["operations"] if item["trace_id"] == "cancel-install")
             final = entry["stages"][-1]
@@ -232,7 +230,7 @@ def test_connect_cancel_after_package_commit_publishes_joined_installation_recei
                 assert final["details"]["device_action"] == receipt.details["device_action"]
         finally:
             release.set()
-            runtime._CURRENT_PROGRESS_REPORTER.reset(token)
+            live_state._CURRENT_PROGRESS_REPORTER.reset(token)
     asyncio.run(run())
 
 

@@ -1,12 +1,18 @@
 ﻿from __future__ import annotations
 
-from unittest.mock import patch
-
 import json
 import zipfile
 from pathlib import Path
+from unittest.mock import patch
+
+import pytest
 
 from scripts import release_gate
+
+
+@pytest.fixture(autouse=True)
+def _windows_package(pin_host):
+    pin_host("windows-x64")  # these fixtures build windows-x64 packages
 
 
 def test_cleanup_failure_cannot_publish_passing_report(monkeypatch, tmp_path: Path) -> None:
@@ -28,7 +34,8 @@ def test_cleanup_failure_cannot_publish_passing_report(monkeypatch, tmp_path: Pa
 
 
 def _prepare_root(root: Path) -> None:
-    for rel in release_gate.REQUIRED_DIRS:
+    runtime_dir = release_gate.host_layout().runtime_dir
+    for rel in (*release_gate.REQUIRED_DIRS, f"{runtime_dir}/python", f"{runtime_dir}/pymodules"):
         (root / rel).mkdir(parents=True, exist_ok=True)
     for rel in release_gate.REQUIRED_FILES:
         path = root / rel
@@ -47,10 +54,10 @@ def _write_smoke_log(root: Path, *, passed: bool = True) -> None:
 def _mock_release_gate_basics(monkeypatch, root: Path) -> None:
     monkeypatch.setattr(release_gate, "_check_paired_native", lambda root: (True, "paired fixture"))
     monkeypatch.setattr(release_gate, "_check_bundled_host_tools", lambda: (True, "fixture host tools"))  # type: ignore[no-untyped-def]
-    monkeypatch.setattr(release_gate, "_tools_root", lambda: root)
+    monkeypatch.setattr(release_gate, "tools_root", lambda: root)
     monkeypatch.setattr(release_gate, "_run", lambda cmd, cwd, **kwargs: (True, "ok"))
     monkeypatch.setattr(release_gate, "_run_public_command", lambda args, cwd: (True, "usage: rdc-tool"))
-    monkeypatch.setattr(release_gate, "_run_windows_launcher_file", lambda args, cwd: (True, "ok"))
+    monkeypatch.setattr(release_gate, "_run_launcher_file", lambda args, cwd: (True, "ok"))
     monkeypatch.setattr(
         release_gate,
         "_run_public_command_expect_error",
@@ -63,66 +70,8 @@ def _mock_release_gate_basics(monkeypatch, root: Path) -> None:
         "_check_user_docs_no_python_bootstrap",
         lambda root: (True, "user docs ok"),
     )
-    monkeypatch.setattr(
-        release_gate,
-        "_check_user_docs_no_bat_command_examples",
-        lambda root: (True, "user docs command ok"),
-    )
     monkeypatch.setattr(release_gate, "_check_catalog_public_surface", lambda root: (True, "catalog ok"))
     monkeypatch.setattr(release_gate, "_check_tool_reference_fresh", lambda root: (True, "tool ref ok"))
-    monkeypatch.setattr(release_gate, "_check_no_mcp_public_surface", lambda root: (True, "mcp ok"))
-
-
-def test_rg_no_match_falls_back_when_rg_missing(monkeypatch, tmp_path: Path) -> None:
-    sample = tmp_path / "docs" / "sample.md"
-    sample.parent.mkdir(parents=True, exist_ok=True)
-    token = "frame" + "works"
-    sample.write_text(f"contains {token} token\n", encoding="utf-8")
-
-    def _missing_rg(*args, **kwargs):  # type: ignore[no-untyped-def]
-        raise FileNotFoundError("rg missing")
-
-    monkeypatch.setattr(release_gate.subprocess, "run", _missing_rg)
-
-    ok, detail = release_gate._rg_no_match(release_gate.ScanRule("frame" + "works"), tmp_path)
-
-    assert not ok
-    assert "python fallback" in detail
-    assert "sample.md" in detail
-
-
-def test_rg_no_match_falls_back_when_rg_permission_denied(monkeypatch, tmp_path: Path) -> None:
-    sample = tmp_path / "docs" / "sample.md"
-    sample.parent.mkdir(parents=True, exist_ok=True)
-    sample.write_text("clean content\n", encoding="utf-8")
-
-    def _deny_rg(*args, **kwargs):  # type: ignore[no-untyped-def]
-        raise PermissionError("access denied")
-
-    monkeypatch.setattr(release_gate.subprocess, "run", _deny_rg)
-
-    ok, detail = release_gate._rg_no_match(release_gate.ScanRule("frame" + "works"), tmp_path)
-
-    assert ok
-    assert detail == ""
-
-
-def test_rg_no_match_literal_falls_back_when_rg_missing(monkeypatch, tmp_path: Path) -> None:
-    sample = tmp_path / "docs" / "sample.md"
-    sample.parent.mkdir(parents=True, exist_ok=True)
-    pre_ga_token = "ext" + "ensions/"
-    sample.write_text(f"mentions {pre_ga_token}pre-GA path\n", encoding="utf-8")
-
-    def _missing_rg(*args, **kwargs):  # type: ignore[no-untyped-def]
-        raise FileNotFoundError("rg missing")
-
-    monkeypatch.setattr(release_gate.subprocess, "run", _missing_rg)
-
-    ok, detail = release_gate._rg_no_match(release_gate.ScanRule(pre_ga_token, literal=True), tmp_path)
-
-    assert not ok
-    assert "python fallback" in detail
-    assert f"{pre_ga_token}pre-GA path" in detail
 
 
 def test_release_gate_accepts_current_bash_smoke_log(monkeypatch, tmp_path: Path) -> None:
@@ -130,7 +79,6 @@ def test_release_gate_accepts_current_bash_smoke_log(monkeypatch, tmp_path: Path
     _write_smoke_log(tmp_path)
 
     _mock_release_gate_basics(monkeypatch, tmp_path)
-    monkeypatch.setattr(release_gate, "_rg_no_match", lambda pattern, cwd: (True, ""))
 
     rc = release_gate.main(["--report", "intermediate/logs/release_gate_report.md"])
 
@@ -144,7 +92,6 @@ def test_release_gate_accepts_missing_reports_in_clean_checkout(monkeypatch, tmp
     _prepare_root(tmp_path)
 
     _mock_release_gate_basics(monkeypatch, tmp_path)
-    monkeypatch.setattr(release_gate, "_rg_no_match", lambda pattern, cwd: (True, ""))
 
     rc = release_gate.main(["--report", "intermediate/logs/release_gate_report.md"])
 
@@ -159,7 +106,6 @@ def test_release_gate_rejects_failing_bash_smoke_log_when_flagged(monkeypatch, t
     _write_smoke_log(tmp_path, passed=False)
 
     _mock_release_gate_basics(monkeypatch, tmp_path)
-    monkeypatch.setattr(release_gate, "_rg_no_match", lambda pattern, cwd: (True, ""))
 
     rc = release_gate.main(["--report", "intermediate/logs/release_gate_report.md", "--require-smoke-reports"])
 
@@ -176,7 +122,6 @@ def test_release_gate_does_not_special_case_fixture_directory(monkeypatch, tmp_p
     fixture.write_text("fixture\n", encoding="utf-8")
 
     _mock_release_gate_basics(monkeypatch, tmp_path)
-    monkeypatch.setattr(release_gate, "_rg_no_match", lambda pattern, cwd: (True, ""))
 
     rc = release_gate.main(["--report", "intermediate/logs/release_gate_report.md"])
 
@@ -190,7 +135,6 @@ def test_release_gate_requires_reports_when_flagged(monkeypatch, tmp_path: Path)
     _prepare_root(tmp_path)
 
     _mock_release_gate_basics(monkeypatch, tmp_path)
-    monkeypatch.setattr(release_gate, "_rg_no_match", lambda pattern, cwd: (True, ""))
 
     rc = release_gate.main(["--report", "intermediate/logs/release_gate_report.md", "--require-smoke-reports"])
 
@@ -200,34 +144,11 @@ def test_release_gate_requires_reports_when_flagged(monkeypatch, tmp_path: Path)
     assert "missing bash CLI smoke log" in report
 
 
-def test_release_gate_main_survives_rg_permission_error(monkeypatch, tmp_path: Path) -> None:
-    _prepare_root(tmp_path)
-    _write_smoke_log(tmp_path)
-    bad_ref = tmp_path / "docs" / "sample.md"
-    bad_ref.parent.mkdir(parents=True, exist_ok=True)
-    pre_ga_token = "ext" + "ensions/"
-    bad_ref.write_text(f"pre-GA {pre_ga_token}path reference\n", encoding="utf-8")
-
-    def _deny_rg(*args, **kwargs):  # type: ignore[no-untyped-def]
-        raise PermissionError("access denied")
-
-    monkeypatch.setattr(release_gate.subprocess, "run", _deny_rg)
-    _mock_release_gate_basics(monkeypatch, tmp_path)
-
-    rc = release_gate.main(["--report", "intermediate/logs/release_gate_report.md"])
-
-    assert rc == 1
-    report = (tmp_path / "intermediate" / "logs" / "release_gate_report.md").read_text(encoding="utf-8")
-    assert "FAIL `refs:no_extensions_path`" in report
-    assert "python fallback after PermissionError" in report
-
-
 def test_release_gate_requires_passing_bash_smoke_log_when_flagged(monkeypatch, tmp_path: Path) -> None:
     _prepare_root(tmp_path)
     _write_smoke_log(tmp_path, passed=False)
 
     _mock_release_gate_basics(monkeypatch, tmp_path)
-    monkeypatch.setattr(release_gate, "_rg_no_match", lambda pattern, cwd: (True, ""))
 
     rc = release_gate.main(["--report", "intermediate/logs/release_gate_report.md", "--require-smoke-reports"])
 
@@ -242,7 +163,6 @@ def test_release_gate_accepts_passing_bash_smoke_log_when_flagged(monkeypatch, t
     _write_smoke_log(tmp_path)
 
     _mock_release_gate_basics(monkeypatch, tmp_path)
-    monkeypatch.setattr(release_gate, "_rg_no_match", lambda pattern, cwd: (True, ""))
 
     rc = release_gate.main(["--report", "intermediate/logs/release_gate_report.md", "--require-smoke-reports"])
 
@@ -257,7 +177,6 @@ def test_release_gate_requires_release_package_when_flagged(monkeypatch, tmp_pat
     _write_smoke_log(tmp_path)
 
     _mock_release_gate_basics(monkeypatch, tmp_path)
-    monkeypatch.setattr(release_gate, "_rg_no_match", lambda pattern, cwd: (True, ""))
 
     rc = release_gate.main(["--report", "intermediate/logs/release_gate_report.md", "--require-release-package"])
 
@@ -302,7 +221,6 @@ def test_release_gate_verifies_release_package_when_present(monkeypatch, tmp_pat
     (package.parent / "SHA256SUMS").write_text("abc  rdc-tool-1.0.0-windows-x64.zip\n", encoding="utf-8")
 
     _mock_release_gate_basics(monkeypatch, tmp_path)
-    monkeypatch.setattr(release_gate, "_rg_no_match", lambda pattern, cwd: (True, ""))
     monkeypatch.setattr(
         release_gate,
         "_check_package_matches_source",
@@ -362,7 +280,7 @@ def test_release_gate_accepts_zero_byte_files_in_release_manifest(tmp_path: Path
     source.write_bytes(b"")
     package = tmp_path / "dist" / "rdc-tool-1.0.0-windows-x64.zip"
     package.parent.mkdir(parents=True, exist_ok=True)
-    source_sha = release_gate._sha256(source)
+    source_sha = release_gate.sha256_file(source)
     manifest = {
         "name": "rdc-tool",
         "version": "1.0.0",
@@ -397,7 +315,7 @@ def test_native_runtime_manifest_uses_file_integrity_without_release_revision(tm
     runtime.mkdir(parents=True)
     file = runtime / 'renderdoc.dll'
     file.write_bytes(b'fixture runtime')
-    (runtime / 'manifest.runtime.json').write_text(json.dumps({'files': [{'path': file.name, 'size': file.stat().st_size, 'sha256': release_gate._sha256(file)}]}))
+    (runtime / 'manifest.runtime.json').write_text(json.dumps({'files': [{'path': file.name, 'size': file.stat().st_size, 'sha256': release_gate.sha256_file(file)}]}))
     ok, detail = release_gate._check_manifest(tmp_path)
     assert ok and 'validated 1 runtime files' in detail
     file.write_bytes(b'changed')
@@ -408,6 +326,5 @@ def test_native_runtime_manifest_uses_file_integrity_without_release_revision(tm
 def test_release_gate_rejects_missing_host_tools(monkeypatch, tmp_path):
     _prepare_root(tmp_path)
     _mock_release_gate_basics(monkeypatch, tmp_path)
-    monkeypatch.setattr(release_gate, "_rg_no_match", lambda pattern, cwd: (True, ""))
     monkeypatch.setattr(release_gate, "_check_bundled_host_tools", lambda: (False, "missing adb"))
     assert release_gate.main(["--report", "intermediate/logs/gate.md"]) == 1

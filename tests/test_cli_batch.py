@@ -1,7 +1,6 @@
 from __future__ import annotations
 import json
 import signal
-from pathlib import Path
 import pytest
 from rdc_tool.cli_batch import run_batch
 from rdc_tool.core.contracts import canonical_success, canonical_error

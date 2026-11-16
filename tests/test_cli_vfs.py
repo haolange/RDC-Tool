@@ -76,29 +76,39 @@ def test_build_parser_accepts_cli_first_doctor_and_tools() -> None:
     assert tools_describe.operation == "rd.pipeline.get_state"
 
 
-def test_doctor_reports_cli_only_contract(monkeypatch) -> None:
+def test_doctor_reports_cli_only_contract(monkeypatch, tmp_path, pin_host) -> None:
+    from rdc_tool import host_tools, runtime_paths
+    pin_host("windows-x64")
+    layout = runtime_paths.HOST_LAYOUTS["windows-x64"]
+    for relative in (layout.launcher, "cli/run_cli.py", f"{layout.runtime_dir}/{layout.native_library}",
+                     f"{layout.runtime_dir}/{layout.binding_module}",
+                     *(f"binaries/android/{abi}/org.renderdoc.renderdoccmd.{abi}.apk" for abi in ("arm32", "arm64"))):
+        (tmp_path / relative).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / relative).write_bytes(b"fixture")
     captured: list[dict] = []
-
+    monkeypatch.setattr(rdc_tool_cli, "tools_root", lambda: tmp_path)
+    monkeypatch.setattr(runtime_paths, "tools_root", lambda: tmp_path)
     monkeypatch.setattr(rdc_tool_cli, "_print_json", lambda payload: captured.append(payload))
     monkeypatch.setattr(rdc_tool_cli, "_daemon_status_payload", lambda context: {"ok": True, "data": {"running": False, "context_id": context}})
     monkeypatch.setattr(rdc_tool_cli, "missing_dependencies", lambda: [])
-    monkeypatch.setattr(
-        rdc_tool_cli,
-        "validate_bundled_python_layout",
-        lambda: (True, [], {"bundled_python": {"python_version": "test", "python_entry": "python.exe"}}),
-    )
+    monkeypatch.setattr(rdc_tool_cli, "validate_bundled_python_layout",
+                        lambda: (True, [], {"bundled_python": {"python_version": "test", "executable": "python.exe"}}))
+    monkeypatch.setattr(rdc_tool_cli, "native_manifest_status", lambda root: {"status": "verified"})
+    monkeypatch.setattr(rdc_tool_cli, "loaded_runtime_identity", lambda binaries, modules: {"status": "not_loaded"})
+    tool = {"source": "bundled", "path": "tool", "available": True}
+    monkeypatch.setattr(host_tools, "host_tools_status", lambda: {name: dict(tool) for name in ("adb", "spirv_as", "spirv_dis")})
+    monkeypatch.setattr(host_tools, "validate_bundled_host_tools", lambda: (True, []))
 
     args = argparse.Namespace(command="doctor", daemon_context="ctx-doctor", json=True)
     exit_code = asyncio.run(rdc_tool_cli._main_async(args))
 
-    assert exit_code == rdc_tool_cli.EXIT_OK
+    assert exit_code == rdc_tool_cli.EXIT_OK, captured
     assert captured[0]["ok"] is True
     details = captured[0]["data"]
     assert details["context_id"] == "ctx-doctor"
+    assert details["host_target"] == "windows-x64"
     assert details["launchers"]["python_cli_exists"] is True
-    assert "shader_tools" in details
-    assert "spirv_as" in details["shader_tools"]
-    assert "spirv_dis" in details["shader_tools"]
+    assert set(details["shader_tools"]) == {"spirv_as", "spirv_dis"}
 
 
 def test_tools_list_and_search_emit_catalog_summaries(monkeypatch) -> None:

@@ -13,18 +13,14 @@ SCRIPT_ROOT = Path(__file__).resolve().parents[1]
 if str(SCRIPT_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPT_ROOT))
 
-from scripts._shared import tools_root
-from rdc_tool.daemon.client import _is_process_running
-from rdc_tool.runtime_paths import worker_state_dir
+from rdc_tool.platform import process
+from rdc_tool.platform.process import ProcessIdentity
+from rdc_tool.runtime_paths import tools_root, worker_state_dir
 
 
 TARGET_NAMES = {".venv", ".pytest_cache", "__pycache__"}
 TARGET_SUFFIXES = {".pyc"}
 TARGET_GLOBS = ("*.egg-info",)
-
-
-def _tools_root() -> Path:
-    return tools_root(__file__)
 
 
 def _collect_targets(root: Path) -> list[Path]:
@@ -64,8 +60,8 @@ def _collect_worker_targets(root: Path) -> list[Path]:
                 payload = json.loads(path.read_text(encoding="utf-8"))
             except Exception:
                 payload = {}
-            pid = int((payload or {}).get("pid") or 0)
-            running = bool((payload or {}).get("running")) and _is_process_running(pid)
+            worker = ProcessIdentity(int((payload or {}).get("pid") or 0), str((payload or {}).get("birth") or ""))
+            running = bool((payload or {}).get("running")) and worker.pid > 0 and process.is_alive(worker)
             if running:
                 continue
             out.append(path.resolve())
@@ -77,7 +73,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--apply", action="store_true", help="Delete after printing candidate list")
     args = parser.parse_args(argv)
 
-    root = _tools_root()
+    root = tools_root()
     targets = _collect_targets(root)
     print("[cleanup] candidates")
     for t in targets:

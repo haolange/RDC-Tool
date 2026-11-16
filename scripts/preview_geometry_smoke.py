@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
 import subprocess
 import sys
 import time
@@ -14,7 +13,10 @@ SCRIPT_ROOT = Path(__file__).resolve().parents[1]
 if str(SCRIPT_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPT_ROOT))
 
-from rdc_tool.runtime_paths import artifacts_dir, logs_dir
+from rdc_tool.host_tools import HostToolUnavailableError, resolve_host_tool
+from rdc_tool.platform import preview as platform_preview
+from rdc_tool.platform import process
+from rdc_tool.runtime_paths import artifacts_dir, host_layout, logs_dir
 
 
 DEFAULT_LOCAL_MARKERS = ["RenderGBuffer", "RenderForward"]
@@ -24,18 +26,9 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
-def _cli_path() -> Path:
-    return _repo_root() / "cli" / "run_cli.py"
-
-
-def _python_cmd() -> str:
-    env_python = str(os.environ.get("RDC_TOOL_PYTHON") or "").strip()
-    if env_python:
-        return env_python
-    bundled = _repo_root() / "binaries" / "windows" / "x64" / "python" / "python.exe"
-    if bundled.is_file():
-        return str(bundled)
-    return sys.executable
+def _launcher() -> list[str]:
+    """The installation's public launcher, exactly as users and smoke_cli.sh run it."""
+    return process.launcher_argv(str(_repo_root() / host_layout().launcher))
 
 
 def _timestamp() -> str:
@@ -56,7 +49,7 @@ def _normalize_name(name: str) -> str:
 
 
 def _run_cli_raw(context: str, *args: str) -> Dict[str, Any]:
-    command = [_python_cmd(), str(_cli_path()), "--daemon-context", context, *args]
+    command = [*_launcher(), "--daemon-context", context, *args]
     result = subprocess.run(
         command,
         cwd=_repo_root(),
@@ -161,22 +154,11 @@ def _has_framebuffer_output(draw: Dict[str, Any]) -> bool:
     return False
 
 
-def _adb_path() -> Optional[str]:
-    for candidate in (
-        shutil.which("adb"),
-        os.path.join(os.environ.get("ANDROID_SDK_ROOT", ""), "platform-tools", "adb.exe"),
-        os.path.join(os.environ.get("ANDROID_HOME", ""), "platform-tools", "adb.exe"),
-        os.path.join(os.environ.get("LOCALAPPDATA", ""), "Android", "Sdk", "platform-tools", "adb.exe"),
-    ):
-        if candidate and Path(candidate).is_file():
-            return str(Path(candidate))
-    return None
-
-
 def _adb_devices() -> Dict[str, Any]:
-    adb = _adb_path()
-    if not adb:
-        return {"available": False, "reason": "adb_not_found", "devices": []}
+    try:
+        adb = str(resolve_host_tool("adb"))
+    except HostToolUnavailableError as exc:
+        return {"available": False, "reason": "adb_unavailable", "error": str(exc), "devices": []}
     result = subprocess.run(
         [adb, "devices", "-l"],
         cwd=_repo_root(),
@@ -210,36 +192,7 @@ def _capture_desktop_image(path: Path) -> Optional[str]:
 
 
 def _find_preview_window_rect(context_id: str) -> Optional[tuple[int, int, int, int]]:
-    try:
-        import ctypes
-
-        user32 = ctypes.windll.user32
-        rect = ctypes.wintypes.RECT()
-        titles: List[tuple[int, str]] = []
-
-        @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
-        def _enum_windows(hwnd, lparam):  # type: ignore[no-untyped-def]
-            if not user32.IsWindowVisible(hwnd):
-                return True
-            length = user32.GetWindowTextLengthW(hwnd)
-            if length <= 0:
-                return True
-            buffer = ctypes.create_unicode_buffer(length + 1)
-            user32.GetWindowTextW(hwnd, buffer, length + 1)
-            title = buffer.value or ""
-            if title.startswith("RDC-Tool Preview [") and f"[{context_id}]" in title:
-                titles.append((int(hwnd), title))
-            return True
-
-        user32.EnumWindows(_enum_windows, 0)
-        if not titles:
-            return None
-        hwnd = titles[-1][0]
-        if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
-            return None
-        return (int(rect.left), int(rect.top), int(rect.right), int(rect.bottom))
-    except Exception:
-        return None
+    return platform_preview.find_window_rect("RDC-Tool Preview [", f"[{context_id}]")
 
 
 def _capture_preview_window(context_id: str, path: Path) -> Optional[str]:

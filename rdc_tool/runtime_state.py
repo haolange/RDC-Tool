@@ -3,39 +3,17 @@
 from __future__ import annotations
 
 import json
-import threading
 import time
-from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 
-import msvcrt
-
-from rdc_tool.context_snapshot import default_preview_state, normalize_context_id, normalize_preview_state
-from rdc_tool.io_utils import atomic_append_jsonl, atomic_write_json
+from rdc_tool.context_snapshot import context_file_token, default_preview_state, normalize_context_id, normalize_preview_state
+from rdc_tool.io_utils import atomic_append_jsonl, atomic_write_json, state_file_lock
 from rdc_tool.runtime_paths import cli_runtime_dir
-
-_STATE_MUTEXES: dict[str, threading.Lock] = {}
-_STATE_MUTEXES_LOCK = threading.Lock()
 
 
 def _now_ms() -> int:
     return int(time.time() * 1000)
-
-
-def _context_mutex(context: Optional[str]) -> threading.Lock:
-    ctx = normalize_context_id(context)
-    with _STATE_MUTEXES_LOCK:
-        lock = _STATE_MUTEXES.get(ctx)
-        if lock is None:
-            lock = threading.Lock()
-            _STATE_MUTEXES[ctx] = lock
-        return lock
-
-
-def _sanitize_context(context: Optional[str]) -> str:
-    ctx = normalize_context_id(context)
-    return "".join(ch if ch.isalnum() or ch in ("-", "_", ".") else "_" for ch in ctx)
 
 
 def context_state_path(context: Optional[str] = "default") -> Path:
@@ -44,7 +22,7 @@ def context_state_path(context: Optional[str] = "default") -> Path:
     ctx = normalize_context_id(context)
     if ctx == "default":
         return state_dir / "runtime_state.json"
-    return state_dir / f"runtime_state_{_sanitize_context(ctx)}.json"
+    return state_dir / f"runtime_state_{context_file_token(ctx)}.json"
 
 
 def context_log_path(context: Optional[str] = "default") -> Path:
@@ -53,26 +31,15 @@ def context_log_path(context: Optional[str] = "default") -> Path:
     ctx = normalize_context_id(context)
     if ctx == "default":
         return state_dir / "runtime_logs.jsonl"
-    return state_dir / f"runtime_logs_{_sanitize_context(ctx)}.jsonl"
+    return state_dir / f"runtime_logs_{context_file_token(ctx)}.jsonl"
 
 
 def _context_state_lock_path(context: Optional[str] = "default") -> Path:
     return context_state_path(context).with_suffix(".lock")
 
 
-@contextmanager
 def _locked_context_state_file(context: Optional[str] = "default"):
-    lock_path = _context_state_lock_path(context)
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with _context_mutex(context):
-        with open(lock_path, "a+b") as handle:
-            handle.seek(0)
-            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
-            try:
-                yield
-            finally:
-                handle.seek(0)
-                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+    return state_file_lock(_context_state_lock_path(context), normalize_context_id(context))
 
 
 def _normalize_int(value: Any, default: int = 0) -> int:
@@ -80,13 +47,6 @@ def _normalize_int(value: Any, default: int = 0) -> int:
         return int(value)
     except (TypeError, ValueError):
         return int(default)
-
-
-def _normalize_float(value: Any, default: float = 0.0) -> float:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return float(default)
 
 
 def _default_limits() -> Dict[str, Any]:
