@@ -16,7 +16,7 @@ TOP = {"routing", "dispatch", "worker_main"}
 
 
 def _module(path: Path) -> str:
-    return str(path.relative_to(RUNTIME).with_suffix("")).replace("/", ".")
+    return path.relative_to(RUNTIME).with_suffix("").as_posix().replace("/", ".")
 
 
 def _runtime_imports(path: Path) -> set[str]:
