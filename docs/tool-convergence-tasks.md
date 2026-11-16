@@ -15,7 +15,7 @@
 | I 运行库身份 | R | 通过 | `HOST_LAYOUTS`（windows-x64、linux-x64）；共享回执 `binaries/native_build.json`（`source.repository/revision`）；`local_replay_unsupported` |
 | K 打包工具链 | I | 通过 | `package_runtime` 跨平台、钉住解释器与哈希锁依赖；按主机选择解释器的 launcher；按主机打包与校验 |
 | T 测试分层 | K | 通过 | 单元测试用 fake renderdoc 在任意主机运行；`fixture_integration` 显式开启才运行，开启后不可回放即失败 |
-| X Linux 候选 | T | 阻塞 | 已用 fork `haolange/renderdoc@dde8822`（加 GCC 编译补丁）构建 `librenderdoc.so` 与 binding，带 adb r36.0.2 与源码构建的 SPIRV-Tools v2026.4，组装并校验候选包；候选实际加载 1.48 / dde8822。真实回放阻塞，见下文 |
+| X Linux 候选 | T | 阻塞 | 从未修改的 fork `haolange/renderdoc@dde8822` 构建 `librenderdoc.so` 与 binding（`-include vector`，见 [release-baseline](release-baseline.md#linux-原生构建)），带 adb r36.0.2 与源码构建的 SPIRV-Tools v2026.4 组装候选。候选回执与仓库回执共用同一 `source`，doctor 报告 `linux-x64`、`android-arm32`、`android-arm64` 均为 `verified`（回执 sha256 `137638888bcd…`）；实际加载 `librenderdoc.so` `5b13dd58…`、`renderdoc.so` `4a860c0d…`，内嵌提交 dde8822、版本 1.48。真实回放阻塞，见下文 |
 | G RDC-Agent 对齐 | R | 通过 | 分支 `claude/happy-einstein-n9rvui`：daemon 注册名 `rdc_tool_cli`，不再传 `RDC_TOOL_ROOT`，guide catalog 快照按新 fingerprint 刷新，其门禁通过 |
 | D1 仓库卫生 | — | 通过 | 删除 `.qoder/`、`policy/` 与 `intermediate/` 占位；脚本与环境变量文档由测试守护 |
 | D2 文档中文化 | D1 | 通过 | 全部文档中文叙述、保留 BOM；基线、配置、脚本、配对各只一处声明；`tool-reference.md` 中文生成；用户文档禁止写死工具总数 |
@@ -27,8 +27,6 @@
 | 项 | 影响 | 解除条件 |
 |---|---|---|
 | lavapipe 上原生回放崩溃 | X 的真实回放：候选 `librenderdoc.so` 打开 `vkcube.rdc` 后在 `ReplayController::PostCreateInit` → `WrappedVulkan::Serialise_vkCreateSwapchainKHR` 段错误，`fixture_integration` 按设计失败 | 在有真实 Vulkan 驱动的 Linux 主机复测；或在 fork 中定位 swapchain 序列化对无 surface 软件驱动的处理 |
-| fork 的 GCC 编译补丁 | dde8822 的 `renderdoc/driver/vulkan/vk_pixelhistory.cpp` 在 GCC 下缺少 `#include <vector>`（加在 `#include <float.h>` 之后即可编译）；补丁未推送，本地克隆已随清理删除 | 由仓库所有者决定是否推送到 `haolange/renderdoc`；推送后源码树与现有 Windows/APK 回执不同，需按 [release-baseline](release-baseline.md) 整套重建配对 |
-| 候选未配对 Android helper | 候选源码树含 GCC 补丁，与 APK 回执的 `tree_sha256` 不同，候选只认证 `linux-x64` | 同一冻结源码重建 Linux `.so`、Windows DLL/PYD 与双 APK，写入同一份回执 |
-| Linux 正式产物 | 尚无 Linux 发行包 | 下一轮：同源构建、老 glibc 基线构建环境、`package_runtime --host linux-x64`、包校验 |
+| Linux 正式产物 | 尚无 Linux 发行包 | 下一轮：在 glibc 较老的构建环境中按 [release-baseline](release-baseline.md#linux-原生构建) 的配置构建，把 `linux-x64` 写入仓库共享回执，`package_runtime --host linux-x64` 与包校验 |
 | Windows 捆绑依赖早于哈希锁 | 已提交的 Windows `python/` 中仍有 MCP 时代的多余包，`bundle == lock` 校验未启用 | 下一轮用 `package_runtime --host windows-x64` 按锁重建并启用该校验 |
 | Windows 与 Android 真机验收 | 本轮无 GPU 与设备，只有 CI | 发布前在 Windows 机器运行 `bash scripts/smoke_cli.sh --rdc tests/fixtures/vkcube.rdc` 与 [Android 验收](android-remote-cli-smoke-prompt.md) |
