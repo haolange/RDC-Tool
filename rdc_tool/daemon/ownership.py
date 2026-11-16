@@ -36,6 +36,10 @@ class OwnerLease:
             raise DaemonOwnerUnavailable(context, path, "owner_lock_busy")
         self._held = held
 
+    @property
+    def closed(self) -> bool:
+        return self._held.released
+
     def close(self) -> None:
         self._held.release()
 

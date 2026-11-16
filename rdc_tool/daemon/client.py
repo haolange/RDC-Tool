@@ -357,7 +357,7 @@ def save_daemon_state(
             raise DaemonOwnerUnavailable(ctx, path, "state_owner_changed")
         if lease is None and (status == "invalid" or owner_is_busy(path, ctx)):
             raise DaemonOwnerUnavailable(ctx, path, "state_owner_unconfirmed")
-        if lease is not None and (lease.handle.closed or lease.path != path.resolve() or int(normalized.get("pid") or 0) != os.getpid()):
+        if lease is not None and (lease.closed or lease.path != path.resolve() or int(normalized.get("pid") or 0) != os.getpid()):
             raise DaemonOwnerUnavailable(ctx, path, "owner_lease_closed")
         _save_json(path, normalized)
 
@@ -381,7 +381,7 @@ def clear_daemon_state(
             raise DaemonOwnerUnavailable(ctx, path, "state_owner_changed")
         if lease is None and owner_is_busy(path, ctx):
             raise DaemonOwnerUnavailable(ctx, path, "owner_lock_busy")
-        if lease is not None and (lease.handle.closed or lease.path != path.resolve() or int(previous.get("pid") or 0) != os.getpid()):
+        if lease is not None and (lease.closed or lease.path != path.resolve() or int(previous.get("pid") or 0) != os.getpid()):
             raise DaemonOwnerUnavailable(ctx, path, "owner_lease_closed")
         path.unlink(missing_ok=True)
 
