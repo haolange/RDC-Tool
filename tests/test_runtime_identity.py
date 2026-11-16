@@ -12,6 +12,10 @@ import pytest
 
 from rdc_tool import runtime_identity as identity
 
+SOURCE = {"repository": "https://github.com/haolange/renderdoc", "revision": "d" * 40,
+          "base_revision": "a" * 40, "upstream_revision": "b" * 40, "tree_sha256": "c" * 64}
+WINDOWS_TARGETS = ("windows-x64", "android-arm32", "android-arm64")
+
 
 def make_elf(build_id: bytes = b"runtime-build", *, bits: int = 64) -> bytes:
     note = struct.pack("<III", 4, len(build_id), 3) + b"GNU\0" + build_id
@@ -79,7 +83,7 @@ def native_inputs(root: Path) -> list[str]:
         if not path.exists():
             path.write_bytes(value)
     apks = {abi: make_apk(source / f"{abi}.apk", abi) for abi in ("arm32", "arm64")}
-    targets = {"windows-x64": {"renderdoc_dll": source / "renderdoc.dll", "renderdoc_pyd": source / "pymodules/renderdoc.pyd"},
+    targets = {"windows-x64": {"native_library": source / "renderdoc.dll", "binding_module": source / "pymodules/renderdoc.pyd"},
                **{f"android-{abi}": {"helper_apk": path} for abi, path in apks.items()}}
     builds = [{"target": target, "configuration": "fixture", "toolchain": {"compiler": "fixture"},
                "inputs_sha256": "c" * 64,
@@ -91,7 +95,7 @@ def native_inputs(root: Path) -> list[str]:
                      *sorted((source / "pymodules").glob("*.json"))]
     builds[0]["runtime_files"] = [{"path": path.relative_to(source).as_posix(), **identity.file_identity(path)}
                                    for path in runtime_files]
-    receipt = {"source": {"base_revision": "a" * 40, "upstream_revision": "b" * 40, "tree_sha256": "c" * 64}, "builds": builds}
+    receipt = {"source": dict(SOURCE), "builds": builds}
     (root / "receipt.json").write_text(json.dumps(receipt), encoding="utf-8")
     return ["--source", "staging", "--arm32-apk", str(apks["arm32"]), "--arm64-apk", str(apks["arm64"]), "--build-receipt", "receipt.json"]
 
@@ -120,9 +124,6 @@ def test_apk_identity_retains_native_hashes_and_actual_signer(tmp_path):
 
 
 def test_missing_native_receipt_is_unknown_not_verified(tmp_path):
-    manifest = tmp_path / "binaries/windows/x64/manifest.runtime.json"
-    manifest.parent.mkdir(parents=True)
-    manifest.write_text("{}", encoding="utf-8")
     assert identity.native_manifest_status(tmp_path) == {"status": "unavailable", "reason": "native_build_receipt_missing"}
 
 
@@ -132,7 +133,7 @@ def native_manifest_fixture(root: Path, layer_bytes: bytes | None) -> Path:
     for build in receipt["builds"]:
         for output in build["outputs"]:
             source = root / output["path"]
-            output["path"] = identity.NATIVE_OUTPUTS[build["target"]][output["role"]]
+            output["path"] = identity.NATIVE_TARGETS[build["target"]][output["role"]]
             target = root / output["path"]
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(source.read_bytes())
@@ -143,11 +144,87 @@ def native_manifest_fixture(root: Path, layer_bytes: bytes | None) -> Path:
         (directory / "renderdoc.json").write_bytes(layer_bytes)
     receipt["builds"][0]["runtime_files"] = [
         {"path": "binaries/windows/x64/" + name, **identity.file_identity(path)}
-        for name, path in identity.windows_native_files(directory).items()
+        for name, path in identity.native_runtime_files(directory).items()
     ]
-    manifest = directory / "manifest.runtime.json"
-    manifest.write_text(json.dumps({"native_build": receipt}), encoding="utf-8")
-    return manifest
+    path = root / identity.RECEIPT_PATH
+    path.write_text(json.dumps(receipt), encoding="utf-8")
+    return path
+
+
+def test_receipt_targets_follow_host_layouts_and_android():
+    assert set(identity.NATIVE_TARGETS) == {*identity.HOST_LAYOUTS, "android-arm32", "android-arm64"}
+    assert identity.NATIVE_TARGETS["linux-x64"] == {"native_library": "binaries/linux/x64/librenderdoc.so",
+                                                    "binding_module": "binaries/linux/x64/pymodules/renderdoc.so"}
+
+
+def test_absent_listed_target_is_reported_and_required_absence_is_unavailable(tmp_path):
+    receipt_path = native_manifest_fixture(tmp_path, b"{}")
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    receipt["builds"].append({"target": "linux-x64", "configuration": "fixture", "toolchain": {"compiler": "fixture"},
+                              "inputs_sha256": "c" * 64, "runtime_files": [],
+                              "outputs": [{"role": role, "path": path, "size": 1, "sha256": "e" * 64}
+                                          for role, path in identity.NATIVE_TARGETS["linux-x64"].items()]})
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+    status = identity.native_manifest_status(tmp_path, required=WINDOWS_TARGETS)
+    assert status["status"] == "verified"
+    assert status["targets"] == {"windows-x64": "verified", "android-arm32": "verified",
+                                 "android-arm64": "verified", "linux-x64": "absent"}
+    assert status["source"] == SOURCE
+    linux = identity.native_manifest_status(tmp_path, required=("linux-x64", "android-arm32", "android-arm64"))
+    assert linux["status"] == "unavailable"
+    assert linux["missing_targets"] == ["linux-x64"]
+
+
+def test_host_default_requires_this_hosts_runtime(tmp_path, monkeypatch):
+    native_manifest_fixture(tmp_path, None)
+    monkeypatch.setattr(identity, "host_target", lambda: "windows-x64")
+    assert identity.native_manifest_status(tmp_path)["status"] == "verified"
+    monkeypatch.setattr(identity, "host_target", lambda: "linux-x64")
+    status = identity.native_manifest_status(tmp_path)
+    assert status["status"] == "unavailable" and status["missing_targets"] == ["linux-x64"]
+
+
+def test_partially_present_target_is_invalid(tmp_path):
+    native_manifest_fixture(tmp_path, None)
+    (tmp_path / identity.NATIVE_TARGETS["windows-x64"]["binding_module"]).unlink()
+    status = identity.native_manifest_status(tmp_path, required=WINDOWS_TARGETS)
+    assert status["status"] == "invalid" and "partially present" in status["reason"]
+
+
+@pytest.mark.parametrize("change", [
+    {"extra": "x"}, {"repository": None}, {"repository": "http://example.invalid/renderdoc"}, {"revision": "D" * 40},
+])
+def test_receipt_source_must_name_repository_and_exact_revision(tmp_path, change):
+    receipt_path = native_manifest_fixture(tmp_path, None)
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    receipt["source"].update(change)
+    if change.get("repository", "") is None:
+        del receipt["source"]["repository"]
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+    assert identity.native_manifest_status(tmp_path, required=WINDOWS_TARGETS)["status"] == "invalid"
+
+
+def test_linux_host_runtime_is_verified_from_its_layout(tmp_path):
+    runtime = tmp_path / "binaries/linux/x64"
+    (runtime / "pymodules").mkdir(parents=True)
+    (runtime / "librenderdoc.so").write_bytes(b"native library")
+    (runtime / "pymodules/renderdoc.so").write_bytes(b"binding module")
+    (runtime / "python").mkdir()
+    (runtime / "python/libpython3.14.so").write_bytes(b"python is not native-owned")
+    outputs = [{"role": role, "path": path, **identity.file_identity(tmp_path / path)}
+               for role, path in identity.NATIVE_TARGETS["linux-x64"].items()]
+    files = [{"path": "binaries/linux/x64/" + name, **identity.file_identity(path)}
+             for name, path in identity.native_runtime_files(runtime).items()]
+    receipt = {"source": dict(SOURCE), "builds": [{"target": "linux-x64", "configuration": "Release",
+                                                   "toolchain": {"compiler": "gcc"}, "inputs_sha256": "c" * 64,
+                                                   "outputs": outputs, "runtime_files": files}]}
+    (tmp_path / identity.RECEIPT_PATH).write_text(json.dumps(receipt), encoding="utf-8")
+    assert sorted(item["path"] for item in files) == ["binaries/linux/x64/librenderdoc.so",
+                                                      "binaries/linux/x64/pymodules/renderdoc.so"]
+    assert identity.native_manifest_status(tmp_path, required=("linux-x64",))["status"] == "verified"
+    (runtime / "stale.so").write_bytes(b"unreceipted library")
+    status = identity.native_manifest_status(tmp_path, required=("linux-x64",))
+    assert status["status"] == "invalid" and "file set differs" in status["reason"]
 
 
 @pytest.mark.parametrize("layer_bytes", [
@@ -156,13 +233,12 @@ def native_manifest_fixture(root: Path, layer_bytes: bytes | None) -> Path:
     b'{"layer":NaN}', b'{"layer":Infinity}',
 ])
 def test_hash_matched_layer_manifest_with_invalid_json_is_rejected(tmp_path, layer_bytes):
-    manifest_path = native_manifest_fixture(tmp_path, layer_bytes)
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    entries = manifest["native_build"]["builds"][0]["runtime_files"]
+    receipt_path = native_manifest_fixture(tmp_path, layer_bytes)
+    entries = json.loads(receipt_path.read_text(encoding="utf-8"))["builds"][0]["runtime_files"]
     entry = next(item for item in entries if item["path"].endswith("/renderdoc.json"))
     assert entry["sha256"] == hashlib.sha256(layer_bytes).hexdigest()
     assert entry["size"] == len(layer_bytes)
-    status = identity.native_manifest_status(tmp_path)
+    status = identity.native_manifest_status(tmp_path, required=WINDOWS_TARGETS)
     assert status["status"] == "invalid"
     assert "Vulkan layer manifest" in status["reason"]
 
@@ -174,7 +250,7 @@ def test_hash_matched_layer_manifest_with_invalid_json_is_rejected(tmp_path, lay
 ])
 def test_optional_layer_manifest_accepts_json_object_without_rewriting_bytes(tmp_path, layer_bytes):
     native_manifest_fixture(tmp_path, layer_bytes)
-    assert identity.native_manifest_status(tmp_path)["status"] == "verified"
+    assert identity.native_manifest_status(tmp_path, required=WINDOWS_TARGETS)["status"] == "verified"
     layer_path = tmp_path / "binaries/windows/x64/renderdoc.json"
     if layer_bytes is None:
         assert not layer_path.exists()

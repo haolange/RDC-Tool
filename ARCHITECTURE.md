@@ -43,3 +43,9 @@ rdc-tool（CLI 进程，短命）
 ## 契约真源
 
 `rdc_tool/operation_definitions.py` 是操作名称、参数、结果、前置条件与影响声明的唯一真源；`spec/tool_catalog.json` 与 `docs/tool-reference.md` 是生成物，生成与校验方式见 [docs/doc-governance.md](docs/doc-governance.md)。
+
+## 主机布局与原生身份
+
+`rdc_tool/runtime_paths.py` 的 `HOST_LAYOUTS` 为每个支持的主机（`windows-x64`、`linux-x64`）声明运行目录、原生库、Python 绑定、捆绑 Python、launcher 与主机工具；安装根目录就是 `rdc_tool` 包所在位置，运行路径一律由布局派生，不接受环境变量覆盖。未知主机以 `unsupported_host` 拒绝。
+
+`binaries/native_build.json` 是全目标共享的原生构建回执，`rdc_tool/runtime_identity.py` 按“存在即严格、缺席仅报告”校验它，并独立观察进程实际加载的原生库与绑定。回执结构、目标集合与资格规则见 [docs/release-baseline.md](docs/release-baseline.md)。

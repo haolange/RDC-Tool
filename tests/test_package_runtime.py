@@ -7,7 +7,7 @@ from scripts import package_runtime
 from rdc_tool import __version__
 from rdc_tool.runtime_paths import HOST_LAYOUTS
 from scripts.distribution_metadata import write_distribution_metadata
-from test_runtime_identity import native_inputs
+from test_runtime_identity import WINDOWS_TARGETS, native_inputs
 
 
 def _write(path: Path, content: bytes | str) -> None:
@@ -250,7 +250,7 @@ def test_native_replacement_removes_old_files_but_preserves_python_and_host_tool
     assert (old / "pymodules/d3dcompiler_47.dll").read_bytes() == b"matched binding support library"
     assert (old / "python/Lib/retained.py").read_bytes() == b"python unchanged"
     assert (old / "adb/adb.exe").read_bytes() == b"host tool unchanged"
-    assert package_runtime.runtime_identity.native_manifest_status(tmp_path)["status"] == "verified"
+    assert package_runtime.runtime_identity.native_manifest_status(tmp_path, required=WINDOWS_TARGETS)["status"] == "verified"
 
 
 def test_native_source_support_files_require_complete_unchanged_receipt(tmp_path, monkeypatch):
@@ -324,7 +324,7 @@ def test_explicit_output_root_leaves_every_existing_source_file_unchanged(tmp_pa
     for name, contents in before.items():
         assert (tmp_path / name).read_bytes() == contents
     target = tmp_path / "intermediate/task/runtime"
-    assert package_runtime.runtime_identity.native_manifest_status(target)["status"] == "verified"
+    assert package_runtime.runtime_identity.native_manifest_status(target, required=WINDOWS_TARGETS)["status"] == "verified"
     assert (target / "binaries/windows/x64/renderdoc.dll").read_bytes() == b"renderdoc"
     assert not (target / "binaries/windows/x64/pymodules/old.pyd").exists()
     assert (target / "binaries/windows/x64/python/Lib/retained.py").read_bytes() == b"current Python"

@@ -314,7 +314,7 @@ def _native_build_receipt(root: Path, staged_root: Path, args: argparse.Namespac
     builds = []
     for build in receipt["builds"]:
         target = build["target"]
-        if target not in runtime_identity.NATIVE_OUTPUTS:
+        if target not in runtime_identity.NATIVE_TARGETS:
             raise ValueError(f"Unknown native build target: {target}")
         if not isinstance(build["configuration"], str) or not build["configuration"].strip():
             raise ValueError(f"Build configuration is missing: {target}")
@@ -323,7 +323,7 @@ def _native_build_receipt(root: Path, staged_root: Path, args: argparse.Namespac
         outputs = []
         for item in build["outputs"]:
             role = item["role"]
-            destination = runtime_identity.NATIVE_OUTPUTS[target][role]
+            destination = runtime_identity.NATIVE_TARGETS[target][role]
             original = Path(item["path"])
             if not original.is_absolute():
                 original = receipt_path.parent / original
@@ -344,14 +344,17 @@ def _native_build_receipt(root: Path, staged_root: Path, args: argparse.Namespac
             files = _windows_runtime_inputs(root, source, args)
             packaged_files = []
             for item in files:
-                destination = "binaries/windows/x64/" + str(item["path"])
+                destination = f"{HOST_LAYOUTS[target].runtime_dir}/{item['path']}"
                 expected = {"size": item["size"], "sha256": item["sha256"]}
                 if runtime_identity.file_identity(staged_root / destination) != expected:
                     raise ValueError(f"Packaged Windows input differs from build receipt: {item['path']}")
                 packaged_files.append({"path": destination, **expected})
             packaged_build["runtime_files"] = packaged_files
         builds.append(packaged_build)
-    return {"source": {key: receipt["source"][key] for key in ("base_revision", "upstream_revision", "tree_sha256")},
+    source = receipt["source"]
+    if set(source) != runtime_identity.SOURCE_FIELDS:
+        raise ValueError(f"Build receipt source fields must be exactly {sorted(runtime_identity.SOURCE_FIELDS)}")
+    return {"source": {key: source[key] for key in ("repository", "revision", "base_revision", "upstream_revision", "tree_sha256")},
             "builds": builds}
 
 
@@ -371,7 +374,7 @@ def _assemble_runtime(tools_root_path: Path, staged_root: Path, args: argparse.N
         files = _windows_runtime_inputs(tools_root_path, src, args)
         # This is only the isolated staging copy. Replace the native-owned file
         # set completely; Python and host-tool directories have separate owners.
-        for old in runtime_identity.windows_native_files(out_root).values():
+        for old in runtime_identity.native_runtime_files(out_root).values():
             if old.parent == out_root:
                 old.unlink()
         modules = out_root / "pymodules"
@@ -417,14 +420,15 @@ def _assemble_runtime(tools_root_path: Path, staged_root: Path, args: argparse.N
     }
     if bundled_python:
         manifest["bundled_python"] = bundled_python
-    for key in ("bundled_tools", "native_build"):
-        if key in previous:
-            manifest[key] = previous[key]
-    if renderdoc_source_raw:
-        manifest["native_build"] = _native_build_receipt(tools_root_path, staged_root, args)
+    if "bundled_tools" in previous:
+        manifest["bundled_tools"] = previous["bundled_tools"]
     write_text(manifest_path, json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
-    if manifest.get("native_build"):
-        status = runtime_identity.native_manifest_status(staged_root)
+    receipt_path = staged_root / runtime_identity.RECEIPT_PATH
+    if renderdoc_source_raw:
+        write_text(receipt_path, json.dumps(_native_build_receipt(tools_root_path, staged_root, args), ensure_ascii=False, indent=2) + "\n")
+    if receipt_path.is_file():
+        listed = [build["target"] for build in json.loads(receipt_path.read_text(encoding="utf-8"))["builds"]]
+        status = runtime_identity.native_manifest_status(staged_root, required=listed)
         if status["status"] != "verified":
             raise RuntimeError(f"Paired native runtime verification failed: {status}")
     return 0

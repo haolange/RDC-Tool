@@ -164,9 +164,12 @@ def test_sbom_revision_must_match_manifest(tmp_path):
 
 def candidate_source_fixture(root, monkeypatch):
     from scripts import package_runtime
+    from rdc_tool import runtime_identity
     from test_runtime_identity import native_inputs
     inputs = native_inputs(root)
     monkeypatch.setattr(package_runtime, 'tools_root', lambda: root)
+    # The fixture is a windows-x64 package whatever host runs the test.
+    monkeypatch.setattr(runtime_identity, 'host_target', lambda: 'windows-x64')
     assert package_runtime.main(inputs) == 0
     for name in ('LICENSE', 'README.md'):
         (root / name).write_text('fixture\n', encoding='utf-8')

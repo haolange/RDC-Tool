@@ -2,6 +2,9 @@
 
 ## 待发布 `Unreleased`
 
+- 原生构建回执迁出 `binaries/windows/x64/manifest.runtime.json`，成为全目标共享的 `binaries/native_build.json`；`source` 新增必填 `repository` 与 `revision`（fork `haolange/renderdoc@dde8822`，已核验其两个 parent 即原记录的 base/upstream），主机输出角色改为平台中立的 `native_library`／`binding_module`。二进制未变，`receipt_sha256` 随回执内容变化。
+- 回执校验改为“存在即严格、缺席仅报告”：doctor 与发布脚本按场景所需目标（默认本主机 + 两个 Android helper）判定，结果新增 `targets` 与 `missing_targets`。
+
 ## 1.1.2 — 2026-10-29
 
 - 修复 Windows 后台 worker 的 Android 冷启动：使用同安装 ADB 有界启动 server，显式设备按冻结 serial 查询 get-state，仅在 device 状态继续准备。

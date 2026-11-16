@@ -102,10 +102,8 @@ def test_worker_uses_source_runtime_directly(tmp_path: Path, monkeypatch) -> Non
 def test_worker_rejects_declared_but_invalid_native_set_before_spawn(tmp_path, monkeypatch):
     import pytest
     source = _prepare_runtime_source(tmp_path)
-    manifest = source / "manifest.runtime.json"
-    payload = json.loads(manifest.read_text(encoding="utf-8"))
-    payload["native_build"] = {"source": {}, "builds": []}
-    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    (source.parents[1] / "native_build.json").write_text(json.dumps({"source": {}, "builds": []}), encoding="utf-8")
+    monkeypatch.setattr(daemon_worker, "tools_root", lambda: source.parents[2])
     monkeypatch.setattr(daemon_worker, "binaries_root", lambda: source)
     monkeypatch.setattr(daemon_worker.subprocess, "Popen", lambda *a, **kw: pytest.fail("unverified runtime was spawned"))
     worker = daemon_worker.RuntimeWorkerProcess(context_id="invalid-native")
