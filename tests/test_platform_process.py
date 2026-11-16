@@ -27,6 +27,12 @@ def test_identity_tracks_birth_and_rejects_reused_pid():
     assert process.kill_tree(identity) is False
 
 
+def test_kill_tree_refuses_a_live_pid_without_a_birth_identity(monkeypatch):
+    monkeypatch.setattr(process, 'probe', lambda identity: process.Liveness.ALIVE)
+    monkeypatch.setattr(process._os, 'kill_tree', lambda pid: pytest.fail('unidentified process must not be terminated'))
+    assert process.kill_tree(process.ProcessIdentity(123, '')) is False
+
+
 def test_exited_child_is_exited_before_reaping():
     child = subprocess.Popen([sys.executable, "-c", "pass"])
     identity = process.identify(child.pid)

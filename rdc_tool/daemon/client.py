@@ -176,18 +176,24 @@ def _retire_unused_pipe_state(context: str) -> None:
             if snapshot_status == "ok":
                 remote = snapshot.get("remote")
                 snapshot_runtime = snapshot.get("runtime")
-                if not isinstance(remote, dict) or not isinstance(snapshot_runtime, dict):
+                preview = snapshot.get("preview", {})
+                if not isinstance(remote, dict) or not isinstance(snapshot_runtime, dict) or not isinstance(preview, dict):
                     reject("legacy_state_resources_unconfirmed")
                 bootstrap = remote.get("bootstrap") or {}
                 if (not isinstance(bootstrap, dict) or remote.get("state", "none") != "none"
                         or remote.get("origin_remote_id") or remote.get("consumed_by_session_id")
-                        or bootstrap.get("owned_pids")):
+                        or bootstrap.get("owned_pids") or preview.get("enabled")
+                        or preview.get("bound_session_id") or preview.get("bound_capture_file_id")):
                     reject("legacy_state_resources_unconfirmed")
             elif raw.get("backend") != "local":
                 reject("legacy_state_resources_unconfirmed")
-            if runtime_status == "ok" and (not isinstance(runtime.get("sessions"), dict)
-                                            or not isinstance(runtime.get("captures"), dict)):
-                reject("legacy_state_resources_unconfirmed")
+            if runtime_status == "ok":
+                preview = runtime.get("preview", {})
+                if (not isinstance(runtime.get("sessions"), dict) or not isinstance(runtime.get("captures"), dict)
+                        or runtime.get("current_session_id") or runtime.get("current_capture_file_id")
+                        or not isinstance(preview, dict) or preview.get("enabled")
+                        or preview.get("bound_session_id") or preview.get("bound_capture_file_id")):
+                    reject("legacy_state_resources_unconfirmed")
 
         retire_incomplete_state(context, expected, verify)
 

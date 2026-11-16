@@ -83,7 +83,7 @@ def wait_exit(identity: ProcessIdentity, timeout: float, *, interval: float = 0.
 
 def kill_tree(identity: ProcessIdentity) -> bool:
     """Forcefully terminate a confirmed live process and its descendants."""
-    if probe(identity) is not Liveness.ALIVE:
+    if not identity.birth or probe(identity) is not Liveness.ALIVE:
         return False
     return _os.kill_tree(identity.pid)
 

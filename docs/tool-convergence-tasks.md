@@ -6,13 +6,15 @@
 
 | 任务 | 依赖 | 状态 | 交付与验收 |
 |---|---|---|---|
-| 旧 daemon 状态 | 无 | 待验证 | 隔离样本通过进程、锁、资源和状态损坏检查；旧现场仍登记远程资源，保留原件 |
-| 异常 worker 后清理 | 无 | 待验证 | 隔离测试覆盖已退出身份、replacement、远程归属与原生清理失败；待产品实机复验 |
-| shader 产物字节 | 无 | 待验证 | 隔离测试覆盖 LF、CRLF 与非 ASCII，保存字节和 artifact store 一致；待产品审计 |
-| 错误分类 | 无 | 待验证 | 对提交中的 36 处逐项核对，安全前置拒绝返回证明；不确定结果保持隔离 |
-| 集成验收与本地交付 | 上述任务 | 执行中 | Windows 全量测试 1316 passed、12 skipped、2 subtests passed；catalog 和生成文档检查通过，待正式隔离打包与最小产品路径。受限沙箱中的 taskkill 返回 Access denied，同一测试及全量门禁在正常权限下通过 |
+| 旧 daemon 状态 | 无 | 通过 | 隔离样本覆盖进程、锁、资源、悬空登记和损坏状态；Agent 实际打开 PC capture 时安全退役无资源旧状态。原现场仍登记远程资源，保留原件 |
+| 异常 worker 后清理 | 无 | 通过 | Android 实机受控终止自有 worker 后，产品隔离 lease，再清理 context、forward、helper、daemon 与 worker；独立的 helper 断连也触发产品隔离并完成清理。真实 native crash 尚未实测 |
+| shader 产物字节 | 无 | 通过 | Android 实际 shader 产物与 artifact store 字节一致，Agent `read_file` 按内容 SHA-256 审计通过；隔离测试另覆盖 LF、CRLF 与非 ASCII |
+| 错误分类 | 无 | 通过 | 对提交中的 36 处逐项核对；产品实测不存在的事件返回保全证明并保留 lease，未知结果继续隔离 |
+| 集成验收与本地交付 | 上述任务 | 执行中 | 最终 Windows 全量测试 1319 passed、12 skipped、2 subtests passed，pytest 缓存有 1 条写入警告；Agent 相关测试 131 passed、guide fingerprint 一致。正式包复核进行中 |
 
 错误分类核对：20 处是 catalog 路由不支持操作的兜底，另 3 处已被参数校验或更早的调试参数检查拦截。其余分支中，capture 缺失、事件索引未命中、表达式未找到和可提前确认的格式错误按实际阶段提供保全信息；图像依赖缺失是 capability 错误，当前 Agent 尚不将该类别的一般保全证明用于保留 lease。healthcheck 会触及文件、debug 超时可能已推进调试状态、Pixel History 可能已进入原生调用，均保留不确定分类；自动选择格式后才能判断的失败也不虚报前置保全。
+
+实机边界：两次 Android 故障分别是受控终止自有 worker 与停止自有 helper 造成的远端断连，并非真实 native crash。设备配置哈希和属性未变；原始 capture 与既有 helper/forward 未修改。PC 节点测试在完成清理后因没有 Electron 窗口日志对象报错，已独立核实空登记和所属进程退出；shader 调用的节点测试误要求结果带 context 字段，但产物已生成，随后用产品 `read_file` 单独完成字节审计。
 
 ## 上轮：跨平台收敛与架构升级
 

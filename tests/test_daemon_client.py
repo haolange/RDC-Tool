@@ -114,6 +114,24 @@ def test_capacity_preserves_legacy_snapshot_with_remote_ownership(monkeypatch, t
     assert path.is_file()
 
 
+@pytest.mark.parametrize('kind', ['dangling_session', 'live_preview'])
+def test_capacity_preserves_inconsistent_or_active_legacy_records(monkeypatch, tmp_path: Path, kind: str) -> None:
+    from rdc_tool.daemon.ownership import DaemonOwnerUnavailable
+    from rdc_tool.platform.process import Liveness
+    _configure_runtime_dir(monkeypatch, tmp_path)
+    context = 'old-inconsistent'
+    path = daemon_client.state_path(context)
+    path.write_text(json.dumps(_legacy_state(context)), encoding='utf-8')
+    runtime = {'context_id': context, 'sessions': {}, 'captures': {},
+               'current_session_id': 'unknown-session' if kind == 'dangling_session' else '',
+               'preview': {'enabled': kind == 'live_preview'}}
+    daemon_client.context_state_path(context).write_text(json.dumps(runtime), encoding='utf-8')
+    monkeypatch.setattr(daemon_client.process, 'probe', lambda identity: Liveness.EXITED)
+    with pytest.raises(DaemonOwnerUnavailable, match='resources_unconfirmed'):
+        daemon_client.list_occupying_context_ids()
+    assert path.is_file()
+
+
 def test_capacity_never_retires_legacy_state_with_busy_owner(monkeypatch, tmp_path: Path) -> None:
     from rdc_tool.daemon.ownership import OwnerLease
     _configure_runtime_dir(monkeypatch, tmp_path)
