@@ -8,9 +8,7 @@ import secrets
 import subprocess
 import sys
 import time
-import threading
-import msvcrt
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from datetime import datetime, timezone
 from multiprocessing.connection import Client
 from pathlib import Path
@@ -18,8 +16,9 @@ from typing import Any, Dict, Iterable, Optional, Tuple
 
 from rdc_tool.context_snapshot import clear_context_snapshot, context_snapshot_path
 from rdc_tool.daemon.ownership import (
-    DaemonOwnerUnavailable, OwnerLease, locked_publication, owner_identity, owner_is_busy, try_lock, wait_for_owner_exit,
+    DaemonOwnerUnavailable, OwnerLease, locked_publication, owner_identity, owner_is_busy, wait_for_owner_exit,
 )
+from rdc_tool.platform.locks import LockTimeout, path_lock
 from rdc_tool.io_utils import atomic_write_json
 from rdc_tool.runtime_state import clear_context_state, context_log_path, context_state_path, list_context_ids
 from rdc_tool.runtime_paths import cli_runtime_dir
@@ -32,8 +31,6 @@ POLL_DELAYS = (0.1, 0.2, 0.3, 0.5, 0.8, 1.2, 1.6, 2.0)
 MAX_STOP_TIMEOUT_S = 8.0
 DEFAULT_LEASE_TIMEOUT_S = 120
 DEFAULT_IDLE_TIMEOUT_S = 15 * 60
-_START_MUTEXES: dict[str, threading.Lock] = {}
-_START_MUTEXES_LOCK = threading.Lock()
 
 
 DAEMON_START_LOCK_TIMEOUT_S = 30.0
@@ -41,7 +38,7 @@ DAEMON_START_LOCK_POLL_S = 0.05
 
 
 class DaemonStartLockTimeout(TimeoutError):
-    def __init__(self, context: str, stage: str, started: float, timeout: float) -> None:
+    def __init__(self, context: str, stage: str, elapsed: float, timeout: float) -> None:
         super().__init__(f"Timed out acquiring daemon startup lock for context {context!r}")
         self.code = "daemon_start_lock_timeout"
         self.category = "runtime"
@@ -49,7 +46,7 @@ class DaemonStartLockTimeout(TimeoutError):
             "context_id": context,
             "failed_step": "daemon_start_lock",
             "waiting_for": stage,
-            "elapsed_seconds": max(0.0, time.monotonic() - started),
+            "elapsed_seconds": max(0.0, elapsed),
             "timeout_seconds": timeout,
             "recovery_hint": "Wait and retry the same context; do not stop the active owner or remove its state/lock.",
         }
@@ -58,38 +55,14 @@ class DaemonStartLockTimeout(TimeoutError):
 @contextmanager
 def _locked_daemon_start(context: str):
     # One acquisition deadline covers both thread and process contention.
-    started = time.monotonic()
-    timeout = DAEMON_START_LOCK_TIMEOUT_S
-    deadline = started + timeout
     lock_path = _daemon_state_path(context).with_suffix(".start.lock")
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    key = os.path.normcase(str(lock_path.resolve()))
-    if not _START_MUTEXES_LOCK.acquire(timeout=max(0.0, deadline - time.monotonic())):
-        raise DaemonStartLockTimeout(context, "thread_mutex", started, timeout)
-    try:
-        mutex = _START_MUTEXES.setdefault(key, threading.Lock())
-    finally:
-        _START_MUTEXES_LOCK.release()
-    if not mutex.acquire(timeout=max(0.0, deadline - time.monotonic())):
-        raise DaemonStartLockTimeout(context, "thread_mutex", started, timeout)
-    try:
-        with lock_path.open("a+b") as handle:
-            while True:
-                if time.monotonic() >= deadline:
-                    raise DaemonStartLockTimeout(context, "file_lock", started, timeout)
-                if try_lock(handle):
-                    break
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise DaemonStartLockTimeout(context, "file_lock", started, timeout)
-                time.sleep(min(DAEMON_START_LOCK_POLL_S, remaining))
-            try:
-                yield
-            finally:
-                handle.seek(0)
-                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-    finally:
-        mutex.release()
+    with ExitStack() as stack:
+        try:
+            stack.enter_context(path_lock(lock_path, timeout=DAEMON_START_LOCK_TIMEOUT_S,
+                                          poll_interval=DAEMON_START_LOCK_POLL_S))
+        except LockTimeout as exc:
+            raise DaemonStartLockTimeout(context, exc.stage, exc.elapsed, exc.timeout) from exc
+        yield
 
 
 class DaemonRequestTimeout(TimeoutError):

@@ -7,14 +7,38 @@ import secrets
 import shutil
 import tempfile
 import time
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
-from typing import Any, Callable, TextIO
+from typing import Any, Callable, Iterator, TextIO
+
+from rdc_tool.core.errors import CoreError
+from rdc_tool.platform.locks import LockTimeout, path_lock
+
+STATE_LOCK_TIMEOUT_S = 10.0
 
 
 class AtomicWriteError(RuntimeError):
     def __init__(self, message: str, *, details: dict[str, Any] | None = None) -> None:
         super().__init__(message)
         self.details = dict(details or {})
+
+
+@contextmanager
+def state_file_lock(lock_path: Path, context: str) -> Iterator[None]:
+    """Serialize a persisted state file across threads and processes."""
+    with ExitStack() as stack:
+        try:
+            stack.enter_context(path_lock(lock_path, timeout=STATE_LOCK_TIMEOUT_S))
+        except LockTimeout as exc:
+            raise CoreError(
+                code="state_lock_timeout",
+                message=f"Timed out waiting for the state lock of context {context!r}",
+                category="runtime",
+                details={"context_id": context, "lock_path": str(lock_path), "waiting_for": exc.stage,
+                         "elapsed_seconds": exc.elapsed, "timeout_seconds": exc.timeout,
+                         "recovery_hint": "Retry after the concurrent state writer finishes; do not remove the lock file."},
+            ) from exc
+        yield
 
 
 def _sanitize_json_value(payload: Any) -> Any:
