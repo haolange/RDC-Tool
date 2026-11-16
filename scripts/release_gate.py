@@ -33,7 +33,6 @@ REQUIRED_DIRS = [
     "bin",
     "cli",
     "spec",
-    "policy",
     "docs",
     "tests",
 ]

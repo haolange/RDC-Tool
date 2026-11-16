@@ -107,7 +107,6 @@ def test_required_directories_exist() -> None:
         ROOT / "bin",
         ROOT / "cli",
         ROOT / "spec",
-        ROOT / "policy",
         ROOT / "docs",
         ROOT / "tests",
         ROOT / "binaries" / "windows" / "x64" / "python",

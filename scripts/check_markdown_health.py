@@ -23,7 +23,6 @@ RISKY_PATTERNS = (
 )
 SCAN_SKIP_PREFIXES = (
     ".git/",
-    ".qoder/",
     "dist/",
     "intermediate/",
     ".pytest_cache/",

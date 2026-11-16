@@ -33,7 +33,6 @@ def test_package_release_builds_self_contained_zip(tmp_path: Path, monkeypatch) 
         "bin/rdc-tool",
         "cli/run_cli.py",
         "docs/quickstart.md",
-        "policy/README.md",
         "rdc_tool/__init__.py",
         "scripts/rdc_tool_install.ps1",
         "scripts/smoke_cli.sh",

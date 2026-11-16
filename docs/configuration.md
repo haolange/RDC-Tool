@@ -22,6 +22,7 @@
 | `RDC_TOOL_CONTEXT_ARTIFACT_TOTAL_LIMIT`、`RDC_TOOL_CONTEXT_ARTIFACT_PER_TYPE_LIMIT` | 每个 context 快照保留的 artifact 总数与单类上限 |
 | `RDC_TOOL_MAX_CONTEXTS`、`RDC_TOOL_MAX_SESSIONS_PER_CONTEXT`、`RDC_TOOL_MAX_CAPTURE_FILES`、`RDC_TOOL_MAX_CAPTURE_SIZE_BYTES`、`RDC_TOOL_MAX_ESTIMATED_REPLAY_MEMORY_BYTES`、`RDC_TOOL_REPLAY_MEMORY_MULTIPLIER`、`RDC_TOOL_MAX_RECENT_OPERATIONS` | 运行时资源上限（同 `rd.core.set_config` 的 `runtime_limits`） |
 | `RDC_TOOL_REMOTE_DEVICE_SERIAL` | Android 远端 smoke 选择的设备序列号 |
+| `RDC_TOOL_SMOKE_TIMEOUT`、`RDC_TOOL_SMOKE_OPEN_TIMEOUT` | `scripts/smoke_cli.sh` 单步与 capture 打开的超时秒数（默认 120 / 600） |
 
 `runtime_limits.max_contexts` 只统计**实时占用**：一个 context 的 daemon、worker 或 owner 进程仍存活，或当前进程持有 live replay/preview 时才占用名额。持久化的 `runtime_state_*.json` 只是恢复与列举用的命名空间，空的或已死的记录不占名额；`RDC_TOOL_INTERMEDIATE_ROOT` 隔离的是目录，不替代实时占用计算。
 

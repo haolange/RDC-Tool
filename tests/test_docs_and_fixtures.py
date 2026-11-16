@@ -78,7 +78,7 @@ def test_fixture_policy_and_third_party_notices_cover_copied_assets() -> None:
         assert name in notices
     assert "MIT" in notices
     assert "BANANASJIM" in notices
-    assert "Release behavior: excluded" in notices
+    assert "不随 `rdc-tool` 发行包分发" in notices
 
 
 def test_project_license_metadata_is_apache_2() -> None:

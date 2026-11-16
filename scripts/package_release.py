@@ -55,7 +55,6 @@ RELEASE_DIRS = {
     "binaries",
     "cli",
     "docs",
-    "policy",
     "rdc_tool",
     "scripts",
     "spec",
