@@ -89,7 +89,6 @@ def _run(cmd: list[str], cwd: Path, *, timeout_s: int = 180, env: dict[str, str]
 
 def _public_env(root: Path) -> dict[str, str]:
     env = os.environ.copy()
-    env.pop("RDC_TOOL_PYTHON", None)
     env["PATH"] = str(root / "bin") + os.pathsep + str(env.get("PATH") or "")
     pathext = str(env.get("PATHEXT") or "")
     if ".CMD" not in pathext.upper().split(";"):
@@ -103,7 +102,6 @@ def _run_public(root: Path, args: list[str], *, timeout_s: int = 180) -> tuple[i
 
 def _run_windows_launcher_file(root: Path, args: list[str], *, timeout_s: int = 180) -> tuple[int, str]:
     env = os.environ.copy()
-    env.pop("RDC_TOOL_PYTHON", None)
     return _run([*process.launcher_argv(str(root / WINDOWS_LAUNCHER_FILE)), *args], root, timeout_s=timeout_s, env=env)
 
 

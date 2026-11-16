@@ -111,7 +111,6 @@ class ScanRule:
 
 def _launcher_env(root: Path | None = None) -> dict[str, str]:
     env = os.environ.copy()
-    env.pop("RDC_TOOL_PYTHON", None)
     if root is not None:
         env["PATH"] = str(root / "bin") + os.pathsep + str(env.get("PATH") or "")
         pathext = str(env.get("PATHEXT") or "")

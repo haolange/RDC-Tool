@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
 import subprocess
 import sys
 import time
@@ -14,8 +13,10 @@ SCRIPT_ROOT = Path(__file__).resolve().parents[1]
 if str(SCRIPT_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPT_ROOT))
 
+from rdc_tool.host_tools import HostToolUnavailableError, resolve_host_tool
 from rdc_tool.platform import preview as platform_preview
-from rdc_tool.runtime_paths import artifacts_dir, logs_dir
+from rdc_tool.platform import process
+from rdc_tool.runtime_paths import artifacts_dir, host_layout, logs_dir
 
 
 DEFAULT_LOCAL_MARKERS = ["RenderGBuffer", "RenderForward"]
@@ -25,18 +26,9 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
-def _cli_path() -> Path:
-    return _repo_root() / "cli" / "run_cli.py"
-
-
-def _python_cmd() -> str:
-    env_python = str(os.environ.get("RDC_TOOL_PYTHON") or "").strip()
-    if env_python:
-        return env_python
-    bundled = _repo_root() / "binaries" / "windows" / "x64" / "python" / "python.exe"
-    if bundled.is_file():
-        return str(bundled)
-    return sys.executable
+def _launcher() -> list[str]:
+    """The installation's public launcher, exactly as users and smoke_cli.sh run it."""
+    return process.launcher_argv(str(_repo_root() / host_layout().launcher))
 
 
 def _timestamp() -> str:
@@ -57,7 +49,7 @@ def _normalize_name(name: str) -> str:
 
 
 def _run_cli_raw(context: str, *args: str) -> Dict[str, Any]:
-    command = [_python_cmd(), str(_cli_path()), "--daemon-context", context, *args]
+    command = [*_launcher(), "--daemon-context", context, *args]
     result = subprocess.run(
         command,
         cwd=_repo_root(),
@@ -162,22 +154,11 @@ def _has_framebuffer_output(draw: Dict[str, Any]) -> bool:
     return False
 
 
-def _adb_path() -> Optional[str]:
-    for candidate in (
-        shutil.which("adb"),
-        os.path.join(os.environ.get("ANDROID_SDK_ROOT", ""), "platform-tools", "adb.exe"),
-        os.path.join(os.environ.get("ANDROID_HOME", ""), "platform-tools", "adb.exe"),
-        os.path.join(os.environ.get("LOCALAPPDATA", ""), "Android", "Sdk", "platform-tools", "adb.exe"),
-    ):
-        if candidate and Path(candidate).is_file():
-            return str(Path(candidate))
-    return None
-
-
 def _adb_devices() -> Dict[str, Any]:
-    adb = _adb_path()
-    if not adb:
-        return {"available": False, "reason": "adb_not_found", "devices": []}
+    try:
+        adb = str(resolve_host_tool("adb"))
+    except HostToolUnavailableError as exc:
+        return {"available": False, "reason": "adb_unavailable", "error": str(exc), "devices": []}
     result = subprocess.run(
         [adb, "devices", "-l"],
         cwd=_repo_root(),
