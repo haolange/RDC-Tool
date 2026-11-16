@@ -30,7 +30,7 @@ from rdc_tool.daemon.client import (
 from rdc_tool.daemon.state import load_state, public_view
 from rdc_tool.io_utils import safe_json_text, safe_stream_write
 from rdc_tool.python_runtime import current_python_runtime_details, validate_bundled_python_layout
-from rdc_tool.runtime_catalog import load_tool_catalog, tool_catalog_path, catalog_payload, describe_operation
+from rdc_tool.runtime_catalog import SOURCE_PATH, catalog_payload, describe_operation, load_tool_catalog
 from rdc_tool.runtime_paths import (
     android_binaries_root,
     artifacts_dir,
@@ -374,13 +374,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
                         for abi in ("arm32", "arm64")
                         if not (android_binaries_root() / abi / f"org.renderdoc.renderdoccmd.{abi}.apk").is_file()]
 
-    catalog_error = ""
-    catalog_count = 0
-    try:
-        catalog = load_tool_catalog()
-        catalog_count = len(catalog)
-    except Exception as exc:  # noqa: BLE001
-        catalog_error = str(exc)
+    catalog = catalog_payload()
 
     try:
         daemon_status = _daemon_status_payload(context)
@@ -450,9 +444,9 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
             },
         },
         "catalog": {
-            "path": str(tool_catalog_path()),
-            "tool_count": catalog_count,
-            "error": catalog_error,
+            "source": SOURCE_PATH,
+            "fingerprint": catalog["fingerprint"],
+            "tool_count": catalog["tool_count"],
         },
         "runtime_dirs": {
             "runtime_root": str(runtime_root()),
@@ -477,7 +471,6 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         and not renderdoc_failures
         and native_build["status"] != "invalid"
         and loaded_runtime["status"] != "mismatch"
-        and not catalog_error
         and (root / "bin/rdc-tool.cmd").is_file()
         and (root / "bin" / "rdc-tool").is_file()
         and (root / "cli" / "run_cli.py").is_file()

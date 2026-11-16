@@ -1,8 +1,8 @@
-"""
-RDC-Tool daemon/runtime server with registry-driven tool registration.
+"""Runtime implementation of the rd.* operations executed inside the worker.
 
-- Registers all catalog-defined tools from `rdc_tool/spec/tool_catalog.json`
-- Produces canonical shared envelopes with `ok/data/artifacts/error/meta`
+Operations are defined in rdc_tool/operation_definitions.py and dispatched
+here by namespace; results become canonical ok/data/artifacts/error/meta
+envelopes.
 """
 
 from __future__ import annotations
@@ -88,6 +88,8 @@ from rdc_tool.remote_bootstrap import (
     forward_android_target,
 )
 from rdc_tool.runtime_bootstrap import bootstrap_renderdoc_runtime
+from rdc_tool.operation_definitions import OPERATIONS
+from rdc_tool.runtime_catalog import OPERATION_INDEX
 from rdc_tool.runtime_paths import artifacts_dir, binding_module_name, ensure_runtime_dirs, runtime_root
 from rdc_tool.runtime_state import (
     append_runtime_log,
@@ -3921,27 +3923,6 @@ def _require(fields: Dict[str, Any], *names: str) -> None:
         raise ValueError(f"Missing required parameter(s): {', '.join(missing)}")
 
 
-def _tool_catalog_path() -> Path:
-    from rdc_tool.runtime_paths import tools_root
-
-    return tools_root() / "spec" / "tool_catalog.json"
-
-
-def _load_tool_catalog() -> List[Dict[str, Any]]:
-    path = _tool_catalog_path()
-    data = json.loads(path.read_text(encoding="utf-8"))
-    tools = list(data.get("tools", []))
-    declared_count = int(data.get("tool_count") or len(tools))
-    if len(tools) != declared_count:
-        raise RuntimeError(f"Catalog tool_count mismatch: declared {declared_count}, got {len(tools)} entries")
-    names = [str(t.get("name", "")).strip() for t in tools]
-    if len(set(names)) != len(names):
-        raise RuntimeError("Catalog contains duplicate tool names")
-    if any(not name.startswith("rd.") for name in names):
-        raise RuntimeError("Catalog contains invalid tool name prefixes")
-    return tools
-
-
 def _is_null_resource_id(resource_id: Any) -> bool:
     if resource_id is None:
         return True
@@ -6569,7 +6550,7 @@ def _tool_role(tool_name: str) -> str:
 
 
 def _tool_mutates_state(tool_name: str) -> bool:
-    definition = next((tool for tool in _load_tool_catalog() if tool["name"] == tool_name), None)
+    definition = OPERATION_INDEX.get(tool_name)
     return bool(definition and definition.get("effects"))
 
 
@@ -6764,7 +6745,7 @@ def _filter_tool_profiles(
     role_text = str(role or "").strip().lower()
     intent_text = str(intent or "").strip().lower()
     out: List[Dict[str, Any]] = []
-    for tool in _load_tool_catalog():
+    for tool in OPERATIONS:
         entry = _tool_profile(tool, detail_level=detail_level)
         if namespace_text and str(entry.get("namespace") or "").lower() != namespace_text:
             continue

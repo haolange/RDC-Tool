@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Any, Awaitable, Callable, Dict, List
+from typing import Any, Awaitable, Callable, Dict
 
 from rdc_tool import server_runtime
+from rdc_tool.operation_definitions import OPERATIONS
+from rdc_tool.runtime_catalog import OPERATION_INDEX
 from rdc_tool.runtime_catalog import validate_operation_arguments
 from rdc_tool.core.operation_registry import OperationRegistry
 from rdc_tool.handlers import (
@@ -53,12 +55,6 @@ _DOMAIN_HANDLERS: Dict[str, Callable[[str, Dict[str, Any], Dict[str, Any]], Awai
     "vfs": vfs.handle,
 }
 
-_CATALOG_TOOLS = server_runtime._load_tool_catalog()
-_TOOL_INDEX = {str(item.get("name") or "").strip(): dict(item) for item in _CATALOG_TOOLS}
-
-
-def load_catalog() -> List[Dict[str, Any]]:
-    return list(_CATALOG_TOOLS)
 
 
 def _structured_prereq_error(tool_name: str, requirement: str, via_tools: list[str], reason: str) -> Dict[str, Any]:
@@ -110,7 +106,7 @@ def _has_prerequisite(requirement: str, args: Dict[str, Any]) -> bool:
 
 
 def _enforce_prerequisites(tool_name: str, args: Dict[str, Any]) -> Dict[str, Any] | None:
-    meta = _TOOL_INDEX.get(tool_name, {})
+    meta = OPERATION_INDEX.get(tool_name, {})
     for item in meta.get("prerequisites", []):
         if not isinstance(item, dict):
             continue
@@ -130,7 +126,7 @@ def _enforce_prerequisites(tool_name: str, args: Dict[str, Any]) -> Dict[str, An
 
 def build_operation_registry() -> OperationRegistry:
     registry = OperationRegistry()
-    for tool in _CATALOG_TOOLS:
+    for tool in OPERATIONS:
         tool_name = str(tool.get("name") or "").strip()
         parts = tool_name.split(".")
         if len(parts) != 3 or parts[0] != "rd":
