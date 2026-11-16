@@ -42,7 +42,7 @@ Linux 主机布局的原生库与绑定从与其他目标相同的冻结源码�
 | 项 | 值 |
 |---|---|
 | 源码 | 回执 `source.revision` 的干净检出（当前 dde8822），构建前后 `git status` 均为空 |
-| 配置 | `cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DENABLE_QRENDERDOC=OFF -DENABLE_PYRENDERDOC=ON -DCMAKE_CXX_FLAGS="-include vector" -DPYTHON_EXECUTABLE=… -DPYTHON_INCLUDE_DIR=… -DPYTHON_LIBRARY=…`；Python 与 `scripts/python-runtimes.json` 钉住的捆绑解释器同版本、同 ABI（cp314） |
+| 配置 | `cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DENABLE_QRENDERDOC=OFF -DENABLE_PYRENDERDOC=ON -DCMAKE_CXX_FLAGS="-include vector" -DPython3_EXECUTABLE=<捆绑解释器>/bin/python3.14 -DPython3_FIND_STRATEGY=LOCATION`。绑定必须对 `scripts/python-runtimes.json` 钉住的同一个解释器编译：RenderDoc 通过 `find_package(Python3)` 选择 Python，只认 `Python3_*` 变量，否则会拿到构建机上的其他 Python，产出的 `renderdoc.so` 在捆绑的 3.14 下导入即崩溃。构建后核对 `CMakeCache.txt` 中 `FIND_PACKAGE_MESSAGE_DETAILS_Python3` 指向该解释器 |
 | `-include vector` | dde8822 的 `renderdoc/driver/vulkan/vk_pixelhistory.cpp` 用到 `std::vector` 却没有包含 `<vector>`。MSVC 与 Android NDK 的标准库会间接带入，现有 Windows 与 Android 产物就是这样构建出来的；GCC 的 libstdc++ 不会。用编译选项补齐而不改源码，Linux 产物与它们同属一个 revision，能写进同一份回执。下一次基线升级改动 fork 时，把这行 include 合入源码并删除该选项 |
 | 自定义 SWIG | 构建会下载 `baldurk/swig` 标签 `renderdoc-modified-7` 的源码包；下载受限时用 `-DRENDERDOC_SWIG_PACKAGE=<本地 zip>` 指向同一标签的源码包 |
 | 输出 | 运行目录根部的 `librenderdoc.so` 与 Vulkan layer `renderdoc_capture.json`，以及 `pymodules/renderdoc.so`；回执 `linux-x64` 项的 `toolchain` 记录 GCC、CMake、glibc、Python 与 `cxx_flags` |
