@@ -24,7 +24,7 @@ from rdc_tool.platform.ipc import Endpoint
 from rdc_tool.platform.locks import LockTimeout, path_lock
 from rdc_tool.platform.process import ProcessIdentity, SpawnProfile
 from rdc_tool.runtime_state import clear_context_state, context_log_path, context_state_path, list_context_ids
-from rdc_tool.runtime_paths import cli_runtime_dir
+from rdc_tool.runtime_paths import child_python_env, cli_runtime_dir
 from rdc_tool.runtime_worker_state import clear_worker_state, worker_state_path
 
 POLL_DELAYS = (0.1, 0.2, 0.3, 0.5, 0.8, 1.2, 1.6, 2.0)
@@ -494,13 +494,7 @@ def _ensure_daemon_locked(
         "stderr": subprocess.DEVNULL,
         **process.popen_options(SpawnProfile.DAEMON),
     }
-    env = dict(os.environ)
-    tools_root = str(env.get("RDC_TOOL_ROOT", "")).strip()
-    if tools_root:
-        py_path = env.get("PYTHONPATH", "")
-        root_path = str(Path(tools_root).resolve())
-        env["PYTHONPATH"] = root_path + os.pathsep + py_path if py_path else root_path
-    popen_kwargs["env"] = env
+    popen_kwargs["env"] = child_python_env(os.environ)
 
     proc = subprocess.Popen(cmd, **popen_kwargs)
     assert proc.stdin is not None

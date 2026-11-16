@@ -1,6 +1,6 @@
 ﻿# Quickstart
 
-Run all commands from `resources/tools`, or set `RDC_TOOL_ROOT` when using `bin/rdc-tool` from another directory.
+`bin/rdc-tool` 按自身位置定位安装根目录，可在任意工作目录运行。
 
 ```bat
 rdc-tool --version

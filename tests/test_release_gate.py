@@ -47,7 +47,7 @@ def _write_smoke_log(root: Path, *, passed: bool = True) -> None:
 def _mock_release_gate_basics(monkeypatch, root: Path) -> None:
     monkeypatch.setattr(release_gate, "_check_paired_native", lambda root: (True, "paired fixture"))
     monkeypatch.setattr(release_gate, "_check_bundled_host_tools", lambda: (True, "fixture host tools"))  # type: ignore[no-untyped-def]
-    monkeypatch.setattr(release_gate, "_tools_root", lambda: root)
+    monkeypatch.setattr(release_gate, "tools_root", lambda: root)
     monkeypatch.setattr(release_gate, "_run", lambda cmd, cwd, **kwargs: (True, "ok"))
     monkeypatch.setattr(release_gate, "_run_public_command", lambda args, cwd: (True, "usage: rdc-tool"))
     monkeypatch.setattr(release_gate, "_run_windows_launcher_file", lambda args, cwd: (True, "ok"))

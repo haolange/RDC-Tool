@@ -86,7 +86,7 @@ def test_metadata_version_mismatch_fails(tmp_path, filename):
 
 def test_staging_is_removed_on_success_and_archive_failure(tmp_path, monkeypatch):
     staging = []
-    monkeypatch.setattr(package_release, '_tools_root', lambda: tmp_path)
+    monkeypatch.setattr(package_release, 'tools_root', lambda: tmp_path)
     monkeypatch.setattr(package_release, '_source_revision', lambda root: 'a' * 40)
     monkeypatch.setattr(package_release, '_qualify_source', lambda root: None)
     monkeypatch.setattr(package_release, '_qualify_package', lambda path: None)
@@ -112,7 +112,7 @@ def test_staging_is_removed_on_success_and_archive_failure(tmp_path, monkeypatch
 
 def test_staging_is_removed_on_copy_failure(tmp_path, monkeypatch):
     staging = []
-    monkeypatch.setattr(package_release, '_tools_root', lambda: tmp_path)
+    monkeypatch.setattr(package_release, 'tools_root', lambda: tmp_path)
     monkeypatch.setattr(package_release, '_source_revision', lambda root: 'a' * 40)
     monkeypatch.setattr(package_release, '_qualify_source', lambda root: None)
     def fail_copy(root, destination):
@@ -166,7 +166,7 @@ def candidate_source_fixture(root, monkeypatch):
     from scripts import package_runtime
     from test_runtime_identity import native_inputs
     inputs = native_inputs(root)
-    monkeypatch.setattr(package_runtime, '_tools_root', lambda: root)
+    monkeypatch.setattr(package_runtime, 'tools_root', lambda: root)
     assert package_runtime.main(inputs) == 0
     for name in ('LICENSE', 'README.md'):
         (root / name).write_text('fixture\n', encoding='utf-8')
@@ -179,7 +179,7 @@ def candidate_source_fixture(root, monkeypatch):
     metadata = root / f'binaries/windows/x64/python/Lib/site-packages/rdc_tool-{verify.TOOL_VERSION}.dist-info/METADATA'
     metadata.parent.mkdir(parents=True)
     metadata.write_text(f'Version: {verify.TOOL_VERSION}\n', encoding='utf-8')
-    monkeypatch.setattr(package_release, '_tools_root', lambda: root)
+    monkeypatch.setattr(package_release, 'tools_root', lambda: root)
     monkeypatch.setattr(package_release, '_candidate_source', lambda root: {'base_revision': 'a' * 40, 'working_diff_sha256': 'd' * 64})
 
 

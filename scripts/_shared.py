@@ -1,19 +1,9 @@
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 from pathlib import Path, PureWindowsPath
 from typing import Any
-
-
-def tools_root(anchor_file: str) -> Path:
-    env_root = os.environ.get("RDC_TOOL_ROOT", "").strip()
-    if env_root:
-        env_path = Path(env_root).expanduser().resolve()
-        if env_path.is_dir():
-            return env_path
-    return Path(anchor_file).resolve().parents[1]
 
 
 def resolve_repo_path(root: Path, raw_path: str) -> Path:

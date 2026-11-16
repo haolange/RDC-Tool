@@ -1,26 +1,34 @@
-"""One resolver for bundled host executables and explicit user overrides."""
+"""Host utilities (adb, spirv-as, spirv-dis): bundled per host or explicitly overridden."""
 from __future__ import annotations
-import hashlib
+
 import json
 import os
 from pathlib import Path
-from rdc_tool.runtime_paths import binaries_root
 
-HOST_TOOLS = {
-    "adb": ("adb/adb.exe", "RDC_TOOL_ANDROID_ADB_PATH"),
-    "spirv_as": ("spirv-tools/spirv-as.exe", "RDC_TOOL_SPIRV_TOOLS_PATH"),
-    "spirv_dis": ("spirv-tools/spirv-dis.exe", "RDC_TOOL_SPIRV_TOOLS_PATH"),
+from rdc_tool.io_utils import sha256_file
+from rdc_tool.runtime_paths import HostLayout, binaries_root, host_layout
+
+# Explicit user overrides: adb names the executable, spirv names its directory.
+OVERRIDE_VARIABLES = {
+    "adb": "RDC_TOOL_ANDROID_ADB_PATH",
+    "spirv_as": "RDC_TOOL_SPIRV_TOOLS_PATH",
+    "spirv_dis": "RDC_TOOL_SPIRV_TOOLS_PATH",
 }
-ADB_DLLS = ("adb/AdbWinApi.dll", "adb/AdbWinUsbApi.dll")
-BUNDLED_HOST_FILES = tuple(item[0] for item in HOST_TOOLS.values()) + ADB_DLLS + (
-    "adb/NOTICE.txt", "adb/source.properties", "spirv-tools/LICENSE.txt", "spirv-tools/SPIRV-Headers-LICENSE.txt",
-)
+
 
 class HostToolUnavailableError(RuntimeError):
     code = "host_tool_unavailable"
 
+
+def bundled_host_files(layout: HostLayout | None = None) -> tuple[str, ...]:
+    """Every host-tool file a runtime bundle ships: executables, support libraries, licenses."""
+    chosen = layout or host_layout()
+    return (*chosen.host_tools.values(), *chosen.host_tool_files)
+
+
 def resolve_host_tool(name: str) -> Path:
-    relative, variable = HOST_TOOLS[name]
+    relative = host_layout().host_tools[name]
+    variable = OVERRIDE_VARIABLES[name]
     override = os.environ.get(variable, "").strip()
     if override:
         path = Path(override).expanduser()
@@ -35,11 +43,11 @@ def resolve_host_tool(name: str) -> Path:
         raise HostToolUnavailableError(f"{name} executable not found in {source}: {path}. Verify or repair the installation.")
     return path.resolve()
 
+
 def host_tools_status() -> dict:
     result = {}
-    for name, (relative, variable) in HOST_TOOLS.items():
-        override = os.environ.get(variable, "").strip()
-        entry = {"source": "explicit" if override else "bundled", "path": "", "available": False}
+    for name, variable in OVERRIDE_VARIABLES.items():
+        entry = {"source": "explicit" if os.environ.get(variable, "").strip() else "bundled", "path": "", "available": False}
         try:
             entry.update(path=str(resolve_host_tool(name)), available=True)
         except HostToolUnavailableError as error:
@@ -47,23 +55,24 @@ def host_tools_status() -> dict:
         result[name] = entry
     return result
 
+
 def validate_bundled_host_tools() -> tuple[bool, list[str]]:
     root = binaries_root()
     failures = []
     try:
-        manifest = json.loads((root / "manifest.runtime.json").read_text(encoding="utf-8"))
+        manifest = json.loads((binaries_root() / "manifest.runtime.json").read_text(encoding="utf-8"))
         records = {entry["path"]: entry for entry in manifest["files"]}
         sources = manifest["bundled_tools"]
-        for name in HOST_TOOLS:
+        for name in OVERRIDE_VARIABLES:
             source = sources[name]
             if not source.get("version") or not source.get("source_url") or not source.get("license"):
                 failures.append(f"incomplete third-party provenance: {name}")
-        for relative in BUNDLED_HOST_FILES:
+        for relative in bundled_host_files():
             path = root / relative
             record = records.get(relative)
             if not path.is_file() or not record:
                 failures.append(f"missing bundled host tool: {relative}")
-            elif path.stat().st_size != record["size"] or hashlib.sha256(path.read_bytes()).hexdigest() != record["sha256"]:
+            elif path.stat().st_size != record["size"] or sha256_file(path) != record["sha256"]:
                 failures.append(f"bundled host tool integrity mismatch: {relative}")
     except (OSError, ValueError, KeyError, TypeError) as error:
         failures.append(f"invalid host tool manifest: {error}")

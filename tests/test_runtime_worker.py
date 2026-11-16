@@ -49,7 +49,7 @@ def _prepare_runtime_source(tmp_path: Path) -> Path:
 
 def test_worker_uses_source_runtime_directly(tmp_path: Path, monkeypatch) -> None:
     source_root = _prepare_runtime_source(tmp_path)
-    monkeypatch.setenv("RDC_TOOL_ROOT", str(ROOT))
+    monkeypatch.setattr(daemon_worker, "tools_root", lambda: source_root.parents[2])
     monkeypatch.setattr(daemon_worker, "binaries_root", lambda: source_root)
     monkeypatch.setattr(daemon_worker, "pymodules_dir", lambda: source_root / "pymodules")
 
@@ -77,9 +77,7 @@ def test_worker_uses_source_runtime_directly(tmp_path: Path, monkeypatch) -> Non
     try:
         env = captured["env"]
         assert isinstance(env, dict)
-        assert env["RDC_TOOL_RUNTIME_DLL_DIR"] == str(source_root.resolve())
-        assert env["RDC_TOOL_RENDERDOC_PATH"] == str((source_root / "pymodules").resolve())
-        assert env["RDC_TOOL_WORKER_SOURCE_MANIFEST"] == str((source_root / "manifest.runtime.json").resolve())
+        assert env["PYTHONPATH"].split(os.pathsep)[0] == str(ROOT)
         assert env["RDC_TOOL_DAEMON_PID"] == str(os.getpid())
         assert env["RDC_TOOL_DAEMON_BIRTH"] == daemon_worker.process.self_identity().birth
         if os.name == "nt":

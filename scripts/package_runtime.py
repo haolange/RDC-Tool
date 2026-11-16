@@ -18,12 +18,13 @@ SCRIPT_ROOT = Path(__file__).resolve().parents[1]
 if str(SCRIPT_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPT_ROOT))
 
-from rdc_tool.host_tools import BUNDLED_HOST_FILES
+from rdc_tool.host_tools import bundled_host_files
 from rdc_tool.runtime_requirements import should_bundle_site_package
 from rdc_tool import runtime_identity
 from scripts.distribution_metadata import write_distribution_metadata
-from scripts._shared import ensure_within_root, resolve_repo_path, task_directory, tools_root, write_text
+from scripts._shared import ensure_within_root, resolve_repo_path, task_directory, write_text
 from rdc_tool.io_utils import sha256_file
+from rdc_tool.runtime_paths import HOST_LAYOUTS, tools_root
 
 
 DENY_SUFFIXES = {".pdb", ".lib", ".exp", ".ilk", ".h"}
@@ -45,10 +46,6 @@ PYTHON_BASE_FILES = (
     "vcruntime140_1.dll",
     "LICENSE.txt",
 )
-
-
-def _tools_root() -> Path:
-    return tools_root(__file__)
 
 
 def _resolve_input_path(root: Path, raw_path: str, *, label: str, allow_outside_root: bool = False) -> Path:
@@ -249,7 +246,7 @@ def _iter_manifest_files(out_root: Path) -> Iterable[Path]:
             continue
         if path.suffix.lower() in DENY_SUFFIXES:
             continue
-        if rel in BUNDLED_HOST_FILES:
+        if rel in bundled_host_files(HOST_LAYOUTS["windows-x64"]):
             yield path
             continue
         if rel.startswith("python/"):
@@ -435,7 +432,7 @@ def _assemble_runtime(tools_root_path: Path, staged_root: Path, args: argparse.N
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
-    root = _tools_root().resolve()
+    root = tools_root().resolve()
     if (root / "binaries").is_symlink() or (root / "binaries").is_junction():
         print("[pack] Runtime output must not be a link")
         return 1

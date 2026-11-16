@@ -90,7 +90,6 @@ def _run(cmd: list[str], cwd: Path, *, timeout_s: int = 180, env: dict[str, str]
 def _public_env(root: Path) -> dict[str, str]:
     env = os.environ.copy()
     env.pop("RDC_TOOL_PYTHON", None)
-    env["RDC_TOOL_ROOT"] = str(root)
     env["PATH"] = str(root / "bin") + os.pathsep + str(env.get("PATH") or "")
     pathext = str(env.get("PATHEXT") or "")
     if ".CMD" not in pathext.upper().split(";"):
@@ -105,7 +104,6 @@ def _run_public(root: Path, args: list[str], *, timeout_s: int = 180) -> tuple[i
 def _run_windows_launcher_file(root: Path, args: list[str], *, timeout_s: int = 180) -> tuple[int, str]:
     env = os.environ.copy()
     env.pop("RDC_TOOL_PYTHON", None)
-    env["RDC_TOOL_ROOT"] = str(root)
     return _run([*process.launcher_argv(str(root / WINDOWS_LAUNCHER_FILE)), *args], root, timeout_s=timeout_s, env=env)
 
 
@@ -268,8 +266,6 @@ def _verify_native_loader(root: Path) -> None:
     )
     env = _public_env(root)
     native_root = root / "binaries/windows/x64"
-    env["RDC_TOOL_RUNTIME_DLL_DIR"] = str(native_root)
-    env["RDC_TOOL_RENDERDOC_PATH"] = str(native_root / "pymodules")
     env["PATH"] = str(Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32")
     for key in list(env):
         if key.upper().startswith(("PYTHON", "ANDROID_")) or key.upper() == "JAVA_HOME":

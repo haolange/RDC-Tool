@@ -5,6 +5,7 @@ from pathlib import Path
 
 from scripts import package_runtime
 from rdc_tool import __version__
+from rdc_tool.runtime_paths import HOST_LAYOUTS
 from scripts.distribution_metadata import write_distribution_metadata
 from test_runtime_identity import native_inputs
 
@@ -42,7 +43,7 @@ def test_package_runtime_bundles_python_and_excludes_dev_only_packages(tmp_path:
     _write(site_packages / "pytest" / "__init__.py", "# should be excluded\n")
     _write(site_packages / "pytest-9.0.0.dist-info" / "METADATA", "Name: pytest\n")
 
-    monkeypatch.setattr(package_runtime, "_tools_root", lambda: tools_root)
+    monkeypatch.setattr(package_runtime, "tools_root", lambda: tools_root)
 
     paired_inputs = native_inputs(tools_root)
 
@@ -106,7 +107,7 @@ def test_package_runtime_rejects_site_packages_source_inside_output_tree(tmp_pat
     _write(python_home / "Lib" / "encodings" / "__init__.py", "# enc\n")
     _write(site_packages / "pydantic" / "__init__.py", "# runtime dep\n")
 
-    monkeypatch.setattr(package_runtime, "_tools_root", lambda: tools_root)
+    monkeypatch.setattr(package_runtime, "tools_root", lambda: tools_root)
 
     code = package_runtime.main(
         [
@@ -126,20 +127,20 @@ def test_runtime_regeneration_keeps_bundled_host_files_and_provenance(tmp_path, 
     tools_root = tmp_path / "tools"
     out_root = tools_root / "binaries/windows/x64"
     metadata = {"adb": {"version": "fixture", "source_url": "https://example.test/source", "license": "fixture"}}
-    for relative in package_runtime.BUNDLED_HOST_FILES:
+    for relative in package_runtime.bundled_host_files(HOST_LAYOUTS['windows-x64']):
         _write(out_root / relative, b"host-tool")
     _write(out_root / "unrelated/cache.bin", b"excluded")
     _write(out_root / "manifest.runtime.json", json.dumps({"bundled_tools": metadata}))
-    monkeypatch.setattr(package_runtime, "_tools_root", lambda: tools_root)
+    monkeypatch.setattr(package_runtime, "tools_root", lambda: tools_root)
     assert package_runtime.main([]) == 0
     manifest = json.loads((out_root / "manifest.runtime.json").read_text(encoding="utf-8"))
     assert manifest["bundled_tools"] == metadata
-    assert {entry["path"] for entry in manifest["files"]} == set(package_runtime.BUNDLED_HOST_FILES)
-    assert manifest["file_count"] == len(package_runtime.BUNDLED_HOST_FILES)
+    assert {entry["path"] for entry in manifest["files"]} == set(package_runtime.bundled_host_files(HOST_LAYOUTS['windows-x64']))
+    assert manifest["file_count"] == len(package_runtime.bundled_host_files(HOST_LAYOUTS['windows-x64']))
 
 
 def test_native_replacement_requires_the_complete_build_set(tmp_path, monkeypatch):
-    monkeypatch.setattr(package_runtime, "_tools_root", lambda: tmp_path)
+    monkeypatch.setattr(package_runtime, "tools_root", lambda: tmp_path)
     assert package_runtime.main(["--source", "staging"]) == 1
     assert not (tmp_path / "binaries").exists()
     assert not list(tmp_path.glob(".runtime-stage-*"))
@@ -155,7 +156,7 @@ def test_copy_failure_cannot_rewrite_old_runtime_or_its_manifest(tmp_path, monke
         if Path(source) == tmp_path / "staging/renderdoc.dll":
             raise PermissionError("locked native input")
         return original_copy(source, destination, *args, **kwargs)
-    monkeypatch.setattr(package_runtime, "_tools_root", lambda: tmp_path)
+    monkeypatch.setattr(package_runtime, "tools_root", lambda: tmp_path)
     monkeypatch.setattr(package_runtime.shutil, "copy2", fail_copy)
     assert package_runtime.main(inputs) == 1
     assert (old / "renderdoc.dll").read_bytes() == b"old"
@@ -173,7 +174,7 @@ def test_failed_publish_restores_the_complete_original_directory(tmp_path, monke
         if path.name == "binaries" and path.parent.name.startswith(".runtime-stage-"):
             raise PermissionError("publish rejected")
         return original_rename(path, target)
-    monkeypatch.setattr(package_runtime, "_tools_root", lambda: tmp_path)
+    monkeypatch.setattr(package_runtime, "tools_root", lambda: tmp_path)
     monkeypatch.setattr(Path, "rename", fail_publish)
     assert package_runtime.main(inputs) == 1
     assert (old / "renderdoc.dll").read_bytes() == b"old"
@@ -185,7 +186,7 @@ def test_failed_publish_restores_the_complete_original_directory(tmp_path, monke
 def test_changed_build_input_is_rejected_before_publish(tmp_path, monkeypatch):
     inputs = native_inputs(tmp_path)
     (tmp_path / "staging/renderdoc.dll").write_bytes(b"changed after build")
-    monkeypatch.setattr(package_runtime, "_tools_root", lambda: tmp_path)
+    monkeypatch.setattr(package_runtime, "tools_root", lambda: tmp_path)
     assert package_runtime.main(inputs) == 1
     assert not (tmp_path / "binaries").exists()
     assert not list(tmp_path.glob(".runtime-stage-*"))
@@ -197,7 +198,7 @@ def test_failed_python_assembly_preserves_existing_python(tmp_path, monkeypatch)
     _write(old / "manifest.runtime.json", '{}')
     _write(tmp_path / "python-home/python.exe", b"new python")
     (tmp_path / "site-packages").mkdir()
-    monkeypatch.setattr(package_runtime, "_tools_root", lambda: tmp_path)
+    monkeypatch.setattr(package_runtime, "tools_root", lambda: tmp_path)
     assert package_runtime.main(["--python-home", "python-home", "--python-version", "3.14.3",
                                  "--site-packages-source", "site-packages"]) == 1
     assert (old / "python/python.exe").read_bytes() == b"old python"
@@ -211,14 +212,14 @@ def test_same_source_receipt_is_required_for_every_target(tmp_path, monkeypatch)
     receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
     receipt["builds"][1]["inputs_sha256"] = "d" * 64
     receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
-    monkeypatch.setattr(package_runtime, "_tools_root", lambda: tmp_path)
+    monkeypatch.setattr(package_runtime, "tools_root", lambda: tmp_path)
     assert package_runtime.main(inputs) == 1
     assert not (tmp_path / "binaries").exists()
 
 
 def test_paired_build_is_rechecked_when_manifest_is_regenerated(tmp_path, monkeypatch):
     inputs = native_inputs(tmp_path)
-    monkeypatch.setattr(package_runtime, "_tools_root", lambda: tmp_path)
+    monkeypatch.setattr(package_runtime, "tools_root", lambda: tmp_path)
     assert package_runtime.main(inputs) == 0
     apk = tmp_path / "binaries/android/arm64/org.renderdoc.renderdoccmd.arm64.apk"
     apk.write_bytes(b"damaged")
@@ -240,7 +241,7 @@ def test_native_replacement_removes_old_files_but_preserves_python_and_host_tool
     _write(old / "python/Lib/retained.py", b"python unchanged")
     _write(old / "adb/adb.exe", b"host tool unchanged")
     _write(old / "manifest.runtime.json", "{}")
-    monkeypatch.setattr(package_runtime, "_tools_root", lambda: tmp_path)
+    monkeypatch.setattr(package_runtime, "tools_root", lambda: tmp_path)
     assert package_runtime.main(inputs) == 0
     assert not (old / "stale.dll").exists()
     assert not (old / "old.json").exists()
@@ -256,7 +257,7 @@ def test_native_source_support_files_require_complete_unchanged_receipt(tmp_path
     support = tmp_path / "staging/dbghelp.dll"
     _write(support, b"support library")
     inputs = native_inputs(tmp_path)
-    monkeypatch.setattr(package_runtime, "_tools_root", lambda: tmp_path)
+    monkeypatch.setattr(package_runtime, "tools_root", lambda: tmp_path)
     receipt = tmp_path / "receipt.json"
     before = receipt.read_text(encoding="utf-8")
     contents = json.loads(before)
@@ -272,7 +273,7 @@ def test_native_source_support_files_require_complete_unchanged_receipt(tmp_path
 
 def test_unlisted_native_file_cannot_be_certified_by_manifest_regeneration(tmp_path, monkeypatch):
     inputs = native_inputs(tmp_path)
-    monkeypatch.setattr(package_runtime, "_tools_root", lambda: tmp_path)
+    monkeypatch.setattr(package_runtime, "tools_root", lambda: tmp_path)
     assert package_runtime.main(inputs) == 0
     old = tmp_path / "binaries/windows/x64"
     _write(old / "stale.dll", b"unlisted binary")
@@ -298,7 +299,7 @@ def test_open_windows_file_cannot_leave_a_mixed_runtime(tmp_path, monkeypatch):
     kernel.CloseHandle.argtypes = [ctypes.c_void_p]
     handle = kernel.CreateFileW(str(old / "renderdoc.dll"), 0x80000000, 1, None, 3, 0, None)
     assert handle not in (None, ctypes.c_void_p(-1).value)
-    monkeypatch.setattr(package_runtime, "_tools_root", lambda: tmp_path)
+    monkeypatch.setattr(package_runtime, "tools_root", lambda: tmp_path)
     try:
         assert package_runtime.main([]) == 1
         assert (old / "renderdoc.dll").read_bytes() == b"old"
@@ -318,7 +319,7 @@ def test_explicit_output_root_leaves_every_existing_source_file_unchanged(tmp_pa
     _write(old / "manifest.runtime.json", '{"current":true}')
     before = {path.relative_to(tmp_path).as_posix(): path.read_bytes()
               for path in tmp_path.rglob("*") if path.is_file()}
-    monkeypatch.setattr(package_runtime, "_tools_root", lambda: tmp_path)
+    monkeypatch.setattr(package_runtime, "tools_root", lambda: tmp_path)
     assert package_runtime.main(inputs + ["--output-root", "intermediate/task/runtime"]) == 0
     for name, contents in before.items():
         assert (tmp_path / name).read_bytes() == contents
@@ -337,7 +338,7 @@ def test_explicit_output_root_leaves_every_existing_source_file_unchanged(tmp_pa
 def test_explicit_output_root_rejects_escape_source_and_input_overlap(tmp_path, monkeypatch):
     import pytest
     inputs = native_inputs(tmp_path)
-    monkeypatch.setattr(package_runtime, "_tools_root", lambda: tmp_path)
+    monkeypatch.setattr(package_runtime, "tools_root", lambda: tmp_path)
     for destination in (".", "../outside", "binaries/new"):
         with pytest.raises(ValueError, match="task directory|escapes"):
             package_runtime.main(inputs + ["--output-root", destination])
@@ -362,7 +363,7 @@ def test_explicit_output_root_rejects_reparse_parent(tmp_path, monkeypatch):
                        capture_output=True, check=True)
     else:
         link.symlink_to(target, target_is_directory=True)
-    monkeypatch.setattr(package_runtime, "_tools_root", lambda: tmp_path)
+    monkeypatch.setattr(package_runtime, "tools_root", lambda: tmp_path)
     try:
         with pytest.raises(ValueError, match="link"):
             package_runtime.main(inputs + ["--output-root", "intermediate/linked/runtime"])

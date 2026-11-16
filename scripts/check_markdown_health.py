@@ -9,8 +9,8 @@ SCRIPT_ROOT = Path(__file__).resolve().parents[1]
 if str(SCRIPT_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPT_ROOT))
 
-from scripts._shared import tools_root
 from rdc_tool.runtime_catalog import catalog_payload
+from rdc_tool.runtime_paths import tools_root
 
 
 RISKY_PATTERNS = (
@@ -80,7 +80,7 @@ CONTRACT_COUNT_RE = re.compile(r"\d+\s+tools contract")
 
 
 def tools_root_path() -> Path:
-    return tools_root(__file__)
+    return tools_root()
 
 
 def iter_markdown_files(root: Path) -> list[Path]:

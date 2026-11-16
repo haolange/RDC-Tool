@@ -426,7 +426,6 @@ def test_ensure_daemon_forwards_owner_pid_to_existing_zero_owner(monkeypatch, tm
 
 def test_dead_owner_exits_live_daemon_process(monkeypatch, tmp_path: Path) -> None:
     import subprocess
-    import time
 
     try:
         from rdc_tool.daemon import server as _daemon_server
@@ -438,7 +437,6 @@ def test_dead_owner_exits_live_daemon_process(monkeypatch, tmp_path: Path) -> No
     state_dir = intermediate / "runtime" / "rdc_tool_cli"
     state_dir.mkdir(parents=True)
     monkeypatch.setenv("RDC_TOOL_INTERMEDIATE_ROOT", str(intermediate))
-    monkeypatch.setenv("RDC_TOOL_ROOT", str(Path(__file__).resolve().parents[1]))
 
     dummy = subprocess.Popen(
         [sys.executable, "-c", "import time; time.sleep(120)"],

@@ -14,14 +14,14 @@ def archive_fixture(root: Path, monkeypatch) -> None:
     runtime = root / "binaries/windows/x64/manifest.runtime.json"
     runtime.parent.mkdir(parents=True)
     runtime.write_text("{}", encoding="utf-8")
-    monkeypatch.setattr(package, "_tools_root", lambda: root)
+    monkeypatch.setattr(package, "tools_root", lambda: root)
     monkeypatch.setattr(package, "_source_revision", lambda root: "a" * 40)
     monkeypatch.setattr(package, "_qualify_source", lambda root: None)
 
 
 @pytest.mark.parametrize("status", ["unavailable", "invalid"])
 def test_formal_package_rejects_unverified_native_before_creating_archive(tmp_path, monkeypatch, status):
-    monkeypatch.setattr(package, "_tools_root", lambda: tmp_path)
+    monkeypatch.setattr(package, "tools_root", lambda: tmp_path)
     monkeypatch.setattr(package, "_source_revision", lambda root: "a" * 40)
     monkeypatch.setattr(package, "native_manifest_status", lambda root: {"status": status})
     with pytest.raises(RuntimeError, match="paired native runtime"):
@@ -31,7 +31,7 @@ def test_formal_package_rejects_unverified_native_before_creating_archive(tmp_pa
 
 def test_source_gate_failure_prevents_packaging(tmp_path, monkeypatch):
     from scripts import release_gate
-    monkeypatch.setattr(package, "_tools_root", lambda: tmp_path)
+    monkeypatch.setattr(package, "tools_root", lambda: tmp_path)
     monkeypatch.setattr(package, "_source_revision", lambda root: "a" * 40)
     monkeypatch.setattr(package, "native_manifest_status", lambda root: {"status": "verified"})
     calls = []
@@ -188,15 +188,10 @@ def test_native_loader_requires_actual_import_and_same_installation(
     assert "PYTHONPATH" not in env and "JAVA_HOME" not in env
 
 
-def test_foreign_runtime_override_cannot_certify_package_loader(tmp_path, monkeypatch):
-    monkeypatch.setenv("RDC_TOOL_RUNTIME_DLL_DIR", "D:/foreign-runtime")
-    monkeypatch.setenv("RDC_TOOL_RENDERDOC_PATH", "D:/foreign-runtime/pymodules")
+def test_foreign_loaded_runtime_cannot_certify_package_loader(tmp_path, monkeypatch):
     native = tmp_path / "binaries/windows/x64"
 
     def foreign(command, cwd, **kwargs):
-        env = kwargs["env"]
-        assert Path(env["RDC_TOOL_RUNTIME_DLL_DIR"]) == native
-        assert Path(env["RDC_TOOL_RENDERDOC_PATH"]) == native / "pymodules"
         return 0, json.dumps({"import_ok": True, "loaded": {
             "configured_paths_match": True,
             "python": {"path": str(native / "python/python.exe")},

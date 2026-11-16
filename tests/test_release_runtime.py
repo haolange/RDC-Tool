@@ -33,7 +33,7 @@ class ReleaseRuntimeTests(unittest.TestCase):
     def test_failure_and_cancellation_both_cleanup_and_restore_environment(self):
         for error in (ValueError("verification failed"), KeyboardInterrupt()):
             with self.subTest(error=type(error)), patch.dict(os.environ, {
-                "RDC_TOOL_INTERMEDIATE_ROOT": "caller-state", "RDC_TOOL_ROOT": "caller-tools",
+                "RDC_TOOL_INTERMEDIATE_ROOT": "caller-state",
             }), patch("scripts.release_runtime.subprocess.run", side_effect=self.result) as run:
                 with self.assertRaises(type(error)):
                     with isolated_release_runtime(Path.cwd()) as state:
@@ -42,7 +42,6 @@ class ReleaseRuntimeTests(unittest.TestCase):
                 self.assertEqual(run.call_count, 2)
                 self.assertFalse(state.exists())
                 self.assertEqual(os.environ["RDC_TOOL_INTERMEDIATE_ROOT"], "caller-state")
-                self.assertEqual(os.environ["RDC_TOOL_ROOT"], "caller-tools")
 
     def test_clear_failure_still_stops_all_daemons_and_preserves_evidence(self):
         def run(cmd, **kwargs):

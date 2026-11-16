@@ -19,8 +19,9 @@ if str(SCRIPT_ROOT) not in sys.path:
 
 from rdc_tool import __version__ as TOOL_VERSION
 from rdc_tool.runtime_identity import native_manifest_status
-from scripts._shared import task_directory, tools_root, write_text
+from scripts._shared import task_directory, write_text
 from rdc_tool.io_utils import sha256_file
+from rdc_tool.runtime_paths import tools_root
 
 
 PACKAGE_PLATFORM = "windows-x64"
@@ -58,10 +59,6 @@ RELEASE_DIRS = {
     "scripts",
     "spec",
 }
-
-
-def _tools_root() -> Path:
-    return tools_root(__file__)
 
 
 def _should_skip(path: Path, root: Path) -> bool:
@@ -294,7 +291,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[release] version mismatch: requested={args.version} package={TOOL_VERSION}")
         return 2
 
-    root = _tools_root().resolve()
+    root = tools_root().resolve()
     if args.runtime_root and not args.candidate_dir:
         raise ValueError("--runtime-root is only valid with --candidate-dir")
     if args.candidate_dir:

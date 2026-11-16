@@ -29,16 +29,20 @@ from rdc_tool.daemon.client import (
 )
 from rdc_tool.daemon.state import load_state, public_view
 from rdc_tool.io_utils import safe_json_text, safe_stream_write
-from rdc_tool.python_runtime import current_python_runtime_details, validate_bundled_python_layout
+from rdc_tool.python_runtime import bundled_python_executable, current_python_runtime_details, validate_bundled_python_layout
 from rdc_tool.runtime_catalog import SOURCE_PATH, catalog_payload, describe_operation, load_tool_catalog
 from rdc_tool.runtime_paths import (
+    HOST_LAYOUTS,
+    UnsupportedHost,
     android_binaries_root,
     artifacts_dir,
     binaries_root,
-    bundled_python_executable,
+    binding_module_path,
     cli_runtime_dir,
     ensure_runtime_dirs,
+    host_layout,
     logs_dir,
+    native_library_path,
     pymodules_dir,
     runtime_root,
     tools_root,
@@ -358,17 +362,18 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     root = tools_root().resolve()
     ensure_runtime_dirs()
 
+    try:
+        layout = host_layout()
+    except UnsupportedHost as exc:
+        _print_json(canonical_error(result_kind="rdc_tool.doctor", code=exc.code, category="capability", message=str(exc),
+                                    details={"host_target": exc.target, "supported_hosts": sorted(HOST_LAYOUTS)}, transport="cli"))
+        return EXIT_RUNTIME_ERR
     dependencies_missing = missing_dependencies()
     python_ok, python_failures, python_details = validate_bundled_python_layout()
 
-    renderdoc_dll = binaries_root() / "renderdoc.dll"
-    renderdoc_json = binaries_root() / "renderdoc.json"
-    renderdoc_pyd = pymodules_dir() / "renderdoc.pyd"
-    renderdoc_failures = [
-        str(path)
-        for path in (renderdoc_dll, renderdoc_json, renderdoc_pyd)
-        if not path.is_file()
-    ]
+    native_library = native_library_path()
+    binding_module = binding_module_path()
+    renderdoc_failures = [str(path) for path in (native_library, binding_module) if not path.is_file()]
 
     android_failures = [str(android_binaries_root() / abi / f"org.renderdoc.renderdoccmd.{abi}.apk")
                         for abi in ("arm32", "arm64")
@@ -388,11 +393,8 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
             transport="cli",
         )
 
-    launcher_paths = {
-        "windows_cmd": str(root / "bin/rdc-tool.cmd"),
-        "posix_shell": str(root / "bin" / "rdc-tool"),
-        "python_cli": str(root / "cli" / "run_cli.py"),
-    }
+    launcher = root / layout.launcher
+    python_cli = root / "cli" / "run_cli.py"
     from rdc_tool.host_tools import host_tools_status, validate_bundled_host_tools
     host_tools = host_tools_status()
     host_tools_ok, host_tool_failures = validate_bundled_host_tools()
@@ -400,8 +402,10 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     spirv_dis = host_tools["spirv_dis"]["path"]
     native_build = native_manifest_status(root)
     loaded_runtime = loaded_runtime_identity(binaries_root(), pymodules_dir())
+    bundled_python = bundled_python_executable()
     details = {
         "product": "rdc-tool",
+        "host_target": host_target(),
         "tools_root": str(root),
         "context_id": context,
         "python": {
@@ -409,7 +413,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
             "bundled": python_details,
             "bundled_python_ok": python_ok,
             "bundled_python_failures": python_failures,
-            "bundled_python_executable": str(bundled_python_executable()),
+            "bundled_python_executable": str(bundled_python) if bundled_python else None,
         },
         "dependencies": {
             "missing": dependencies_missing,
@@ -420,9 +424,8 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
             "loaded_runtime": loaded_runtime,
             "layout_ok": not renderdoc_failures,
             "failures": renderdoc_failures,
-            "renderdoc_dll": str(renderdoc_dll),
-            "renderdoc_json": str(renderdoc_json),
-            "renderdoc_pyd": str(renderdoc_pyd),
+            "native_library": str(native_library),
+            "binding_module": str(binding_module),
         },
         "android_apk_failures": android_failures,
         "host_tools": host_tools,
@@ -455,10 +458,10 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
             "logs_dir": str(logs_dir()),
         },
         "launchers": {
-            **launcher_paths,
-            "windows_cmd_exists": (root / "bin/rdc-tool.cmd").is_file(),
-            "posix_shell_exists": (root / "bin" / "rdc-tool").is_file(),
-            "python_cli_exists": (root / "cli" / "run_cli.py").is_file(),
+            "launcher": str(launcher),
+            "launcher_exists": launcher.is_file(),
+            "python_cli": str(python_cli),
+            "python_cli_exists": python_cli.is_file(),
         },
         "daemon": daemon_status,
     }
@@ -471,9 +474,8 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         and not renderdoc_failures
         and native_build["status"] != "invalid"
         and loaded_runtime["status"] != "mismatch"
-        and (root / "bin/rdc-tool.cmd").is_file()
-        and (root / "bin" / "rdc-tool").is_file()
-        and (root / "cli" / "run_cli.py").is_file()
+        and launcher.is_file()
+        and python_cli.is_file()
     )
     if ok:
         _print_json(canonical_success(result_kind="rdc_tool.doctor", data=details, transport="cli"))

@@ -11,14 +11,13 @@ import subprocess
 import sys
 import threading
 import time
-from pathlib import Path
 from typing import Any, Dict, Optional
 
 from rdc_tool.io_utils import safe_json_text
 from rdc_tool.platform import process
 from rdc_tool.platform.process import SpawnProfile
 from rdc_tool.progress import ProgressEvent, ProgressSink
-from rdc_tool.runtime_paths import binaries_root, pymodules_dir
+from rdc_tool.runtime_paths import binaries_root, child_python_env, pymodules_dir, tools_root
 from rdc_tool.runtime_worker_state import clear_worker_state, save_worker_state
 from rdc_tool.runtime_identity import native_manifest_status
 
@@ -94,7 +93,7 @@ class RuntimeWorkerProcess:
     def _spawn(self) -> None:
         bin_dir = binaries_root().resolve()
         pymod_dir = pymodules_dir().resolve()
-        native = native_manifest_status(bin_dir.parents[2])
+        native = native_manifest_status(tools_root())
         if native["status"] == "invalid":
             raise RuntimeError(f"Native runtime integrity failed before worker startup: {native['reason']}")
         manifest_path = (bin_dir / "manifest.runtime.json").resolve()
@@ -103,20 +102,11 @@ class RuntimeWorkerProcess:
             "pymodules_dir": str(pymod_dir),
             "source_manifest": str(manifest_path),
         }
-        env = dict(os.environ)
+        env = child_python_env(os.environ)
         env["RDC_TOOL_CONTEXT_ID"] = self.context_id
         daemon = process.self_identity()
         env["RDC_TOOL_DAEMON_PID"] = str(daemon.pid)
         env["RDC_TOOL_DAEMON_BIRTH"] = daemon.birth
-        env["RDC_TOOL_RUNTIME_DLL_DIR"] = runtime["binaries_dir"]
-        env["RDC_TOOL_RENDERDOC_PATH"] = runtime["pymodules_dir"]
-        env["RDC_TOOL_WORKER_SOURCE_MANIFEST"] = runtime["source_manifest"]
-
-        tools_root = str(env.get("RDC_TOOL_ROOT", "")).strip()
-        if tools_root:
-            py_path = env.get("PYTHONPATH", "")
-            root_path = str(Path(tools_root).resolve())
-            env["PYTHONPATH"] = root_path + os.pathsep + py_path if py_path else root_path
 
         popen_kwargs: Dict[str, Any] = {
             "stdin": subprocess.PIPE,

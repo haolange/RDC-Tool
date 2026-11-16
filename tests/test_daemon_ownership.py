@@ -61,7 +61,7 @@ def isolated(monkeypatch, tmp_path):
 
 def _spawn(tmp_path, mode, *, popen=subprocess.Popen):
     root = Path(__file__).resolve().parents[1]
-    env = dict(os.environ, RDC_TOOL_ROOT=str(root), RDC_TOOL_INTERMEDIATE_ROOT=str(tmp_path))
+    env = dict(os.environ, RDC_TOOL_INTERMEDIATE_ROOT=str(tmp_path))
     return popen(
         [sys.executable, '-u', '-c', _CHILD, str(root), mode],
         env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,

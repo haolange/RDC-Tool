@@ -22,10 +22,11 @@ from rdc_tool.python_runtime import validate_bundled_python_layout
 from rdc_tool.runtime_catalog import catalog_payload
 from rdc_tool.runtime_identity import native_manifest_status
 from scripts import package_release as release_packager
-from scripts._shared import run_subprocess, tools_root, write_text
+from scripts._shared import run_subprocess, write_text
 from scripts.generate_tool_reference import generate_tool_reference
 from scripts.release_runtime import isolated_release_runtime
 from rdc_tool.io_utils import sha256_file
+from rdc_tool.runtime_paths import tools_root
 
 
 REQUIRED_DIRS = [
@@ -106,10 +107,6 @@ USER_PATH_FORBIDDEN_RULES = (
 class ScanRule:
     pattern: str
     literal: bool = False
-
-
-def _tools_root() -> Path:
-    return tools_root(__file__)
 
 
 def _launcher_env(root: Path | None = None) -> dict[str, str]:
@@ -532,7 +529,7 @@ def _run_gate(argv: list[str] | None = None) -> tuple[list[tuple[str, bool, str]
     )
     args = parser.parse_args(argv)
 
-    root = _tools_root()
+    root = tools_root()
     results: list[tuple[str, bool, str]] = []
     changelog = (root / 'CHANGELOG.md').read_text(encoding='utf-8-sig')
     has_release = f'## {release_packager.TOOL_VERSION}' in changelog
@@ -679,7 +676,7 @@ def _write_report(results: list[tuple[str, bool, str]], report_path: Path) -> in
 def main(argv: list[str] | None = None) -> int:
     checked = None
     try:
-        with isolated_release_runtime(_tools_root()):
+        with isolated_release_runtime(tools_root()):
             checked = _run_gate(argv)
     except Exception as exc:
         if checked is None:

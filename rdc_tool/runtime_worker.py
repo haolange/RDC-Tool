@@ -72,14 +72,18 @@ def main(argv: list[str] | None = None) -> int:
     def loaded_runtime() -> dict[str, Any]:
         return loaded_runtime_identity(binaries_root(), pymodules_dir())
 
+    runtime_dirs = {
+        "binaries_dir": str(binaries_root().resolve()),
+        "pymodules_dir": str(pymodules_dir().resolve()),
+        "source_manifest": str((binaries_root() / "manifest.runtime.json").resolve()),
+    }
+
     _emit(
         {
             "kind": "ready",
             "context_id": context_id,
             "pid": os.getpid(),
-            "binaries_dir": str(os.environ.get("RDC_TOOL_RUNTIME_DLL_DIR") or ""),
-            "pymodules_dir": str(os.environ.get("RDC_TOOL_RENDERDOC_PATH") or ""),
-            "source_manifest": str(os.environ.get("RDC_TOOL_WORKER_SOURCE_MANIFEST") or ""),
+            **runtime_dirs,
             "loaded_runtime": loaded_runtime(),
         }
     )
@@ -144,9 +148,7 @@ def main(argv: list[str] | None = None) -> int:
                                 "result": {
                                     "running": True,
                                     "pid": os.getpid(),
-                                    "binaries_dir": str(os.environ.get("RDC_TOOL_RUNTIME_DLL_DIR") or ""),
-                                    "pymodules_dir": str(os.environ.get("RDC_TOOL_RENDERDOC_PATH") or ""),
-                                    "source_manifest": str(os.environ.get("RDC_TOOL_WORKER_SOURCE_MANIFEST") or ""),
+                                    **runtime_dirs,
                                     "loaded_runtime": loaded_runtime(),
                                 },
                             }

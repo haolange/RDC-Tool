@@ -139,9 +139,8 @@ def _lazy_import_renderdoc() -> Any:
         logger.debug("renderdoc module loaded successfully")
     except ImportError:
         logger.warning(
-            "renderdoc Python module not found. Performance counter "
-            "sampling 将不可用。请确保 module 在 sys.path 中或设置 "
-            "RDC_TOOL_RENDERDOC_PATH。"
+            "renderdoc Python module not found; performance counter sampling is unavailable "
+            "until this installation's RenderDoc runtime is repaired."
         )
         _rd_module = None
 

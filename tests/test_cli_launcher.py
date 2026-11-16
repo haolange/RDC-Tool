@@ -26,7 +26,6 @@ def _cmd_exe() -> str:
 
 def _launcher_env() -> dict[str, str]:
     env = os.environ.copy()
-    env.setdefault("RDC_TOOL_ROOT", str(ROOT))
     env.pop("RDC_TOOL_PYTHON", None)
     return env
 

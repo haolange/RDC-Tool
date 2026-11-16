@@ -50,7 +50,7 @@ def _cleanup(root: Path, state: Path) -> None:
 def isolated_release_runtime(root: Path) -> Iterator[Path]:
     """Never reuse caller state; restore its environment, including on cancellation."""
     state = Path(tempfile.mkdtemp(prefix="rdc-tool-release-runtime-"))
-    keys = {"RDC_TOOL_INTERMEDIATE_ROOT": str(state), "RDC_TOOL_ROOT": str(root)}
+    keys = {"RDC_TOOL_INTERMEDIATE_ROOT": str(state)}
     previous = {key: os.environ.get(key) for key in keys}
     os.environ.update(keys)
     original: BaseException | None = None

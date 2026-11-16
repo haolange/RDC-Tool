@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import importlib
-import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -27,28 +26,6 @@ class RuntimeBootstrapResult:
     loaded_runtime: dict[str, Any] = field(default_factory=dict)
 
 
-def _normalize_path(raw: str) -> Path:
-    return Path(raw).expanduser().resolve()
-
-
-def _resolve_runtime_dirs() -> tuple[Path, Path]:
-    default_bin = binaries_root().resolve()
-    default_pymod = pymodules_dir().resolve()
-
-    env_bin = os.environ.get("RDC_TOOL_RUNTIME_DLL_DIR", "").strip()
-    env_pymod = os.environ.get("RDC_TOOL_RENDERDOC_PATH", "").strip()
-
-    bin_dir = _normalize_path(env_bin) if env_bin else default_bin
-    pymod_dir = _normalize_path(env_pymod) if env_pymod else default_pymod
-
-    if env_bin and not env_pymod:
-        pymod_dir = (bin_dir / "pymodules").resolve()
-    elif env_pymod and not env_bin and pymod_dir.name.lower() == "pymodules":
-        bin_dir = pymod_dir.parent.resolve()
-
-    return bin_dir, pymod_dir
-
-
 def _probe_renderdoc_import(report: RuntimeBootstrapResult) -> None:
     try:
         importlib.invalidate_caches()
@@ -67,14 +44,11 @@ def _probe_renderdoc_import(report: RuntimeBootstrapResult) -> None:
 def bootstrap_renderdoc_runtime(*, probe_import: bool = False) -> RuntimeBootstrapResult:
     """Make the configured RenderDoc native library and binding importable."""
 
-    bin_dir, pymod_dir = _resolve_runtime_dirs()
+    bin_dir, pymod_dir = binaries_root().resolve(), pymodules_dir().resolve()
     report = RuntimeBootstrapResult(
         binaries_dir=bin_dir,
         pymodules_dir=pymod_dir,
     )
-
-    os.environ["RDC_TOOL_RUNTIME_DLL_DIR"] = str(bin_dir)
-    os.environ["RDC_TOOL_RENDERDOC_PATH"] = str(pymod_dir)
 
     pymod_text = str(pymod_dir)
     if pymod_text not in sys.path:

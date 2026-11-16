@@ -209,7 +209,7 @@ else:
 
 def _spawn(tmp_path, mode):
     root = Path(__file__).resolve().parents[1]
-    env = dict(os.environ, RDC_TOOL_INTERMEDIATE_ROOT=str(tmp_path), RDC_TOOL_ROOT=str(root))
+    env = dict(os.environ, RDC_TOOL_INTERMEDIATE_ROOT=str(tmp_path))
     state = tmp_path / 'runtime' / 'rdc_tool_cli'
     return subprocess.Popen([sys.executable, '-u', '-c', _CHILD, str(root), str(state), mode, str(os.getpid())],
                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
