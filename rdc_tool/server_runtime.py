@@ -7048,9 +7048,9 @@ async def _dispatch_session(action: str, args: Dict[str, Any]) -> str:
         )
         active_operation: Dict[str, Any] = {}
         try:
-            from rdc_tool.daemon.client import load_daemon_state
+            from rdc_tool.daemon.state import load_state
 
-            daemon_state = load_daemon_state(context=context_id)
+            daemon_state = load_state(context=context_id)
             active_operation = dict(daemon_state.get("active_operation") or {})
         except Exception:
             active_operation = {}

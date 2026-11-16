@@ -19,7 +19,7 @@ from rdc_tool.platform import locks
 
 @pytest.fixture(autouse=True)
 def lock_dir(monkeypatch, tmp_path):
-    monkeypatch.setattr(client, 'STATE_DIR', tmp_path / 'locks')
+    monkeypatch.setenv('RDC_TOOL_INTERMEDIATE_ROOT', str(tmp_path))
 
 
 class FakeBackend:
@@ -92,7 +92,7 @@ def test_thread_mutex_and_file_retry_share_one_deadline(monkeypatch, fake_clock)
             return True
         def release(self):
             fake_clock.append('released')
-    path = client._daemon_state_path('deadline').with_suffix('.start.lock')
+    path = client.state_path('deadline').with_suffix('.start.lock')
     key = os.path.normcase(str(path.resolve()))
     monkeypatch.setattr(locks, '_MUTEXES', {key: Mutex()})
     monkeypatch.setattr(locks, '_os', FakeBackend(*([False] * 100)))
@@ -178,7 +178,6 @@ from pathlib import Path
 sys.path.insert(0,sys.argv[1])
 from rdc_tool.daemon import client
 from rdc_tool.platform import process
-client.STATE_DIR=Path(sys.argv[2])
 mode=sys.argv[3]
 if mode=='hold':
  with client._locked_daemon_start('shared'):
@@ -282,7 +281,6 @@ def test_process_owner_exit_releases_lock(tmp_path):
 
 def test_slow_real_daemon_is_reused_across_processes(monkeypatch, tmp_path):
     monkeypatch.setenv('RDC_TOOL_INTERMEDIATE_ROOT', str(tmp_path))
-    monkeypatch.setattr(client, 'STATE_DIR', tmp_path / 'runtime' / 'rdc_tool_cli')
     owner = _spawn(tmp_path, 'slow')
     waiter = None
     try:
@@ -310,7 +308,6 @@ def test_slow_real_daemon_is_reused_across_processes(monkeypatch, tmp_path):
 def test_process_default_deadline_preserves_slow_live_owner(monkeypatch, tmp_path):
     from rdc_tool.platform import process
     monkeypatch.setenv('RDC_TOOL_INTERMEDIATE_ROOT', str(tmp_path))
-    monkeypatch.setattr(client, 'STATE_DIR', tmp_path / 'runtime' / 'rdc_tool_cli')
     owner = _spawn(tmp_path, 'slow')
     waiter = None
     try:
@@ -320,7 +317,7 @@ def test_process_default_deadline_preserves_slow_live_owner(monkeypatch, tmp_pat
         deadline = time.monotonic() + 10
         state = {}
         while not state and time.monotonic() < deadline:
-            state = client.load_daemon_state('shared')
+            state = client.load_state('shared')
             time.sleep(.05)
         assert state
         birth = process.identify(state['pid']).birth
@@ -335,7 +332,7 @@ def test_process_default_deadline_preserves_slow_live_owner(monkeypatch, tmp_pat
         response = client.daemon_request('status', params={}, state=state, context='shared', timeout=2)
         assert response['ok']
         current = response['result']['state']
-        assert (current['pid'], current['pipe_name']) == (state['pid'], state['pipe_name'])
+        assert (current['pid'], current['endpoint']) == (state['pid'], state['endpoint'])
         assert process.identify(current['pid']).birth == birth
         owner.stdin.write('release\n')
         owner.stdin.flush()

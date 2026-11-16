@@ -1,4 +1,4 @@
-"""RDC-Tool daemon server using Windows named pipes."""
+"""Context daemon: owns one context, its runtime worker and its authenticated endpoint."""
 
 from __future__ import annotations
 
@@ -6,28 +6,23 @@ import argparse
 import logging
 import os
 import signal
+import sys
 import threading
-import time
-from datetime import datetime, timezone
-from multiprocessing.connection import Listener
-from pathlib import Path
+from multiprocessing import AuthenticationError
 from typing import Any, Dict
 
 from rdc_tool.context_snapshot import clear_context_snapshot
-from rdc_tool.daemon.client import (
-    DEFAULT_IDLE_TIMEOUT_S,
-    DEFAULT_LEASE_TIMEOUT_S,
-    _context_has_unreleased_resources,
-    _owner_process,
-    _process_identity,
-    owner_lost_should_stop,
-    save_daemon_state,
+from rdc_tool.context_snapshot import normalize_context_id
+from rdc_tool.daemon.client import context_has_unreleased_resources, owner_lost_should_stop
+from rdc_tool.daemon.state import (
+    DEFAULT_IDLE_TIMEOUT_S, DEFAULT_LEASE_TIMEOUT_S, epoch_ms, iso_to_ms, normalize_timeout, owner_process,
+    process_identity, public_view, save_state, state_path, utc_now_iso,
 )
 from rdc_tool.daemon.ownership import OwnerLease
 from rdc_tool.daemon.worker import RuntimeWorkerProcess
-from rdc_tool.platform import process
+from rdc_tool.platform import ipc, process
+from rdc_tool.platform.ipc import Endpoint
 from rdc_tool.progress import ProgressEvent, ProgressSink
-from rdc_tool.runtime_paths import cli_runtime_dir
 from rdc_tool.runtime_state import clear_context_state, load_context_state, save_context_state
 from rdc_tool.runtime_worker_state import load_worker_state
 from rdc_tool.timeout_policy import worker_exec_timeout_s
@@ -36,48 +31,6 @@ logger = logging.getLogger("rdc_tool.daemon")
 # Do not release an owner's kernel lock while this process is still alive,
 # including listener/worker teardown and interpreter shutdown.
 _PROCESS_OWNER_LEASES: list[OwnerLease] = []
-
-
-def _now_ms() -> int:
-    return int(time.time() * 1000)
-
-
-def _utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _iso_to_ms(value: Any) -> int:
-    if value is None:
-        return 0
-    if isinstance(value, (int, float)):
-        return int(float(value))
-    text = str(value).strip()
-    if not text:
-        return 0
-    try:
-        return int(float(text))
-    except ValueError:
-        pass
-    try:
-        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-    except ValueError:
-        return 0
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return int(parsed.timestamp() * 1000)
-
-
-def _normalize_timeout(value: Any, *, default: int) -> int:
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        return int(default)
-    return parsed if parsed > 0 else int(default)
-
-
-def _normalize_context(context: str) -> str:
-    ctx = str(context or "default").strip()
-    return ctx if ctx and ctx.lower() != "default" else "default"
 
 
 def _resolved_birth(pid: int) -> str:
@@ -90,47 +43,36 @@ def _resolved_birth(pid: int) -> str:
         return ""
 
 
-def _daemon_state_path(context: str) -> Path:
-    ctx = _normalize_context(context)
-    state_dir = cli_runtime_dir()
-    if ctx == "default":
-        return state_dir / "daemon_state.json"
-    safe_ctx = "".join(ch if ch.isalnum() or ch in ("-", "_", ".") else "_" for ch in ctx)
-    return state_dir / f"daemon_state_{safe_ctx}.json"
-
-
 class DaemonRuntime(ProgressSink):
     def __init__(
         self,
         *,
-        pipe_name: str,
+        endpoint: Endpoint,
         token: str,
         daemon_context: str = "default",
         owner_pid: int = 0,
         lease_timeout_seconds: int = DEFAULT_LEASE_TIMEOUT_S,
         idle_timeout_seconds: int = DEFAULT_IDLE_TIMEOUT_S,
     ) -> None:
-        self.pipe_name = pipe_name
+        self.endpoint = endpoint
         self.token = token
-        self.address = rf"\\.\pipe\{pipe_name}"
-        self.daemon_context = _normalize_context(daemon_context)
+        self.daemon_context = normalize_context_id(daemon_context)
         self.owner_pid = int(owner_pid) if owner_pid else 0
         self.owner_birth = _resolved_birth(self.owner_pid)
-        self.lease_timeout_seconds = _normalize_timeout(
+        self.lease_timeout_seconds = normalize_timeout(
             lease_timeout_seconds,
             default=DEFAULT_LEASE_TIMEOUT_S,
         )
-        self.idle_timeout_seconds = _normalize_timeout(
+        self.idle_timeout_seconds = normalize_timeout(
             idle_timeout_seconds,
             default=DEFAULT_IDLE_TIMEOUT_S,
         )
         self.running = True
         self._serve_started = False
-        now_iso = _utc_now_iso()
+        now_iso = utc_now_iso()
         self.state: Dict[str, Any] = {
             "context_id": self.daemon_context,
-            "daemon_context": self.daemon_context,
-            "pipe_name": pipe_name,
+            "endpoint": endpoint.address,
             "token": token,
             "pid": int(os.getpid()),
             "birth": process.self_identity().birth,
@@ -168,22 +110,17 @@ class DaemonRuntime(ProgressSink):
         self._worker: RuntimeWorkerProcess | None = None
         self._owner_lease: OwnerLease | None = None
 
-    def _auth(self, request: Dict[str, Any]) -> tuple[bool, Dict[str, Any]]:
-        if str(request.get("token", "")) != self.token:
-            return False, {"ok": False, "error": {"code": "unauthorized", "message": "invalid daemon token"}}
-        return True, {}
-
     def _persist_state(self) -> None:
         with self._state_lock:
             payload = dict(self.state)
             payload["attached_clients"] = [dict(item) for item in payload.get("attached_clients", [])]
         if self._owner_lease is None:
             raise RuntimeError("Daemon has not acquired its context owner lock")
-        save_daemon_state(payload, context=self.daemon_context, lease=self._owner_lease)
+        save_state(payload, context=self.daemon_context, lease=self._owner_lease)
 
     def _touch_activity(self) -> None:
         with self._state_lock:
-            self.state["last_activity_at"] = _utc_now_iso()
+            self.state["last_activity_at"] = utc_now_iso()
 
     def _prune_clients_locked(self, now_ms: int) -> None:
         current = self.state.get("attached_clients")
@@ -192,14 +129,14 @@ class DaemonRuntime(ProgressSink):
         for item in items:
             if not isinstance(item, dict):
                 continue
-            client = _process_identity(item.get("pid"), item.get("birth"))
+            client = process_identity(item.get("pid"), item.get("birth"))
             if client.pid > 0 and not process.is_alive(client):
                 continue
-            lease_ms = _normalize_timeout(
+            lease_ms = normalize_timeout(
                 item.get("lease_timeout_seconds"),
                 default=self.lease_timeout_seconds,
             ) * 1000
-            last_heartbeat_ms = _iso_to_ms(item.get("last_heartbeat_at"))
+            last_heartbeat_ms = iso_to_ms(item.get("last_heartbeat_at"))
             if last_heartbeat_ms > 0 and (now_ms - last_heartbeat_ms) > lease_ms:
                 continue
             kept.append(
@@ -208,9 +145,9 @@ class DaemonRuntime(ProgressSink):
                     "client_type": str(item.get("client_type") or "unknown").strip() or "unknown",
                     "pid": client.pid,
                     "birth": client.birth,
-                    "attached_at": str(item.get("attached_at") or _utc_now_iso()),
-                    "last_heartbeat_at": str(item.get("last_heartbeat_at") or _utc_now_iso()),
-                    "lease_timeout_seconds": _normalize_timeout(
+                    "attached_at": str(item.get("attached_at") or utc_now_iso()),
+                    "last_heartbeat_at": str(item.get("last_heartbeat_at") or utc_now_iso()),
+                    "lease_timeout_seconds": normalize_timeout(
                         item.get("lease_timeout_seconds"),
                         default=self.lease_timeout_seconds,
                     ),
@@ -220,7 +157,7 @@ class DaemonRuntime(ProgressSink):
 
     def _snapshot_state(self) -> Dict[str, Any]:
         with self._state_lock:
-            self._prune_clients_locked(_now_ms())
+            self._prune_clients_locked(epoch_ms())
             self._refresh_state_from_runtime_locked()
             payload = dict(self.state)
             payload["attached_clients"] = [dict(item) for item in payload.get("attached_clients", [])]
@@ -230,7 +167,7 @@ class DaemonRuntime(ProgressSink):
     def _status_payload(self) -> Dict[str, Any]:
         state = self._snapshot_state()
         self._persist_state()
-        return {"ok": True, "result": {"running": self.running, "state": state}}
+        return {"ok": True, "result": {"running": self.running, "state": public_view(state)}}
 
     def _stop(self) -> None:
         if self._worker is not None:
@@ -284,8 +221,8 @@ class DaemonRuntime(ProgressSink):
             "message": str(message),
             "progress_pct": progress_pct,
             "details": dict(details or {}),
-            "started_at_ms": started_at_ms or _now_ms(),
-            "updated_at_ms": _now_ms(),
+            "started_at_ms": started_at_ms or epoch_ms(),
+            "updated_at_ms": epoch_ms(),
         }
 
     def _clear_active_operation_locked(self) -> None:
@@ -301,7 +238,7 @@ class DaemonRuntime(ProgressSink):
                 progress_pct=event.progress_pct,
                 details=event.details,
             )
-            self.state["last_activity_at"] = _utc_now_iso()
+            self.state["last_activity_at"] = utc_now_iso()
         self._persist_state()
 
     def _sync_context_snapshot_locked(self, params: Dict[str, Any]) -> None:
@@ -326,7 +263,7 @@ class DaemonRuntime(ProgressSink):
             worker = dict(self._worker.snapshot())
         else:
             worker = dict(load_worker_state(self.daemon_context) or {})
-            identity = _process_identity(worker.get("pid"), worker.get("birth"))
+            identity = process_identity(worker.get("pid"), worker.get("birth"))
             worker["running"] = bool(worker.get("running")) and identity.pid > 0 and process.is_alive(identity)
             if not worker["running"]:
                 worker["pid"] = 0
@@ -411,7 +348,7 @@ class DaemonRuntime(ProgressSink):
         client_id = str(params.get("client_id") or "").strip()
         if not client_id:
             return {"ok": False, "error": {"code": "bad_request", "message": "client_id is required"}}
-        now_iso = _utc_now_iso()
+        now_iso = utc_now_iso()
         client = {
             "client_id": client_id,
             "client_type": str(params.get("client_type") or "unknown").strip() or "unknown",
@@ -419,13 +356,13 @@ class DaemonRuntime(ProgressSink):
             "birth": _resolved_birth(int(params.get("pid") or 0)),
             "attached_at": now_iso,
             "last_heartbeat_at": now_iso,
-            "lease_timeout_seconds": _normalize_timeout(
+            "lease_timeout_seconds": normalize_timeout(
                 params.get("lease_timeout_seconds"),
                 default=self.lease_timeout_seconds,
             ),
         }
         with self._state_lock:
-            self._prune_clients_locked(_now_ms())
+            self._prune_clients_locked(epoch_ms())
             clients = [item for item in self.state.get("attached_clients", []) if item.get("client_id") != client_id]
             clients.append(client)
             self.state["attached_clients"] = clients
@@ -445,7 +382,7 @@ class DaemonRuntime(ProgressSink):
             self.owner_birth = _resolved_birth(owner_pid)
             self.state["owner_pid"] = owner_pid
             self.state["owner_birth"] = self.owner_birth
-            self.state["last_activity_at"] = _utc_now_iso()
+            self.state["last_activity_at"] = utc_now_iso()
         self._persist_state()
         return self._status_payload()
 
@@ -453,10 +390,10 @@ class DaemonRuntime(ProgressSink):
         client_id = str(params.get("client_id") or "").strip()
         if not client_id:
             return {"ok": False, "error": {"code": "bad_request", "message": "client_id is required"}}
-        now_iso = _utc_now_iso()
+        now_iso = utc_now_iso()
         found = False
         with self._state_lock:
-            self._prune_clients_locked(_now_ms())
+            self._prune_clients_locked(epoch_ms())
             clients = []
             for item in self.state.get("attached_clients", []):
                 if item.get("client_id") == client_id:
@@ -483,7 +420,7 @@ class DaemonRuntime(ProgressSink):
         with self._state_lock:
             clients = [item for item in self.state.get("attached_clients", []) if item.get("client_id") != client_id]
             self.state["attached_clients"] = clients
-            self.state["last_activity_at"] = _utc_now_iso()
+            self.state["last_activity_at"] = utc_now_iso()
         self._persist_state()
         return self._status_payload()
 
@@ -491,7 +428,7 @@ class DaemonRuntime(ProgressSink):
         with self._exec_lock:
             with self._state_lock:
                 self.state["active_request_count"] = int(self.state.get("active_request_count") or 0) + 1
-                self.state["last_activity_at"] = _utc_now_iso()
+                self.state["last_activity_at"] = utc_now_iso()
                 self._set_active_operation_locked(
                     operation=operation,
                     stage="starting",
@@ -526,14 +463,14 @@ class DaemonRuntime(ProgressSink):
                         int(self.state.get("active_request_count") or 0) - 1,
                     )
                     self._clear_active_operation_locked()
-                    self.state["last_activity_at"] = _utc_now_iso()
+                    self.state["last_activity_at"] = utc_now_iso()
                 self._persist_state()
 
     def _run_clear_context(self) -> Dict[str, Any]:
         with self._exec_lock:
             with self._state_lock:
                 self.state["active_request_count"] = int(self.state.get("active_request_count") or 0) + 1
-                self.state["last_activity_at"] = _utc_now_iso()
+                self.state["last_activity_at"] = utc_now_iso()
                 self._set_active_operation_locked(
                     operation="rd.core.shutdown",
                     stage="starting",
@@ -563,15 +500,15 @@ class DaemonRuntime(ProgressSink):
                         int(self.state.get("active_request_count") or 0) - 1,
                     )
                     self._clear_active_operation_locked()
-                    self.state["last_activity_at"] = _utc_now_iso()
+                    self.state["last_activity_at"] = utc_now_iso()
                 self._persist_state()
-            return {"ok": True, "result": {"released": released, "state": self._snapshot_state()}}
+            return {"ok": True, "result": {"released": released, "state": public_view(self._snapshot_state())}}
 
     def _watch_lifecycle(self) -> None:
         while self.running:
             if self._stop_event.wait(1.0):
                 break
-            now_ms = _now_ms()
+            now_ms = epoch_ms()
             should_stop = False
             reason = ""
             try:
@@ -580,8 +517,8 @@ class DaemonRuntime(ProgressSink):
                     self.state["pid"] = int(os.getpid())
                     attached = list(self.state.get("attached_clients", []))
                     active_request_count = int(self.state.get("active_request_count") or 0)
-                    last_activity_ms = _iso_to_ms(self.state.get("last_activity_at"))
-                    owner = _owner_process(self.state)
+                    last_activity_ms = iso_to_ms(self.state.get("last_activity_at"))
+                    owner = owner_process(self.state)
                     owner_running = process.is_alive(owner) if owner.pid > 0 else True
                     if owner_lost_should_stop(
                         owner_pid=owner.pid,
@@ -596,7 +533,7 @@ class DaemonRuntime(ProgressSink):
                     if not should_stop and not attached and active_request_count == 0:
                         idle_ms = self.idle_timeout_seconds * 1000
                         if last_activity_ms > 0 and (now_ms - last_activity_ms) >= idle_ms \
-                                and not _context_has_unreleased_resources(self.daemon_context):
+                                and not context_has_unreleased_resources(self.daemon_context):
                             should_stop = True
                             reason = f"idle timeout exceeded ({self.idle_timeout_seconds}s)"
                 self._persist_state()
@@ -611,10 +548,6 @@ class DaemonRuntime(ProgressSink):
     def handle_request(self, request: Dict[str, Any]) -> Dict[str, Any]:
         if not isinstance(request, dict):
             return {"ok": False, "error": {"code": "bad_request", "message": "request must be an object"}}
-        authorized, auth_error = self._auth(request)
-        if not authorized:
-            return auth_error
-
         method = str(request.get("method") or "").strip().lower()
         logger.info("daemon.request method=%s", method)
         params = request.get("params")
@@ -631,7 +564,7 @@ class DaemonRuntime(ProgressSink):
         if method == "shutdown":
             self._touch_activity()
             self._stop()
-            return {"ok": True, "result": {"stopping": True, "state": self._snapshot_state()}}
+            return {"ok": True, "result": {"stopping": True, "state": public_view(self._snapshot_state())}}
         if method == "claim_owner":
             return self._handle_claim_owner(params)
         if method == "attach_client":
@@ -643,13 +576,13 @@ class DaemonRuntime(ProgressSink):
         if method == "set_state":
             with self._state_lock:
                 self._sync_context_snapshot_locked(dict(params))
-                self.state["last_activity_at"] = _utc_now_iso()
+                self.state["last_activity_at"] = utc_now_iso()
             self._persist_state()
             return self._status_payload()
         if method == "get_state":
             self._touch_activity()
             self._persist_state()
-            return {"ok": True, "result": {"state": self._snapshot_state()}}
+            return {"ok": True, "result": {"state": public_view(self._snapshot_state())}}
         if method == "clear_context":
             return self._run_clear_context()
         if method == "exec":
@@ -694,11 +627,11 @@ class DaemonRuntime(ProgressSink):
             conn.close()
 
     def serve_forever(self) -> int:
-        self._owner_lease = OwnerLease(_daemon_state_path(self.daemon_context), self.daemon_context)
+        self._owner_lease = OwnerLease(state_path(self.daemon_context), self.daemon_context)
         _PROCESS_OWNER_LEASES.append(self._owner_lease)
-        self._listener = Listener(address=self.address, family="AF_PIPE")
+        self._listener = ipc.listen(self.endpoint, authkey=self.token.encode("utf-8"))
         self._serve_started = True
-        logger.info("daemon listening on %s", self.address)
+        logger.info("daemon listening on %s", self.endpoint.address)
         self._persist_state()
         try:
             threading.Thread(
@@ -708,13 +641,17 @@ class DaemonRuntime(ProgressSink):
             ).start()
             while self.running:
                 try:
+                    # The HMAC challenge runs here, before any request is unpickled.
                     conn = self._listener.accept()
-                except Exception:
-                    break
+                except (AuthenticationError, EOFError, OSError):
+                    if not self.running:
+                        break
+                    logger.warning("daemon context=%s rejected a connection", self.daemon_context)
+                    continue
                 threading.Thread(
                     target=self._serve_connection,
                     args=(conn,),
-                    name=f"rdc-tool-daemon-conn-{_now_ms()}",
+                    name=f"rdc-tool-daemon-conn-{epoch_ms()}",
                     daemon=True,
                 ).start()
         finally:
@@ -728,9 +665,8 @@ class DaemonRuntime(ProgressSink):
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="RDC-Tool named-pipe daemon")
-    parser.add_argument("--pipe-name", required=True, help="Named pipe suffix (without \\\\.\\pipe\\)")
-    parser.add_argument("--token", required=True, help="Authentication token")
+    parser = argparse.ArgumentParser(description="RDC-Tool context daemon")
+    parser.add_argument("--endpoint", required=True, help="IPC endpoint address created by the client")
     parser.add_argument("--log-level", default="INFO")
     parser.add_argument("--daemon-context", default="default")
     parser.add_argument("--owner-pid", type=int, default=0)
@@ -743,9 +679,13 @@ def main() -> None:
         format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
     )
 
+    # The client writes the IPC key to stdin so it never appears in argv.
+    token = sys.stdin.readline().strip()
+    if not token:
+        raise SystemExit("daemon IPC key was not provided on stdin")
     daemon = DaemonRuntime(
-        pipe_name=str(args.pipe_name),
-        token=str(args.token),
+        endpoint=Endpoint(str(args.endpoint)),
+        token=token,
         daemon_context=str(args.daemon_context),
         owner_pid=int(args.owner_pid),
         lease_timeout_seconds=int(args.lease_timeout_seconds),

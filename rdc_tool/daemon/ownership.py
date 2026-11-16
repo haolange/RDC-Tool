@@ -5,7 +5,6 @@ from __future__ import annotations
 import time
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
-from typing import Any
 
 from rdc_tool.platform.locks import HeldLock, LockTimeout, path_lock
 
@@ -71,7 +70,3 @@ def locked_publication(path: Path, context: str):
         except LockTimeout as exc:
             raise DaemonOwnerUnavailable(context, path, "state_publication_busy") from exc
         yield
-
-
-def owner_identity(state: dict[str, Any]) -> tuple[int, str, str]:
-    return int(state.get("pid") or 0), str(state.get("pipe_name") or ""), str(state.get("token") or "")

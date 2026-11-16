@@ -24,9 +24,9 @@ from rdc_tool.daemon.client import (
     detach_client,
     ensure_daemon,
     heartbeat_client,
-    load_daemon_state,
     stop_daemon,
 )
+from rdc_tool.daemon.state import load_state, public_view
 from rdc_tool.io_utils import safe_json_text, safe_stream_write
 from rdc_tool.python_runtime import current_python_runtime_details, validate_bundled_python_layout
 from rdc_tool.runtime_catalog import load_tool_catalog, tool_catalog_path, catalog_payload, describe_operation
@@ -256,25 +256,25 @@ def _daemon_exec(
 
 
 def _daemon_status_payload(context: str) -> Dict[str, Any]:
-    state = load_daemon_state(context=context)
+    state = load_state(context=context)
     if not state:
         cleanup_stale_daemon_states(context=context)
-        state = load_daemon_state(context=context)
+        state = load_state(context=context)
     if not state:
         return canonical_success(
             result_kind="rdc_tool.daemon.status",
-            data={"running": False, "state": {"context_id": context, "daemon_context": context}},
+            data={"running": False, "state": {"context_id": context}},
             transport="cli",
         )
     try:
         resp = daemon_request("status", params={}, context=context, state=state)
     except Exception as exc:
         cleaned = cleanup_stale_daemon_states(context=context)
-        refreshed = load_daemon_state(context=context)
+        refreshed = load_state(context=context)
         if not refreshed:
             return canonical_success(
                 result_kind="rdc_tool.daemon.status",
-                data={"running": False, "state": {"context_id": context, "daemon_context": context}, "cleaned": cleaned},
+                data={"running": False, "state": {"context_id": context}, "cleaned": cleaned},
                 transport="cli",
             )
         return canonical_error(
@@ -283,7 +283,7 @@ def _daemon_status_payload(context: str) -> Dict[str, Any]:
             category=str(getattr(exc, "category", "") or "runtime"),
             message="daemon status failed",
             details={
-                "state": refreshed,
+                "state": public_view(refreshed),
                 "cleaned": cleaned,
                 **(getattr(exc, "details", {}) if isinstance(getattr(exc, "details", {}), dict) else {}),
             },
@@ -294,7 +294,7 @@ def _daemon_status_payload(context: str) -> Dict[str, Any]:
     daemon_state = result.get("state") if isinstance(result, dict) else {}
     return canonical_success(
         result_kind="rdc_tool.daemon.status",
-        data={"running": running, "state": daemon_state if isinstance(daemon_state, dict) else state},
+        data={"running": running, "state": public_view(daemon_state if isinstance(daemon_state, dict) else state)},
         transport="cli",
     )
 
@@ -1429,8 +1429,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_daemon = sub.add_parser("daemon", help="Daemon lifecycle")
     s_daemon = p_daemon.add_subparsers(dest="daemon_cmd", required=True)
-    p_daemon_start = s_daemon.add_parser("start")
-    p_daemon_start.add_argument("--pipe-name", default=None)
+    s_daemon.add_parser("start")
     s_daemon.add_parser("stop")
     s_daemon.add_parser("status")
     p_daemon_attach = s_daemon.add_parser("attach", help=argparse.SUPPRESS)
@@ -1649,12 +1648,11 @@ async def _main_async(args: argparse.Namespace) -> int:
     if args.command == "daemon":
         if args.daemon_cmd == "start":
             ok, message, state = ensure_daemon(
-                pipe_name=args.pipe_name,
                 context=ctx,
                 owner_pid=_cli_owner_pid,
             )
             owner_pid = int((state or {}).get("owner_pid") or _cli_owner_pid or 0)
-            payload = canonical_success(result_kind="rdc_tool.daemon.start", data={"message": message, "state": state, "context_id": ctx, "owner_pid": owner_pid}, transport="cli") if ok else canonical_error(result_kind="rdc_tool.daemon.start", code="runtime_error", category="runtime", message=message, transport="cli")
+            payload = canonical_success(result_kind="rdc_tool.daemon.start", data={"message": message, "state": public_view(state or {}), "context_id": ctx, "owner_pid": owner_pid}, transport="cli") if ok else canonical_error(result_kind="rdc_tool.daemon.start", code="runtime_error", category="runtime", message=message, transport="cli")
             _print_json(payload)
             return EXIT_OK if ok else EXIT_RUNTIME_ERR
         if args.daemon_cmd == "stop":
@@ -1675,7 +1673,7 @@ async def _main_async(args: argparse.Namespace) -> int:
                 lease_timeout_seconds=int(args.lease_timeout_seconds or 120),
                 owner_pid=_cli_owner_pid,
             )
-            _print_json(canonical_success(result_kind="rdc_tool.daemon.attach_client", data={"message": message, "state": state}, transport="cli") if ok else canonical_error(result_kind="rdc_tool.daemon.attach_client", code="runtime_error", category="runtime", message=message, details={"state": state}, transport="cli"))
+            _print_json(canonical_success(result_kind="rdc_tool.daemon.attach_client", data={"message": message, "state": public_view(state)}, transport="cli") if ok else canonical_error(result_kind="rdc_tool.daemon.attach_client", code="runtime_error", category="runtime", message=message, details={"state": public_view(state)}, transport="cli"))
             return EXIT_OK if ok else EXIT_RUNTIME_ERR
         if args.daemon_cmd == "heartbeat":
             ok, message, state = heartbeat_client(
@@ -1683,14 +1681,14 @@ async def _main_async(args: argparse.Namespace) -> int:
                 client_id=str(args.client_id),
                 pid=int(args.pid or 0),
             )
-            _print_json(canonical_success(result_kind="rdc_tool.daemon.heartbeat", data={"message": message, "state": state}, transport="cli") if ok else canonical_error(result_kind="rdc_tool.daemon.heartbeat", code="runtime_error", category="runtime", message=message, details={"state": state}, transport="cli"))
+            _print_json(canonical_success(result_kind="rdc_tool.daemon.heartbeat", data={"message": message, "state": public_view(state)}, transport="cli") if ok else canonical_error(result_kind="rdc_tool.daemon.heartbeat", code="runtime_error", category="runtime", message=message, details={"state": public_view(state)}, transport="cli"))
             return EXIT_OK if ok else EXIT_RUNTIME_ERR
         if args.daemon_cmd == "detach":
             ok, message, state = detach_client(
                 context=ctx,
                 client_id=str(args.client_id),
             )
-            _print_json(canonical_success(result_kind="rdc_tool.daemon.detach_client", data={"message": message, "state": state}, transport="cli") if ok else canonical_error(result_kind="rdc_tool.daemon.detach_client", code="runtime_error", category="runtime", message=message, details={"state": state}, transport="cli"))
+            _print_json(canonical_success(result_kind="rdc_tool.daemon.detach_client", data={"message": message, "state": public_view(state)}, transport="cli") if ok else canonical_error(result_kind="rdc_tool.daemon.detach_client", code="runtime_error", category="runtime", message=message, details={"state": public_view(state)}, transport="cli"))
             return EXIT_OK if ok else EXIT_RUNTIME_ERR
         if args.daemon_cmd == "cleanup":
             cleaned = cleanup_stale_daemon_states()
@@ -1706,6 +1704,9 @@ async def _main_async(args: argparse.Namespace) -> int:
             return _cmd_context_list(args)
         if args.context_cmd == "clear":
             ok, message, details = clear_context(context=ctx)
+            details = dict(details) if isinstance(details, dict) else {}
+            if isinstance(details.get("state"), dict):
+                details["state"] = public_view(details["state"])
             if not ok:
                 _print_json(
                     canonical_error(

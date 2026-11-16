@@ -19,7 +19,7 @@ def _cleanup(root: Path, state: Path) -> None:
     contexts: set[str] = set()
     for file in (state / "runtime/rdc_tool_cli").glob("daemon_state*.json"):
         payload = json.loads(file.read_text(encoding="utf-8"))
-        context = payload.get("context_id") or payload.get("daemon_context")
+        context = payload.get("context_id")
         if not isinstance(context, str) or not context:
             raise RuntimeError(f"Invalid verification daemon state: {file}")
         contexts.add(context)
