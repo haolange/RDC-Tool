@@ -300,8 +300,10 @@ def test_slow_real_daemon_is_reused_across_processes(monkeypatch, tmp_path):
         waiter.wait(timeout=5)
     finally:
         _close(waiter, owner)
-        assert client.clear_context('shared')[0]
-        assert client.stop_daemon('shared')[0]
+        cleared = client.clear_context('shared')
+        assert cleared[0], cleared
+        stopped, stopped_message = client.stop_daemon('shared')
+        assert stopped, stopped_message
 
 
 def test_process_default_deadline_preserves_slow_live_owner(monkeypatch, tmp_path):
@@ -341,8 +343,10 @@ def test_process_default_deadline_preserves_slow_live_owner(monkeypatch, tmp_pat
         waiter.wait(timeout=5)
     finally:
         _close(waiter, owner)
-        assert client.clear_context('shared')[0]
-        assert client.stop_daemon('shared')[0]
+        cleared = client.clear_context('shared')
+        assert cleared[0], cleared
+        stopped, stopped_message = client.stop_daemon('shared')
+        assert stopped, stopped_message
 
 
 def test_mutex_registry_wait_also_uses_acquisition_deadline(monkeypatch):
