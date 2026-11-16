@@ -28,7 +28,7 @@ MONITOR_DEFAULTTONEAREST = 0x00000002
 
 
 WNDPROC = ctypes.WINFUNCTYPE(
-    ctypes.c_long,
+    ctypes.c_ssize_t,
     wintypes.HWND,
     wintypes.UINT,
     wintypes.WPARAM,
@@ -86,6 +86,8 @@ class MSG(ctypes.Structure):
 
 _user32 = ctypes.windll.user32
 _kernel32 = ctypes.windll.kernel32
+_user32.DefWindowProcW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+_user32.DefWindowProcW.restype = ctypes.c_ssize_t
 _WNDPROC_REGISTRY: dict[int, "PreviewWindowHost"] = {}
 _CLASS_LOCK = threading.Lock()
 _CLASS_NAME = "RdcToolPreviewWindow"
@@ -365,6 +367,16 @@ class PreviewWindowHost:
             self.hwnd = int(hwnd)
             _WNDPROC_REGISTRY[int(hwnd)] = self
             _user32.ShowWindow(hwnd, SW_SHOW)
+            # The worker starts with STARTF_USESHOWWINDOW/SW_HIDE for its console.
+            # Windows applies that startup value to the first ShowWindow call;
+            # a second call makes the actual preview visible.
+            if not _user32.IsWindowVisible(hwnd):
+                _user32.ShowWindow(hwnd, SW_SHOW)
+            if not _user32.IsWindowVisible(hwnd):
+                _user32.DestroyWindow(hwnd)
+                _WNDPROC_REGISTRY.pop(int(hwnd), None)
+                self.hwnd = 0
+                raise RuntimeError("Preview window is not visible")
             _user32.UpdateWindow(hwnd)
             self._refresh_window_metrics()
         except Exception as exc:  # noqa: BLE001
