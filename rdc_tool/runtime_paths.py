@@ -18,20 +18,29 @@ class HostLayout:
     runtime_dir: str
     native_library: str
     binding_module: str
-    python_files: tuple[str, ...]
-    python_dirs: tuple[str, ...]
+    python: Mapping[str, str]  # bundled interpreter role -> path; roles in PYTHON_DIRECTORIES are directories
     launcher: str
     host_tools: Mapping[str, str]
     host_tool_files: tuple[str, ...]
 
+
+PYTHON_DIRECTORIES = frozenset({"stdlib", "site_packages", "extension_modules"})
 
 HOST_LAYOUTS: Mapping[str, HostLayout] = MappingProxyType({
     "windows-x64": HostLayout(
         runtime_dir="binaries/windows/x64",
         native_library="renderdoc.dll",
         binding_module="pymodules/renderdoc.pyd",
-        python_files=("python_entry", "pythonw_entry", "python3_dll", "python_dll", "pth_file"),
-        python_dirs=("stdlib_layout", "site_packages", "dll_dir"),
+        python=MappingProxyType({
+            "executable": "python/python.exe",
+            "windowed_executable": "python/pythonw.exe",
+            "stable_abi_library": "python/python3.dll",
+            "runtime_library": "python/python314.dll",
+            "path_config": "python/python314._pth",
+            "stdlib": "python/Lib",
+            "site_packages": "python/Lib/site-packages",
+            "extension_modules": "python/DLLs",
+        }),
         launcher="bin/rdc-tool.cmd",
         host_tools=MappingProxyType({"adb": "adb/adb.exe", "spirv_as": "spirv-tools/spirv-as.exe",
                                      "spirv_dis": "spirv-tools/spirv-dis.exe"}),
@@ -42,8 +51,13 @@ HOST_LAYOUTS: Mapping[str, HostLayout] = MappingProxyType({
         runtime_dir="binaries/linux/x64",
         native_library="librenderdoc.so",
         binding_module="pymodules/renderdoc.so",
-        python_files=("python_entry",),
-        python_dirs=("stdlib_layout", "site_packages"),
+        python=MappingProxyType({
+            "executable": "python/bin/python3.14",
+            "path_config": "python/lib/python3.14/site-packages/rdc_tool_root.pth",
+            "stdlib": "python/lib/python3.14",
+            "site_packages": "python/lib/python3.14/site-packages",
+            "extension_modules": "python/lib/python3.14/lib-dynload",
+        }),
         launcher="bin/rdc-tool",
         host_tools=MappingProxyType({"adb": "adb/adb", "spirv_as": "spirv-tools/spirv-as",
                                      "spirv_dis": "spirv-tools/spirv-dis"}),

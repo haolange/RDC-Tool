@@ -61,7 +61,19 @@ Windows 包同时携带 Python、RenderDoc 运行库、Android arm32/arm64 helpe
 
 ## 维护者：同源构建与本地验收候选
 
-`scripts/package_runtime.py` 替换原生运行库时，必须同时提供 `--source`、`--arm32-apk`、`--arm64-apk` 和 `--build-receipt`。Windows source 是本库内的构建暂存目录；APK 可为绝对构建输出。receipt 的结构与校验规则见 [发布基线](release-baseline.md#原生构建回执)：`source` 必须恰好包含 `repository`、`revision`、`base_revision`、`upstream_revision` 与 `tree_sha256`，每个目标的 `inputs_sha256` 等于同一 `source.tree_sha256`。主机角色是 `native_library`／`binding_module`，Android 是 `helper_apk`；输出输入路径相对 receipt 所在目录或为绝对开发路径。Windows build 还必须有完整的 `runtime_files` 清单，每项记录相对 Windows source 的 `path`、`size` 和 `sha256`，覆盖 DLL、JSON、PYD 和支持库，未列入或发生漂移的输入拒绝打包。新集合完整替换旧原生文件，Python 与主机工具独立保留；所有发布记录统一转换为包内路径，不成为运行依赖。
+`scripts/package_runtime.py` 在本主机上组装本主机的运行目录（`--host` 默认且只能是本主机，因为依赖由本主机的捆绑解释器安装）。运行目录由三个独立部分组成，每个输入只替换自己那部分，全部在暂存区组装、校验后整体发布：
+
+- **原生集合**：`--source`（本库内本主机的原生暂存目录）与 `--build-receipt` 必须同时提供；receipt 配对了哪些 Android helper，就必须恰好提供对应的 `--arm32-apk`／`--arm64-apk`。receipt 的结构与校验规则见 [发布基线](release-baseline.md#原生构建回执)：`source` 必须恰好包含 `repository`、`revision`、`base_revision`、`upstream_revision` 与 `tree_sha256`，每个目标的 `inputs_sha256` 等于同一 `source.tree_sha256`。主机角色是 `native_library`／`binding_module`，Android 是 `helper_apk`；本机构建的输出路径相对 receipt 所在目录或为绝对路径，其他主机目标只核对已在运行树中的字节。主机 build 的 `runtime_files` 相对原生暂存目录，覆盖原生库、layer JSON 与 `pymodules/` 全部文件，未列入或发生漂移的输入拒绝打包。新集合完整替换旧原生文件，所有记录统一转换为包内路径。
+- **捆绑 Python**：`--python-archive` 必须与 `scripts/python-runtimes.json` 中本主机的 pin（版本、来源 URL、sha256）一致，且解释器在本机实际运行出同一版本。只复制 pin 列出的条目，去掉符号链接别名、缓存、文档及 `test`、`idlelib`、`tkinter`、`ensurepip` 等运行时不用的包；第三方依赖由该解释器自身按 `scripts/runtime-dependencies.lock` 以 `--require-hashes --only-binary=:all: --no-deps` 安装到空的 site-packages，pip 本身不进入运行目录。解释器文件位置由主机布局决定，manifest 的 `bundled_python` 只记录版本、来源与 lock 摘要。
+- **主机工具**：`--host-tools` 目录包含主机布局列出的全部工具文件，以及 `bundled_tools.json`（每个工具的 `version`、`source_url`、`source_sha256`、`license`、`license_path`，可附 `build` 等构建信息）。
+
+manifest 列出运行目录内全部有归属的文件；不属于这三部分的文件直接拒绝，既不跳过也不认证。
+
+依赖变化时由维护者重新生成依赖锁（需要访问 PyPI），测试保证 lock 的根依赖与 `pyproject.toml` 一致：
+
+```bash
+uv pip compile pyproject.toml --universal --python-version 3.14 --generate-hashes --no-header -o scripts/runtime-dependencies.lock
+```
 
 运行环境先在同卷暂存并校验，再整组换入。复制失败、原文件占用或发布失败不会保留旧文件冒充新产物；恢复失败保留原集合并明确报告恢复位置。Python 重建也在暂存集合内进行。打包结果写入全目标共享回执 `binaries/native_build.json`，关联各目标实际文件、APK 版本及 signer 证书指纹、包内原生库 SHA256 和 ELF BuildID；读取证书指纹不代表已执行密码学验签。
 

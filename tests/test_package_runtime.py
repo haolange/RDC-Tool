@@ -1,13 +1,45 @@
 from __future__ import annotations
 
+import hashlib
+import io
 import json
+import os
+import stat
+import tarfile
+import zipfile
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 from scripts import package_runtime
-from rdc_tool import __version__
+from rdc_tool import __version__, python_runtime
 from rdc_tool.runtime_paths import HOST_LAYOUTS
 from scripts.distribution_metadata import write_distribution_metadata
 from test_runtime_identity import WINDOWS_TARGETS, native_inputs
+
+ROOT = Path(__file__).resolve().parents[1]
+WINDOWS_ARCHIVE = {
+    "python.exe": b"python", "pythonw.exe": b"pythonw", "python3.dll": b"abi3", "python314.dll": b"runtime",
+    "vcruntime140.dll": b"crt", "vcruntime140_1.dll": b"crt1", "LICENSE.txt": b"psf",
+    "DLLs/_socket.pyd": b"socket", "Lib/os.py": b"# os", "Lib/site.py": b"# site", "Lib/encodings/__init__.py": b"# enc",
+    "Lib/site-packages/pip/__init__.py": b"# pip stays in the archive", "Lib/test/test_os.py": b"# test",
+    "Lib/__pycache__/os.cpython-314.pyc": b"cache", "Lib/README.md": b"docs",
+}
+LINUX_ARCHIVE = {
+    "bin/python3.14": b"python", "bin/pip3": b"#!pip", "lib/libpython3.14.so.1.0": b"embedding library",
+    "lib/python3.14/os.py": b"# os", "lib/python3.14/site.py": b"# site", "lib/python3.14/encodings/__init__.py": b"# enc",
+    "lib/python3.14/LICENSE.txt": b"psf", "lib/python3.14/lib-dynload/_json.cpython-314-x86_64-linux-gnu.so": b"json",
+    "lib/python3.14/lib-dynload/_tkinter.cpython-314-x86_64-linux-gnu.so": b"needs tcl",
+    "lib/python3.14/config-3.14-x86_64-linux-gnu/Makefile": b"build only",
+    "lib/python3.14/site-packages/pip/__init__.py": b"# pip", "include/python3.14/Python.h": b"header",
+}
+
+
+@pytest.fixture(autouse=True)
+def windows_host(monkeypatch):
+    # Native fixtures are windows-x64 packages; Linux-specific tests switch the host explicitly.
+    monkeypatch.setattr(package_runtime, "host_target", lambda: "windows-x64")
 
 
 def _write(path: Path, content: bytes | str) -> None:
@@ -18,67 +50,94 @@ def _write(path: Path, content: bytes | str) -> None:
         path.write_text(content, encoding="utf-8")
 
 
-def test_package_runtime_bundles_python_and_excludes_dev_only_packages(tmp_path: Path, monkeypatch) -> None:
-    tools_root = tmp_path / "tools"
-    renderdoc_src = tools_root / "staging"
-    python_home = tmp_path / "python-home"
-    site_packages = tools_root / ".venv" / "Lib" / "site-packages"
-    _write(tools_root / 'pyproject.toml', (Path(__file__).resolve().parents[1] / 'pyproject.toml').read_text(encoding='utf-8'))
+def _pin_archive(tmp_path: Path, monkeypatch, target: str, *, version: str = "3.14.9") -> Path:
+    """A fake pinned interpreter archive plus a fake locked installer."""
+    pins = json.loads(package_runtime.PYTHON_PINS.read_text(encoding="utf-8"))
+    pin = pins[target]
+    if target == "windows-x64":
+        archive = tmp_path / "inputs/python.nupkg"
+        archive.parent.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(archive, "w") as bundle:
+            for name, data in WINDOWS_ARCHIVE.items():
+                bundle.writestr(f"{pin['archive_root']}/{name}", data)
+    else:
+        archive = tmp_path / "inputs/python.tar.gz"
+        archive.parent.mkdir(parents=True, exist_ok=True)
+        with tarfile.open(archive, "w:gz") as bundle:
+            for name, data in LINUX_ARCHIVE.items():
+                info = tarfile.TarInfo(f"{pin['archive_root']}/{name}")
+                info.size, info.mode = len(data), 0o755 if name.startswith("bin/") else 0o644
+                bundle.addfile(info, io.BytesIO(data))
+            alias = tarfile.TarInfo(f"{pin['archive_root']}/bin/python")
+            alias.type, alias.linkname = tarfile.SYMTYPE, "python3.14"
+            bundle.addfile(alias)
+    pins[target] = {**pin, "python_version": version, "source_sha256": hashlib.sha256(archive.read_bytes()).hexdigest()}
+    pin_file = tmp_path / "inputs/python-runtimes.json"
+    pin_file.write_text(json.dumps(pins), encoding="utf-8")
+    monkeypatch.setattr(package_runtime, "PYTHON_PINS", pin_file)
+    monkeypatch.setattr(package_runtime, "_interpreter_version", lambda python: version if python.is_file() else "missing")
 
-    _write(renderdoc_src / "renderdoc.dll", b"renderdoc")
-    _write(renderdoc_src / "renderdoc.json", "{}")
-    _write(renderdoc_src / "pymodules" / "renderdoc.pyd", b"renderdoc-pyd")
+    def install(python, site_packages, lock):
+        assert python.is_file() and lock == package_runtime.DEPENDENCY_LOCK
+        _write(site_packages / "numpy/__init__.py", "# locked wheel")
+        _write(site_packages / "numpy/_core/include/numpy/ndarraytypes.h", "/* shipped by the wheel */")
+        _write(site_packages / "numpy-2.5.5.dist-info/METADATA", "Name: numpy\n")
+    monkeypatch.setattr(package_runtime, "_install_dependencies", install)
+    return archive
 
-    for name in ("python.exe", "pythonw.exe", "python3.dll", "python314.dll", "vcruntime140.dll", "vcruntime140_1.dll", "LICENSE.txt"):
-        _write(python_home / name, b"x")
-    _write(python_home / "DLLs" / "_socket.pyd", b"socket")
-    _write(python_home / "Lib" / "os.py", "# os\n")
-    _write(python_home / "Lib" / "site.py", "# site\n")
-    _write(python_home / "Lib" / "encodings" / "__init__.py", "# enc\n")
 
-    _write(site_packages / "numpy.libs" / "libopenblas.dll", b"blas")
-    _write(site_packages / "pyarrow" / "__init__.py", "# should be excluded\n")
-    _write(site_packages / "pyarrow.libs" / "arrow.dll", b"arrow")
-    _write(site_packages / "pyarrow-12.0.0.dist-info" / "METADATA", "Name: pyarrow\n")
-    _write(site_packages / "pytest" / "__init__.py", "# should be excluded\n")
-    _write(site_packages / "pytest-9.0.0.dist-info" / "METADATA", "Name: pytest\n")
-
-    monkeypatch.setattr(package_runtime, "tools_root", lambda: tools_root)
-
-    paired_inputs = native_inputs(tools_root)
-
-    code = package_runtime.main(
-        paired_inputs + [
-            "--python-home",
-            str(python_home),
-            "--site-packages-source",
-            ".venv/Lib/site-packages",
-            "--python-version",
-            "3.14.3",
-        ]
-    )
-
-    assert code == 0
-    out_root = tools_root / "binaries" / "windows" / "x64"
+def test_windows_interpreter_is_assembled_from_its_pinned_archive(tmp_path, monkeypatch):
+    archive = _pin_archive(tmp_path, monkeypatch, "windows-x64")
+    _write(tmp_path / "pyproject.toml", (ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    monkeypatch.setattr(package_runtime, "tools_root", lambda: tmp_path)
+    assert package_runtime.main(["--python-archive", str(archive)]) == 0
+    out_root = tmp_path / "binaries/windows/x64"
+    python = out_root / "python"
+    assert (python / "python.exe").read_bytes() == b"python"
+    assert (python / "DLLs/_socket.pyd").is_file()
+    assert not (python / "Lib/test").exists() and not (python / "Lib/README.md").exists()
+    assert not (python / "Lib/site-packages/pip").exists()
+    assert (python / "Lib/site-packages/numpy/__init__.py").is_file()
+    assert (python / "python314._pth").read_text(encoding="utf-8").splitlines() == [
+        ".", "DLLs", "Lib", "Lib/site-packages", "../../../..", "import site"]
+    metadata = python / f"Lib/site-packages/rdc_tool-{__version__}.dist-info"
+    assert "Name: rdc-tool" in (metadata / "METADATA").read_text(encoding="utf-8")
+    assert "rdc-tool = rdc_tool.cli:main" in (metadata / "entry_points.txt").read_text(encoding="utf-8")
+    assert b"\r" not in (metadata / "RECORD").read_bytes()
     manifest = json.loads((out_root / "manifest.runtime.json").read_text(encoding="utf-8"))
-    bundled_python = manifest["bundled_python"]
-    assert bundled_python["python_version"] == "3.14.3"
-    assert (out_root / bundled_python["python_entry"]).is_file()
-    assert (out_root / bundled_python["pth_file"]).is_file()
-    assert (out_root / "python" / "Lib" / "site-packages" / "numpy.libs" / "libopenblas.dll").is_file()
-    assert not (out_root / "python" / "Lib" / "site-packages" / "pyarrow").exists()
-    assert not (out_root / "python" / "Lib" / "site-packages" / "pyarrow.libs").exists()
-    assert not (out_root / "python" / "Lib" / "site-packages" / "pytest").exists()
-    indexed = {item["path"]: item for item in manifest["files"]}
-    assert "python/python.exe" in indexed
-    assert "renderdoc.dll" in indexed
-    metadata = out_root / f'python/Lib/site-packages/rdc_tool-{__version__}.dist-info'
-    assert 'Name: rdc-tool' in (metadata / 'METADATA').read_text(encoding='utf-8')
-    assert not (metadata / 'direct_url.json').exists()
-    assert 'rdc-tool = rdc_tool.cli:main' in (metadata / 'entry_points.txt').read_text(encoding='utf-8')
-    assert b'\r' not in (metadata / 'RECORD').read_bytes()
-    removed_field = "worker_" + "materialize"
-    assert all(removed_field not in item for item in manifest["files"])
+    assert manifest["bundled_python"]["python_version"] == "3.14.9"
+    assert manifest["bundled_python"]["dependency_lock_sha256"] == hashlib.sha256(package_runtime.DEPENDENCY_LOCK.read_bytes()).hexdigest()
+    listed = {item["path"] for item in manifest["files"]}
+    assert {"python/python.exe", "python/Lib/site-packages/numpy/_core/include/numpy/ndarraytypes.h"} <= listed
+    monkeypatch.setattr(python_runtime, "host_layout", lambda: HOST_LAYOUTS["windows-x64"])
+    monkeypatch.setattr(python_runtime, "binaries_root", lambda: out_root)
+    ok, failures, _ = python_runtime.validate_bundled_python_layout()
+    assert ok, failures
+
+
+def test_linux_interpreter_keeps_regular_files_and_points_site_at_the_installation(tmp_path, monkeypatch):
+    monkeypatch.setattr(package_runtime, "host_target", lambda: "linux-x64")
+    archive = _pin_archive(tmp_path, monkeypatch, "linux-x64")
+    _write(tmp_path / "pyproject.toml", (ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    monkeypatch.setattr(package_runtime, "tools_root", lambda: tmp_path)
+    assert package_runtime.main(["--host", "linux-x64", "--python-archive", str(archive)]) == 0
+    out_root = tmp_path / "binaries/linux/x64"
+    python = out_root / "python"
+    assert sorted(path.name for path in (python / "bin").iterdir()) == ["python3.14"]
+    if os.name != "nt":
+        assert (python / "bin/python3.14").stat().st_mode & stat.S_IXUSR
+    stdlib = python / "lib/python3.14"
+    assert (stdlib / "lib-dynload/_json.cpython-314-x86_64-linux-gnu.so").is_file()
+    assert not (stdlib / "lib-dynload/_tkinter.cpython-314-x86_64-linux-gnu.so").exists()
+    assert not (stdlib / "config-3.14-x86_64-linux-gnu").exists()
+    assert not (python / "lib/libpython3.14.so.1.0").exists() and not (python / "include").exists()
+    assert (stdlib / "site-packages/rdc_tool_root.pth").read_text(encoding="utf-8") == "../../../../../../..\n"
+    monkeypatch.setattr(python_runtime, "host_layout", lambda: HOST_LAYOUTS["linux-x64"])
+    monkeypatch.setattr(python_runtime, "binaries_root", lambda: out_root)
+    ok, failures, _ = python_runtime.validate_bundled_python_layout()
+    assert ok, failures
+    pth_dir = stdlib / "site-packages"
+    assert (pth_dir / "../../../../../../..").resolve() == tmp_path.resolve()
 
 
 def test_metadata_upgrade_replaces_only_owned_previous_version(tmp_path: Path) -> None:
@@ -94,49 +153,23 @@ def test_metadata_upgrade_replaces_only_owned_previous_version(tmp_path: Path) -
         write_distribution_metadata(root, tmp_path)
     assert previous.exists()
 
-def test_package_runtime_rejects_site_packages_source_inside_output_tree(tmp_path: Path, monkeypatch) -> None:
-    tools_root = tmp_path / "tools"
-    python_home = tmp_path / "python-home"
-    site_packages = tools_root / "binaries" / "windows" / "x64" / "python" / "Lib" / "site-packages"
-
-    for name in ("python.exe", "pythonw.exe", "python3.dll", "python314.dll", "vcruntime140.dll", "vcruntime140_1.dll", "LICENSE.txt"):
-        _write(python_home / name, b"x")
-    _write(python_home / "DLLs" / "_socket.pyd", b"socket")
-    _write(python_home / "Lib" / "os.py", "# os\n")
-    _write(python_home / "Lib" / "site.py", "# site\n")
-    _write(python_home / "Lib" / "encodings" / "__init__.py", "# enc\n")
-    _write(site_packages / "pydantic" / "__init__.py", "# runtime dep\n")
-
-    monkeypatch.setattr(package_runtime, "tools_root", lambda: tools_root)
-
-    code = package_runtime.main(
-        [
-            "--python-home",
-            str(python_home),
-            "--site-packages-source",
-            "binaries/windows/x64/python/Lib/site-packages",
-            "--python-version",
-            "3.14.3",
-        ]
-    )
-
-    assert code == 1
-
-
-def test_runtime_regeneration_keeps_bundled_host_files_and_provenance(tmp_path, monkeypatch):
+def test_runtime_regeneration_keeps_provenance_and_rejects_files_no_part_owns(tmp_path, monkeypatch):
     tools_root = tmp_path / "tools"
     out_root = tools_root / "binaries/windows/x64"
     metadata = {"adb": {"version": "fixture", "source_url": "https://example.test/source", "license": "fixture"}}
-    for relative in package_runtime.bundled_host_files(HOST_LAYOUTS['windows-x64']):
+    host_files = package_runtime.bundled_host_files(HOST_LAYOUTS["windows-x64"])
+    for relative in host_files:
         _write(out_root / relative, b"host-tool")
-    _write(out_root / "unrelated/cache.bin", b"excluded")
+    _write(out_root / "unrelated/cache.bin", b"nobody owns this")
     _write(out_root / "manifest.runtime.json", json.dumps({"bundled_tools": metadata}))
     monkeypatch.setattr(package_runtime, "tools_root", lambda: tools_root)
+    assert package_runtime.main([]) == 1
+    (out_root / "unrelated/cache.bin").unlink()
     assert package_runtime.main([]) == 0
     manifest = json.loads((out_root / "manifest.runtime.json").read_text(encoding="utf-8"))
     assert manifest["bundled_tools"] == metadata
-    assert {entry["path"] for entry in manifest["files"]} == set(package_runtime.bundled_host_files(HOST_LAYOUTS['windows-x64']))
-    assert manifest["file_count"] == len(package_runtime.bundled_host_files(HOST_LAYOUTS['windows-x64']))
+    assert {entry["path"] for entry in manifest["files"]} == set(host_files)
+    assert manifest["file_count"] == len(host_files)
 
 
 def test_native_replacement_requires_the_complete_build_set(tmp_path, monkeypatch):
@@ -171,7 +204,7 @@ def test_failed_publish_restores_the_complete_original_directory(tmp_path, monke
     _write(old / "manifest.runtime.json", '{}')
     original_rename = Path.rename
     def fail_publish(path, target):
-        if path.name == "binaries" and path.parent.name.startswith(".runtime-stage-"):
+        if path.name == "binaries" and path.parent.parent.name.startswith(".runtime-stage-"):
             raise PermissionError("publish rejected")
         return original_rename(path, target)
     monkeypatch.setattr(package_runtime, "tools_root", lambda: tmp_path)
@@ -192,15 +225,19 @@ def test_changed_build_input_is_rejected_before_publish(tmp_path, monkeypatch):
     assert not list(tmp_path.glob(".runtime-stage-*"))
 
 
-def test_failed_python_assembly_preserves_existing_python(tmp_path, monkeypatch):
+@pytest.mark.parametrize("problem", ["archive_bytes", "reported_version"])
+def test_unpinned_interpreter_is_rejected_and_existing_python_preserved(tmp_path, monkeypatch, problem):
     old = tmp_path / "binaries/windows/x64"
     _write(old / "python/python.exe", b"old python")
     _write(old / "manifest.runtime.json", '{}')
-    _write(tmp_path / "python-home/python.exe", b"new python")
-    (tmp_path / "site-packages").mkdir()
+    archive = _pin_archive(tmp_path, monkeypatch, "windows-x64")
+    if problem == "archive_bytes":
+        with zipfile.ZipFile(archive, "a") as bundle:
+            bundle.writestr("tools/extra.dll", b"not pinned")
+    else:
+        monkeypatch.setattr(package_runtime, "_interpreter_version", lambda python: "3.14.0")
     monkeypatch.setattr(package_runtime, "tools_root", lambda: tmp_path)
-    assert package_runtime.main(["--python-home", "python-home", "--python-version", "3.14.3",
-                                 "--site-packages-source", "site-packages"]) == 1
+    assert package_runtime.main(["--python-archive", str(archive)]) == 1
     assert (old / "python/python.exe").read_bytes() == b"old python"
     assert (old / "manifest.runtime.json").read_text(encoding="utf-8") == '{}'
     assert not list(tmp_path.glob(".runtime-stage-*"))
@@ -373,3 +410,100 @@ def test_explicit_output_root_rejects_reparse_parent(tmp_path, monkeypatch):
             link.rmdir()
         else:
             link.unlink()
+
+
+def test_assembly_runs_only_for_this_host(tmp_path, monkeypatch):
+    monkeypatch.setattr(package_runtime, "tools_root", lambda: tmp_path)
+    assert package_runtime.main(["--host", "linux-x64"]) == 1
+    assert not (tmp_path / "binaries").exists()
+
+
+def test_locked_install_uses_only_hashed_wheels_and_drops_console_scripts(tmp_path, monkeypatch):
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        _write(tmp_path / "site/bin/f2py", "#!/tmp/build-python")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+    monkeypatch.setattr(package_runtime.process, "run_tool", run)
+    package_runtime._install_dependencies(tmp_path / "python", tmp_path / "site", tmp_path / "deps.lock")
+    command = calls[0]
+    assert command[:5] == [str(tmp_path / "python"), "-I", "-m", "pip", "install"]
+    for flag in ("--no-deps", "--require-hashes", "--only-binary=:all:", "--no-compile"):
+        assert flag in command
+    assert command[command.index("--target") + 1] == str(tmp_path / "site")
+    assert not (tmp_path / "site/bin").exists()
+    monkeypatch.setattr(package_runtime.process, "run_tool", lambda command, **kwargs: SimpleNamespace(returncode=1, stdout="", stderr="no wheel"))
+    with pytest.raises(RuntimeError, match="no wheel"):
+        package_runtime._install_dependencies(tmp_path / "python", tmp_path / "site", tmp_path / "deps.lock")
+
+
+def _host_tool_inputs(root: Path) -> Path:
+    layout = HOST_LAYOUTS["windows-x64"]
+    source = root / "inputs/host-tools"
+    for relative in package_runtime.bundled_host_files(layout):
+        _write(source / relative, f"new {relative}")
+    record = {"version": "1", "source_url": "https://example.test/tool.zip", "source_sha256": "f" * 64, "license": "fixture"}
+    _write(source / "bundled_tools.json", json.dumps({
+        "adb": {**record, "license_path": "adb/NOTICE.txt"},
+        "spirv_as": {**record, "license_path": "spirv-tools/LICENSE.txt", "build": "fixture"},
+        "spirv_dis": {**record, "license_path": "spirv-tools/LICENSE.txt", "build": "fixture"},
+    }))
+    return source
+
+
+def test_host_tools_input_replaces_tool_files_and_records_provenance(tmp_path, monkeypatch):
+    source = _host_tool_inputs(tmp_path)
+    old = tmp_path / "binaries/windows/x64"
+    _write(old / "adb/adb.exe", b"old adb")
+    _write(old / "adb/old-helper.dll", b"stale tool file")
+    monkeypatch.setattr(package_runtime, "tools_root", lambda: tmp_path)
+    assert package_runtime.main(["--host-tools", str(source)]) == 0
+    assert (old / "adb/adb.exe").read_text(encoding="utf-8") == "new adb/adb.exe"
+    assert not (old / "adb/old-helper.dll").exists()
+    tools = json.loads((old / "manifest.runtime.json").read_text(encoding="utf-8"))["bundled_tools"]
+    assert tools["adb"]["path"] == "adb/adb.exe"
+    assert tools["adb"]["license_path"] == "binaries/windows/x64/adb/NOTICE.txt"
+    assert tools["spirv_dis"]["build"] == "fixture"
+
+
+@pytest.mark.parametrize("damage", ["provenance", "license", "file"])
+def test_incomplete_host_tool_input_is_rejected(tmp_path, monkeypatch, damage):
+    source = _host_tool_inputs(tmp_path)
+    provenance = json.loads((source / "bundled_tools.json").read_text(encoding="utf-8"))
+    if damage == "provenance":
+        provenance["adb"]["source_sha256"] = ""
+    elif damage == "license":
+        provenance["adb"]["license_path"] = "adb/adb.exe"
+    else:
+        (source / "spirv-tools/spirv-dis.exe").unlink()
+    (source / "bundled_tools.json").write_text(json.dumps(provenance), encoding="utf-8")
+    monkeypatch.setattr(package_runtime, "tools_root", lambda: tmp_path)
+    assert package_runtime.main(["--host-tools", str(source)]) == 1
+    assert not (tmp_path / "binaries").exists()
+
+
+def test_receipt_without_android_builds_takes_no_apks(tmp_path, monkeypatch):
+    inputs = native_inputs(tmp_path)
+    receipt_path = tmp_path / "receipt.json"
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    receipt["builds"] = [build for build in receipt["builds"] if build["target"] == "windows-x64"]
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+    monkeypatch.setattr(package_runtime, "tools_root", lambda: tmp_path)
+    assert package_runtime.main(inputs) == 1
+    host_only = [value for index, value in enumerate(inputs)
+                 if value not in ("--arm32-apk", "--arm64-apk") and inputs[index - 1] not in ("--arm32-apk", "--arm64-apk")]
+    assert package_runtime.main(host_only) == 0
+    status = package_runtime.runtime_identity.native_manifest_status(tmp_path, required=("windows-x64",))
+    assert status["status"] == "verified" and set(status["targets"]) == {"windows-x64"}
+
+
+def test_unknown_receipt_source_field_is_rejected(tmp_path, monkeypatch):
+    inputs = native_inputs(tmp_path)
+    receipt_path = tmp_path / "receipt.json"
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    receipt["source"]["branch"] = "v1.x"
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+    monkeypatch.setattr(package_runtime, "tools_root", lambda: tmp_path)
+    assert package_runtime.main(inputs) == 1
+    assert not (tmp_path / "binaries").exists()

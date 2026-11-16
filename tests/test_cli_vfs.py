@@ -85,7 +85,7 @@ def test_doctor_reports_cli_only_contract(monkeypatch) -> None:
     monkeypatch.setattr(
         rdc_tool_cli,
         "validate_bundled_python_layout",
-        lambda: (True, [], {"bundled_python": {"python_version": "test", "python_entry": "python.exe"}}),
+        lambda: (True, [], {"bundled_python": {"python_version": "test", "executable": "python.exe"}}),
     )
 
     args = argparse.Namespace(command="doctor", daemon_context="ctx-doctor", json=True)

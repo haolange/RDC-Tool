@@ -234,31 +234,18 @@ def test_runtime_directories_are_created_on_demand(tmp_path, monkeypatch, overri
         assert not (tmp_path / "checkout/intermediate").exists()
 
 
-def test_runtime_manifest_declares_bundled_python_and_required_runtime_files() -> None:
+def test_runtime_manifest_records_bundled_python_provenance_and_layout_files() -> None:
+    from rdc_tool.python_runtime import PROVENANCE_FIELDS
+    from rdc_tool.runtime_paths import HOST_LAYOUTS, PYTHON_DIRECTORIES
     manifest = ROOT / "binaries" / "windows" / "x64" / "manifest.runtime.json"
     payload = json.loads(manifest.read_text(encoding="utf-8"))
     files = payload.get("files")
     assert isinstance(files, list) and files
-
     bundled_python = payload.get("bundled_python")
     assert isinstance(bundled_python, dict)
-    for key in (
-        "python_version",
-        "python_entry",
-        "pythonw_entry",
-        "python3_dll",
-        "python_dll",
-        "stdlib_layout",
-        "site_packages",
-        "dll_dir",
-        "pth_file",
-    ):
-        assert str(bundled_python.get(key) or "").strip(), key
-
-    indexed = {str(item.get("path") or ""): item for item in files if isinstance(item, dict)}
-    assert str(bundled_python["python_entry"]) in indexed
-    assert str(bundled_python["python_dll"]) in indexed
-    assert "renderdoc.dll" in indexed
-    assert "pymodules/renderdoc.pyd" in indexed
-    removed_field = "worker_" + "materialize"
-    assert all(removed_field not in item for item in files if isinstance(item, dict))
+    assert set(bundled_python) == set(PROVENANCE_FIELDS)
+    assert all(str(bundled_python[key]).strip() for key in PROVENANCE_FIELDS)
+    indexed = {str(item.get("path") or "") for item in files if isinstance(item, dict)}
+    layout = HOST_LAYOUTS["windows-x64"]
+    assert {relative for role, relative in layout.python.items() if role not in PYTHON_DIRECTORIES} <= indexed
+    assert {"renderdoc.dll", "pymodules/renderdoc.pyd"} <= indexed

@@ -14854,14 +14854,9 @@
   ],
   "bundled_python": {
     "python_version": "3.14.3",
-    "python_entry": "python/python.exe",
-    "pythonw_entry": "python/pythonw.exe",
-    "python3_dll": "python/python3.dll",
-    "python_dll": "python/python314.dll",
-    "stdlib_layout": "python/Lib",
-    "site_packages": "python/Lib/site-packages",
-    "dll_dir": "python/DLLs",
-    "pth_file": "python/python314._pth"
+    "package": "official CPython NuGet python 3.14.3",
+    "source_url": "https://api.nuget.org/v3-flatcontainer/python/3.14.3/python.3.14.3.nupkg",
+    "source_sha256": "ef63a18b486268cbfd1fa59e7b6094c42521b25f0184af8b267e1718dd0cb3a5"
   },
   "bundled_tools": {
     "adb": {

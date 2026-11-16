@@ -1,8 +1,8 @@
 """The Python interpreter bundled with each host runtime.
 
-The host manifest's ``bundled_python`` metadata names the interpreter and its
-layout; which entries must be files or directories comes from the host
-layout. Missing metadata is a failure, never filled in with defaults.
+Where the interpreter's files live is the host layout's contract; the host
+manifest's ``bundled_python`` records only what was bundled (version and
+provenance). Missing files or provenance are failures, never filled in.
 """
 
 from __future__ import annotations
@@ -12,13 +12,14 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from rdc_tool.runtime_paths import binaries_root, host_layout
+from rdc_tool.runtime_paths import PYTHON_DIRECTORIES, binaries_root, host_layout
 
+PROVENANCE_FIELDS = ("python_version", "package", "source_url", "source_sha256")
 _STDLIB_MARKERS = ("os.py", "site.py", "encodings/__init__.py")
 
 
 def _bundled_python_metadata() -> dict[str, Any]:
-    path = (binaries_root() / "manifest.runtime.json")
+    path = binaries_root() / "manifest.runtime.json"
     if not path.is_file():
         return {}
     payload = json.loads(path.read_text(encoding="utf-8"))
@@ -26,18 +27,10 @@ def _bundled_python_metadata() -> dict[str, Any]:
     return dict(metadata) if isinstance(metadata, dict) else {}
 
 
-def _runtime_path(raw: Any, key: str) -> Path:
-    root = binaries_root().resolve()
-    path = (root / str(raw)).resolve()
-    if not path.is_relative_to(root):
-        raise ValueError(f"bundled_python {key} escapes the runtime directory: {raw}")
-    return path
-
-
 def bundled_python_executable() -> Path | None:
-    """The bundled interpreter named by the host manifest, or ``None`` when unrecorded."""
-    entry = str(_bundled_python_metadata().get("python_entry") or "").strip()
-    return _runtime_path(entry, "python_entry") if entry else None
+    """This host's bundled interpreter, or ``None`` when it is not installed."""
+    path = binaries_root() / host_layout().python["executable"]
+    return path if path.is_file() else None
 
 
 def current_python_runtime_details() -> dict[str, str]:
@@ -50,37 +43,29 @@ def current_python_runtime_details() -> dict[str, str]:
 
 
 def validate_bundled_python_layout() -> tuple[bool, list[str], dict[str, Any]]:
-    layout = host_layout()
+    root = binaries_root()
     failures: list[str] = []
     try:
         metadata = _bundled_python_metadata()
     except (OSError, ValueError) as exc:
         metadata = {}
         failures.append(f"unreadable runtime manifest: {exc}")
+    failures += [f"bundled_python metadata missing {key}" for key in PROVENANCE_FIELDS
+                 if not str(metadata.get(key) or "").strip()]
     resolved: dict[str, str] = {}
-    if not str(metadata.get("python_version") or "").strip():
-        failures.append("bundled_python metadata missing python_version")
-    for key, must_be_dir in [*((key, False) for key in layout.python_files), *((key, True) for key in layout.python_dirs)]:
-        raw = str(metadata.get(key) or "").strip()
-        if not raw:
-            failures.append(f"bundled_python metadata missing {key}")
-            continue
-        try:
-            path = _runtime_path(raw, key)
-        except ValueError as exc:
-            failures.append(str(exc))
-            continue
-        resolved[key] = str(path)
-        if must_be_dir and not path.is_dir():
-            failures.append(f"missing bundled python directory: {key}={path}")
-        elif not must_be_dir and not path.is_file():
-            failures.append(f"missing bundled python file: {key}={path}")
-    stdlib = resolved.get("stdlib_layout")
-    if stdlib and Path(stdlib).is_dir():
-        failures += [f"missing stdlib marker: {Path(stdlib) / marker}" for marker in _STDLIB_MARKERS
-                     if not (Path(stdlib) / marker).is_file()]
+    for role, relative in host_layout().python.items():
+        path = root / relative
+        resolved[role] = str(path)
+        if role in PYTHON_DIRECTORIES and not path.is_dir():
+            failures.append(f"missing bundled python directory: {role}={path}")
+        elif role not in PYTHON_DIRECTORIES and not path.is_file():
+            failures.append(f"missing bundled python file: {role}={path}")
+    stdlib = root / host_layout().python["stdlib"]
+    if stdlib.is_dir():
+        failures += [f"missing stdlib marker: {stdlib / marker}" for marker in _STDLIB_MARKERS
+                     if not (stdlib / marker).is_file()]
     details = {
-        "bundled_python": {"python_version": str(metadata.get("python_version") or ""), **resolved},
+        "bundled_python": {**{key: str(metadata.get(key) or "") for key in PROVENANCE_FIELDS}, **resolved},
         "current_python": current_python_runtime_details(),
     }
     return not failures, failures, details

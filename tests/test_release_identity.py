@@ -170,6 +170,7 @@ def candidate_source_fixture(root, monkeypatch):
     monkeypatch.setattr(package_runtime, 'tools_root', lambda: root)
     # The fixture is a windows-x64 package whatever host runs the test.
     monkeypatch.setattr(runtime_identity, 'host_target', lambda: 'windows-x64')
+    monkeypatch.setattr(package_runtime, 'host_target', lambda: 'windows-x64')
     assert package_runtime.main(inputs) == 0
     for name in ('LICENSE', 'README.md'):
         (root / name).write_text('fixture\n', encoding='utf-8')
