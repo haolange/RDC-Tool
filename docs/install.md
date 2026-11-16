@@ -77,7 +77,9 @@ uv pip compile pyproject.toml --universal --python-version 3.14 --generate-hashe
 
 运行环境先在同卷暂存并校验，再整组换入。复制失败、原文件占用或发布失败不会保留旧文件冒充新产物；恢复失败保留原集合并明确报告恢复位置。Python 重建也在暂存集合内进行。打包结果写入全目标共享回执 `binaries/native_build.json`，关联各目标实际文件、APK 版本及 signer 证书指纹、包内原生库 SHA256 和 ELF BuildID；读取证书指纹不代表已执行密码学验签。
 
-尚未提交的维护源码可使用 `scripts/package_release.py --candidate-dir intermediate/<task>/candidate` 创建一个完整的本地验收目录。该入口复用正式包的文件选择、许可证和 SBOM 逻辑，写入明确标注 `local_validation_candidate` 的 `CANDIDATE_MANIFEST.json`，记录基线提交、工作区 diff 摘要及随包源码摘要，不生成正式发行清单。正式 ZIP 的 clean committed source 要求保持不变。候选拒绝覆盖已有目录，也拒绝本主机目标与两个 Android helper 未通过同源 receipt 核验的运行库。
+尚未提交的维护源码可使用 `scripts/package_release.py --candidate-dir intermediate/<task>/candidate` 创建一个完整的本地验收目录。该入口复用正式包的文件选择、许可证和 SBOM 逻辑，写入明确标注 `local_validation_candidate` 的 `CANDIDATE_MANIFEST.json`，记录基线提交、工作区 diff 摘要及随包源码摘要，不生成正式发行清单。正式 ZIP 的 clean committed source 要求保持不变。候选拒绝覆盖已有目录；它要求本主机目标及其 receipt 所配对的 Android helper 通过同源核验，并只携带这些被配对的 helper。只配对本主机的候选不含 helper，doctor 会如实报告 `android_apk_failures`。
+
+候选或其他安装的真实回放用 `fixture_integration` 测试验证：`python -m pytest tests/test_fixture_integration.py --fixture-integration --fixture-root intermediate/<task>/candidate`。测试经该安装自己的 launcher 打开仓库 fixture、读取 action tree 与管线、执行无窗口观察并关闭回放，最后清理 context 与 daemon；未开启时跳过，开启后安装无法本地回放即失败，软件驱动缺少的能力必须以 `capability` 类错误出现。
 
 若需对未提交维护源码或独立构建运行库做本地端到端验收，可使用 `package_runtime.py --output-root intermediate/<task>/runtime` 和同一 frozen-source receipt 生成完整候选运行库，再用 `package_release.py --candidate-dir intermediate/<task>/candidate --runtime-root intermediate/<task>/runtime` 生成隔离候选。候选须包含完整配对运行库并通过 native identity 验证；它不更新仓库根 `binaries/`，也不能代替正式发布前同步、验证根运行库。两个目录必须位于本库 `intermediate/` 或 `dist/`，不得逃逸、重叠、reparse 或覆盖既有输出；source 和 receipt 参数仍以当前 Tools 根目录解析。`--runtime-root` 仅用于本地候选。
 

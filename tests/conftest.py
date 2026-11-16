@@ -24,6 +24,14 @@ from rdc_tool.runtime_state import clear_context_state
 os.environ.setdefault("RDC_TOOL_ARTIFACT_DIR", str(TEST_ROOT / "artifacts"))
 
 
+def pytest_addoption(parser: pytest.Parser) -> None:
+    group = parser.getgroup("fixture integration", "real replay of committed captures through an installation's launcher")
+    group.addoption("--fixture-integration", action="store_true",
+                    help="Run fixture_integration tests; an unusable runtime then fails instead of skipping.")
+    group.addoption("--fixture-root", default=str(ROOT),
+                    help="Installation root whose launcher and runtime the integration tests use (default: this checkout).")
+
+
 @pytest.fixture
 def pin_host(monkeypatch):
     """Make every host-dependent decision see one target, e.g. a windows-x64 package built by a test on Linux."""

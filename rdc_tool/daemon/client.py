@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 import secrets
 import subprocess
-import sys
 import time
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
@@ -24,7 +23,7 @@ from rdc_tool.platform.ipc import Endpoint
 from rdc_tool.platform.locks import LockTimeout, path_lock
 from rdc_tool.platform.process import ProcessIdentity, SpawnProfile
 from rdc_tool.runtime_state import clear_context_state, context_log_path, context_state_path, list_context_ids
-from rdc_tool.runtime_paths import child_python_env, cli_runtime_dir
+from rdc_tool.runtime_paths import child_python_argv, child_python_env, cli_runtime_dir
 from rdc_tool.runtime_worker_state import clear_worker_state, worker_state_path
 
 POLL_DELAYS = (0.1, 0.2, 0.3, 0.5, 0.8, 1.2, 1.6, 2.0)
@@ -470,9 +469,7 @@ def _ensure_daemon_locked(
 
     endpoint = ipc.new_endpoint()
     token = secrets.token_hex(32)
-    cmd = [
-        sys.executable,
-        "-m",
+    cmd = child_python_argv(
         "rdc_tool.daemon.server",
         "--endpoint",
         endpoint.address,
@@ -482,7 +479,7 @@ def _ensure_daemon_locked(
         str(normalize_timeout(lease_timeout_seconds, default=DEFAULT_LEASE_TIMEOUT_S)),
         "--idle-timeout-seconds",
         str(normalize_timeout(idle_timeout_seconds, default=DEFAULT_IDLE_TIMEOUT_S)),
-    ]
+    )
     if owner_pid is not None:
         cmd.extend(["--owner-pid", str(int(owner_pid))])
 

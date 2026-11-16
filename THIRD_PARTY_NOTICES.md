@@ -5,8 +5,8 @@ This project is licensed under Apache-2.0. The following test-only assets are in
 ## rdc-cli test captures
 
 - Source repository: `D:\Projects\Native\rdc-tool-third\rdc-cli`
-- Source paths: `tests/fixtures/hello_triangle.rdc`, `tests/fixtures/vkcube.rdc`, `tests/fixtures/vkcube_validation.rdc`
-- Destination paths: `tests/fixtures/hello_triangle.rdc`, `tests/fixtures/vkcube.rdc`, `tests/fixtures/vkcube_validation.rdc`
+- Source paths: `tests/fixtures/vkcube.rdc`, `tests/fixtures/vkcube_validation.rdc`
+- Destination paths: `tests/fixtures/vkcube.rdc`, `tests/fixtures/vkcube_validation.rdc`
 - License: MIT
 - Copyright: Copyright (c) 2024 BANANASJIM
 - Use in this repository: deterministic repository tests only

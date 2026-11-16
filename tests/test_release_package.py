@@ -41,11 +41,13 @@ def test_package_release_builds_self_contained_zip(tmp_path: Path, monkeypatch) 
         "spec/tool_catalog.json",
         "binaries/windows/x64/manifest.runtime.json",
         "binaries/android/arm64/org.renderdoc.renderdoccmd.arm64.apk",
-        "binaries/native_build.json",
+        "binaries/android/arm32/org.renderdoc.renderdoccmd.arm32.apk",
         "binaries/linux/x64/librenderdoc.so",
     ):
         _write(root / rel)
     _write(root / "binaries/windows/x64/manifest.runtime.json", "{}")
+    # Only helpers the shared receipt pairs ship; the unpaired arm32 helper stays behind.
+    _write(root / "binaries/native_build.json", json.dumps({"builds": [{"target": "windows-x64"}, {"target": "android-arm64"}]}))
     _write(root / "intermediate/logs/secret.log", "must not ship\n")
     _write(root / "tests/fixtures/sample.rdc", "fixture must not ship\n")
     _write(root / "docs/sample.rdc", "rdc suffix must not ship\n")
@@ -75,7 +77,7 @@ def test_package_release_builds_self_contained_zip(tmp_path: Path, monkeypatch) 
         assert "rdc-tool/intermediate/logs/secret.log" not in names
         assert {"rdc-tool/binaries/native_build.json", "rdc-tool/binaries/android/arm64/org.renderdoc.renderdoccmd.arm64.apk",
                 "rdc-tool/binaries/windows/x64/manifest.runtime.json"} <= names
-        assert not any(name.startswith("rdc-tool/binaries/linux/") for name in names)
+        assert not any(name.startswith(("rdc-tool/binaries/linux/", "rdc-tool/binaries/android/arm32/")) for name in names)
         manifest = json.loads(zf.read("rdc-tool/RELEASE_MANIFEST.json").decode("utf-8"))
         license_inventory = json.loads(zf.read("rdc-tool/LICENSE_INVENTORY.json").decode("utf-8"))
         sbom = json.loads(zf.read("rdc-tool/SBOM.json").decode("utf-8"))

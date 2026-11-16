@@ -8,7 +8,6 @@ import math
 import os
 import queue
 import subprocess
-import sys
 import threading
 import time
 from typing import Any, Dict, Optional
@@ -17,7 +16,7 @@ from rdc_tool.io_utils import safe_json_text
 from rdc_tool.platform import process
 from rdc_tool.platform.process import SpawnProfile
 from rdc_tool.progress import ProgressEvent, ProgressSink
-from rdc_tool.runtime_paths import binaries_root, child_python_env, pymodules_dir, tools_root
+from rdc_tool.runtime_paths import binaries_root, child_python_argv, child_python_env, pymodules_dir, tools_root
 from rdc_tool.runtime_worker_state import clear_worker_state, save_worker_state
 from rdc_tool.runtime_identity import native_manifest_status
 
@@ -120,7 +119,7 @@ class RuntimeWorkerProcess:
         }
 
         proc = subprocess.Popen(
-            [sys.executable, "-m", "rdc_tool.runtime_worker", "--context-id", self.context_id],
+            child_python_argv("rdc_tool.runtime_worker", "--context-id", self.context_id),
             **popen_kwargs,
         )
         assert proc.stdout is not None

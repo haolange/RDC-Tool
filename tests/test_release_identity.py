@@ -34,7 +34,7 @@ def identity_fixture(root: Path) -> Path:
 
 
 def test_license_bytes_cannot_be_replaced_by_inventory_claim(tmp_path, monkeypatch):
-    monkeypatch.setattr(verify, 'native_manifest_status', lambda root: {'status': 'verified'})
+    monkeypatch.setattr(verify, 'native_manifest_status', lambda root, required=None: {'status': 'verified'})
     package = identity_fixture(tmp_path)
     verify._verify_release_identity(package, tmp_path / 'source')
     (package / 'LICENSE').write_bytes(b'Apache-2.0 truncated')

@@ -25,6 +25,7 @@ RDC-Tool 不自动跟随上游每个版本；新运行库只有在完成同源�
 回执结构：
 
 - `source`：字段必须恰好是 `repository`（https URL）、`revision`（被构建的 40 位提交）、`base_revision`、`upstream_revision`（40 位）与 `tree_sha256`（源码树摘要，64 位）。多余或缺失字段直接判为无效，打包工具同样拒绝而不是静默丢弃。
+- `tree_sha256` 由 `python scripts/native_source_digest.py <源码检出>` 计算：对该提交 `git ls-tree -r` 的每个条目按路径排序，逐条哈希 `<路径>\0<blob 的 SHA256>\n`，因此不受检出换行、未跟踪文件或构建目录影响；不带 `--revision` 时要求工作区干净。当前仓库回执里的 `bce2094…` 早于这一定义，无法从 dde8822 的 Git 内容复现（很可能取自 Windows 工作区），下一次同源重建按本定义重新记录。
 - `builds`：每个目标一项，目标名唯一且属于 `NATIVE_TARGETS`（全部主机布局 + `android-arm32`/`android-arm64`）。每项记录 `configuration`、`toolchain`、`inputs_sha256`（必须等于 `source.tree_sha256`）与 `outputs`。输出角色：主机目标为 `native_library` 与 `binding_module`（路径由主机布局决定，如 `binaries/linux/x64/librenderdoc.so`），Android 为 `helper_apk`（另记录 APK 版本、signer 证书指纹、包内原生库 SHA256 与 ELF BuildID；读取证书指纹不代表已执行密码学验签）。主机目标还必须有完整 `runtime_files`，覆盖运行目录根部的原生库、Vulkan layer JSON 与 `pymodules/` 全部文件。
 
 校验规则（存在即严格，缺席仅报告）：
@@ -32,7 +33,7 @@ RDC-Tool 不自动跟随上游每个版本；新运行库只有在完成同源�
 - 列出的目标若其输出全部存在，则逐字节核对输出与 `runtime_files`，并要求 layer JSON 为合法对象；结果记为 `verified`。
 - 列出的目标若输出全部缺席，记为 `absent`（例如 Windows 发行包里不含 Linux 运行库）；部分存在直接判为 `invalid`。
 - 两个 Android helper 同时存在时，signer 证书与版本元数据必须一致。
-- 场景按需要的目标集合判定资格：默认是本主机目标加两个 Android helper。需要的目标未列出或缺席时状态为 `unavailable`（并给出 `missing_targets`）；任何已存在的字节与回执矛盾时为 `invalid`。worker 拒绝在 `invalid` 下启动，正式打包与发布验证只接受 `verified`。
+- 场景按需要的目标集合判定资格：正式发布要求本主机目标加两个 Android helper；本地候选要求本主机目标加其回执配对的 helper，且只随包携带被配对的 helper，绝不混入其他源码树的产物。需要的目标未列出或缺席时状态为 `unavailable`（并给出 `missing_targets`）；任何已存在的字节与回执矛盾时为 `invalid`。worker 拒绝在 `invalid` 下启动，正式打包与发布验证只接受 `verified`。
 
 ## 原生运行库变更
 

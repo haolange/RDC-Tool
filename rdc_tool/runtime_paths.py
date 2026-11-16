@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -111,6 +112,11 @@ def native_library_name() -> str:
 
 def binding_module_name() -> str:
     return Path(host_layout().binding_module).name
+
+
+def child_python_argv(module: str, *args: str) -> list[str]:
+    """Run `module` in a Python child; -P keeps the working directory from shadowing this installation."""
+    return [sys.executable, "-P", "-m", module, *args]
 
 
 def child_python_env(base: Mapping[str, str]) -> dict[str, str]:

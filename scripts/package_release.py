@@ -73,10 +73,24 @@ def _should_skip(path: Path, root: Path) -> bool:
     return bool(rel.parts) and rel.parts[0] == "tests"
 
 
-def _ships_runtime(rel: Path) -> bool:
-    """A package carries this host's runtime, the Android helpers and the shared receipt, nothing else from binaries/."""
-    shipped = (host_layout().runtime_dir, *(str(Path(output["helper_apk"]).parent) for output in ANDROID_TARGETS.values()))
-    return rel.as_posix() == RECEIPT_PATH or any(rel.is_relative_to(directory) for directory in shipped)
+def paired_targets(binaries_parent: Path) -> list[str]:
+    """Targets the shared receipt under `binaries_parent` pairs from one frozen source."""
+    receipt = binaries_parent / RECEIPT_PATH
+    return [build["target"] for build in json.loads(receipt.read_text(encoding="utf-8"))["builds"]] if receipt.is_file() else []
+
+
+def certified_targets(binaries_parent: Path, *, candidate: bool) -> tuple[str, ...] | None:
+    """What a package must verify: a release needs this host and both helpers (None = that default);
+    a local candidate needs this host plus the helpers its receipt pairs."""
+    if not candidate:
+        return None
+    return (platform_host.host_target(), *(target for target in paired_targets(binaries_parent) if target in ANDROID_TARGETS))
+
+
+def _ships_runtime(rel: Path, paired: list[str]) -> bool:
+    """From binaries/ a package carries the shared receipt, this host's runtime and the helpers that receipt pairs."""
+    helpers = [str(Path(ANDROID_TARGETS[target]["helper_apk"]).parent) for target in paired if target in ANDROID_TARGETS]
+    return rel.as_posix() == RECEIPT_PATH or any(rel.is_relative_to(directory) for directory in (host_layout().runtime_dir, *helpers))
 
 
 def release_inputs(root: Path, *, runtime_root: Path | None = None) -> list[tuple[Path, Path]]:
@@ -86,12 +100,13 @@ def release_inputs(root: Path, *, runtime_root: Path | None = None) -> list[tupl
                if runtime_root is None or not path.relative_to(root).parts or path.relative_to(root).parts[0] != "binaries"]
     if runtime_root is not None:
         sources.extend((runtime_root, path) for path in sorted((runtime_root / "binaries").rglob("*")))
+    paired = paired_targets(runtime_root or root)
     selected = []
     for source_root, path in sources:
         if path.is_dir() or _should_skip(path, source_root):
             continue
         rel = path.relative_to(source_root)
-        if not rel.parts or rel.parts[0] not in allowed_roots or (rel.parts[0] == "binaries" and not _ships_runtime(rel)):
+        if not rel.parts or rel.parts[0] not in allowed_roots or (rel.parts[0] == "binaries" and not _ships_runtime(rel, paired)):
             continue
         if path.is_symlink() or path.is_junction():
             raise RuntimeError(f"Package source file must not be a link: {path}")
@@ -205,7 +220,8 @@ def _build_candidate(root: Path, raw_destination: str, *, runtime_root: Path | N
     if runtime_root is not None and (runtime_root.is_relative_to(destination) or destination.is_relative_to(runtime_root)):
         raise ValueError("Candidate output overlaps the runtime input root")
     before = _candidate_source(root)
-    status = native_manifest_status(runtime_root or root)
+    runtime = runtime_root or root
+    status = native_manifest_status(runtime, required=certified_targets(runtime, candidate=True))
     if status["status"] != "verified":
         raise RuntimeError(f"Local candidate requires a verified paired native build: {status}")
     destination.parent.mkdir(parents=True, exist_ok=True)

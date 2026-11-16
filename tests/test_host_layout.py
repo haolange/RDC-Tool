@@ -39,3 +39,16 @@ def test_doctor_reports_unsupported_host(monkeypatch, capsys):
     assert code == cli.EXIT_RUNTIME_ERR
     assert payload["error"]["code"] == "unsupported_host"
     assert payload["error"]["details"]["supported_hosts"] == sorted(HOST_LAYOUTS)
+
+
+def test_python_children_import_this_installation_even_from_a_shadowing_cwd(tmp_path):
+    import os
+    import subprocess
+    shadow = tmp_path / "rdc_tool"
+    shadow.mkdir()
+    (shadow / "__init__.py").write_text("raise ImportError('shadow package imported from the working directory')\n")
+    probe = runtime_paths.child_python_argv("rdc_tool.runtime_paths")
+    assert probe[1] == "-P"
+    result = subprocess.run(probe, cwd=tmp_path, env=runtime_paths.child_python_env(os.environ),
+                            capture_output=True, text=True, timeout=60, check=False)
+    assert result.returncode == 0, result.stderr

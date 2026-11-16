@@ -59,7 +59,6 @@ def test_rdc_tool_native_playbook_covers_cli_and_runtime_contracts() -> None:
 
 def test_public_rdc_fixtures_have_expected_size_and_hash() -> None:
     expected = {
-        "hello_triangle.rdc": (75478, "00797a27e6316a0cf4369327f9db30a21635fa757673b3f9712af07989145ba8"),
         "vkcube.rdc": (75478, "00797a27e6316a0cf4369327f9db30a21635fa757673b3f9712af07989145ba8"),
         "vkcube_validation.rdc": (65913, "c50cd1e7c29241c64fd33faf07cb35e802f9dc85692a8512aa36db01c956b385"),
     }
@@ -74,7 +73,7 @@ def test_fixture_policy_and_third_party_notices_cover_copied_assets() -> None:
     fixture_readme = (ROOT / "tests" / "fixtures" / "README.md").read_text(encoding="utf-8-sig")
     notices = (ROOT / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8-sig")
 
-    for name in ("hello_triangle.rdc", "vkcube.rdc", "vkcube_validation.rdc"):
+    for name in ("vkcube.rdc", "vkcube_validation.rdc"):
         assert name in fixture_readme
         assert name in notices
     assert "MIT" in notices

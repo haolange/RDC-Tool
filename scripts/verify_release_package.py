@@ -26,7 +26,7 @@ from rdc_tool.io_utils import sha256_file
 from rdc_tool.platform import process
 from rdc_tool.runtime_identity import native_manifest_status
 from rdc_tool.runtime_paths import host_layout
-from scripts.package_release import ENTRYPOINTS
+from scripts.package_release import ENTRYPOINTS, certified_targets
 
 
 PUBLIC_COMMAND = "rdc-tool"
@@ -168,7 +168,7 @@ def _verify_release_identity(root: Path, source: Path = SCRIPT_ROOT,
             raise RuntimeError("Candidate source file digest does not match its manifest")
         if (root / "RELEASE_MANIFEST.json").exists():
             raise RuntimeError("Local candidate contains a release manifest")
-    native = native_manifest_status(root)
+    native = native_manifest_status(root, required=certified_targets(root, candidate=manifest_name == "CANDIDATE_MANIFEST.json"))
     if native["status"] != "verified":
         raise RuntimeError(f"Package paired native runtime is not verified: {native}")
 

@@ -9,6 +9,7 @@ SUPPORTED_SCRIPTS = (
     "scripts/README.md",
     "scripts/check_markdown_health.py",
     "scripts/cleanup_workspace.py",
+    "scripts/native_source_digest.py",
     "scripts/package_release.py",
     "scripts/package_runtime.py",
     "scripts/python-runtimes.json",
