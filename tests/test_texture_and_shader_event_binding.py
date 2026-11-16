@@ -11,6 +11,8 @@ import numpy as np
 
 from rdc_tool import server
 
+pytestmark = pytest.mark.usefixtures("fake_renderdoc")
+
 
 class _FakeShaderPipe:
     def GetShader(self, stage: object) -> str:

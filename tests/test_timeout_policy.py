@@ -22,6 +22,9 @@ from rdc_tool.timeout_policy import (
     remote_connect_timeout_policy,
     operation_timeout_s,
 )
+import pytest
+
+pytestmark = pytest.mark.usefixtures("fake_renderdoc")
 
 
 class DummyRemoteServer:

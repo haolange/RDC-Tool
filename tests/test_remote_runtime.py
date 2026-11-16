@@ -15,6 +15,8 @@ from rdc_tool.context_snapshot import clear_context_snapshot
 from rdc_tool.models import BackendType
 from rdc_tool.runtime_state import normalize_context_state
 
+pytestmark = pytest.mark.usefixtures("fake_renderdoc")
+
 
 class DummyRemoteServer:
     def __init__(self) -> None:

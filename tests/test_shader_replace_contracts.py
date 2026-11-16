@@ -12,6 +12,8 @@ from rdc_tool import server
 from rdc_tool.core import patch_engine as patch_engine_mod
 from rdc_tool.models import PatchOp, PatchResult, PatchSpec, ShaderStage
 
+pytestmark = pytest.mark.usefixtures("fake_renderdoc")
+
 
 class _FakePipe:
     def GetShader(self, stage: object) -> str:

@@ -33,6 +33,14 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
 
 @pytest.fixture
+def fake_renderdoc(monkeypatch):
+    """Unit tests replay against the fake binding on every host; real replay is fixture_integration's job."""
+    from fakes import renderdoc
+    monkeypatch.setitem(sys.modules, "renderdoc", renderdoc)
+    return renderdoc
+
+
+@pytest.fixture
 def pin_host(monkeypatch):
     """Make every host-dependent decision see one target, e.g. a windows-x64 package built by a test on Linux."""
     def pin(target: str) -> None:
