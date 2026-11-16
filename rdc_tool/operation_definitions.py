@@ -255,7 +255,10 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                  '(list)<br>error (dict|null): remote handle errors remain explicit; same-context '
                  'live sessions for the same capture are reused with reused_session=true. Stale '
                  'same-capture sessions are cleaned before reopen; cleanup failure returns '
-                 'stale_session_requires_restart with recovery steps.<br>meta '
+                 'stale_session_requires_restart with recovery steps. A local replay whose capture API '
+                 "this host's runtime cannot replay returns `local_replay_unsupported` (category "
+                 'capability; details capture_api, host_target, recovery_hint) before any replay is '
+                 'created.<br>meta '
                  '(dict)<br>projections (dict, 可选)',
   'param_names': ['capture_file_id', 'options'],
   'prerequisites': [{'requires': 'capture_file_id',

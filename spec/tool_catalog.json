@@ -1,7 +1,7 @@
 {
   "schema_version": "1",
   "source_path": "rdc_tool/operation_definitions.py",
-  "fingerprint": "59511abca74955d1ee461f52a894fdb1b7473de18d0f2af7fefbc2ab5ef4fcdc",
+  "fingerprint": "7da248b9df024bad8d7bca65fe32d44a1b65456f277a793985805dd91d95ba04",
   "tool_count": 129,
   "groups": {
     "3.7，缓冲区与网格数据访问 (Buffer & Mesh Data Access)": 6,
@@ -478,7 +478,7 @@
       "group": "3.2，捕获文件与 Replay Session (Capture & Replay)",
       "description": "基于 capture_file_id 创建一个可回放的 Replay Session；若提供 options.remote_id，则必须严格走该 live remote handle 对应的 remote backend，不允许 silent local fallback。",
       "parameter_raw": "capture_file_id (string): capture_file_id (str)<br>options (object, optional): options (dict, 可选): 回放选项，例如 {force_api?, gpu_id?, software_replay?, enable_debug?, replay_cache_mb?}",
-      "returns_raw": "ok (bool)<br>data (dict): {session_id, capture_file_id, frame_count, active_event_id, api_properties, recovery_status, reused_session?}<br>artifacts (list)<br>error (dict|null): remote handle errors remain explicit; same-context live sessions for the same capture are reused with reused_session=true. Stale same-capture sessions are cleaned before reopen; cleanup failure returns stale_session_requires_restart with recovery steps.<br>meta (dict)<br>projections (dict, 可选)",
+      "returns_raw": "ok (bool)<br>data (dict): {session_id, capture_file_id, frame_count, active_event_id, api_properties, recovery_status, reused_session?}<br>artifacts (list)<br>error (dict|null): remote handle errors remain explicit; same-context live sessions for the same capture are reused with reused_session=true. Stale same-capture sessions are cleaned before reopen; cleanup failure returns stale_session_requires_restart with recovery steps. A local replay whose capture API this host's runtime cannot replay returns `local_replay_unsupported` (category capability; details capture_api, host_target, recovery_hint) before any replay is created.<br>meta (dict)<br>projections (dict, 可选)",
       "param_names": [
         "capture_file_id",
         "options"

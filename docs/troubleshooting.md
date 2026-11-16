@@ -29,6 +29,10 @@ If a remote replay fails after `rd.remote.connect`, check whether state says `re
 
 `rd.capture.open_replay` reuses an existing live session for the same capture in the same context. Use `rd.capture.close_replay` to release replay resources before reopening. After a daemon timeout, check `rdc-tool context status --json` and operation history before clearing or stopping the context. If stale cleanup fails, the runtime returns `stale_session_requires_restart` with recovery commands.
 
+`rd.capture.open_replay` 返回 `local_replay_unsupported`（category `capability`）：本主机的 RenderDoc 运行库不能在本地回放该 capture 的图形 API（例如 Linux 上的 D3D11/D3D12 capture），在创建任何回放之前就已拒绝。`details.capture_api` 与 `details.host_target` 给出具体组合；改在支持该 API 的主机上回放，或先 `rd.remote.connect` 再通过 `options.remote_id` 远端回放。
+
+`rd.session.open_preview` 返回 `preview_unsupported_platform`：本主机没有原生 preview 窗口实现（目前仅 Windows 提供），`rd.core.get_capabilities` 的 `preview_window.supported` 为 `false`。无窗口观察使用 `rd.session.observe`。
+
 ## Shader Replacement
 
 Read `edit_plan` before editing shader text. It is returned by `rd.shader.get_source`, `rd.shader.get_disassembly`, `rd.shader.compile`, and `rd.shader.edit_and_replace`.

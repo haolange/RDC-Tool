@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from rdc_tool.platform import process
+from rdc_tool.platform.host import host_target
+from rdc_tool.core.errors import CoreError
 from rdc_tool.core.renderdoc_status import build_renderdoc_error_details, status_ok as _rd_status_ok, status_text as _rd_status_text
 from rdc_tool.models import (
     BackendType,
@@ -369,6 +371,20 @@ class SessionManager:
             fix_hint="Verify that the .rdc file is valid and supported by this RenderDoc runtime.",
         )
         state.capture_file = cap
+        if await self._offload(cap.LocalReplaySupport) == rd.ReplaySupport.Unsupported:
+            capture_api = str(await self._offload(cap.DriverName))
+            raise CoreError(
+                code="local_replay_unsupported",
+                message=f"This host's RenderDoc runtime cannot replay {capture_api} captures locally",
+                category="capability",
+                details={
+                    "capture_api": capture_api,
+                    "host_target": host_target(),
+                    "capture_path": str(rdc_path),
+                    "recovery_hint": "Replay on a host whose runtime supports this API, or connect a remote target "
+                                     "with rd.remote.connect and pass options.remote_id.",
+                },
+            )
 
         status, controller = await self._offload(cap.OpenCapture, rd.ReplayOptions(), None)
         _check_status(

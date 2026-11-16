@@ -4,6 +4,7 @@
 
 - 原生构建回执迁出 `binaries/windows/x64/manifest.runtime.json`，成为全目标共享的 `binaries/native_build.json`；`source` 新增必填 `repository` 与 `revision`（fork `haolange/renderdoc@dde8822`，已核验其两个 parent 即原记录的 base/upstream），主机输出角色改为平台中立的 `native_library`／`binding_module`。二进制未变，`receipt_sha256` 随回执内容变化。
 - 回执校验改为“存在即严格、缺席仅报告”：doctor 与发布脚本按场景所需目标（默认本主机 + 两个 Android helper）判定，结果新增 `targets` 与 `missing_targets`。
+- `rd.capture.open_replay` 在本地回放前检查 `LocalReplaySupport`：本主机运行库不能回放该 capture API 时返回 `local_replay_unsupported`（category `capability`），不再进入原生回放后才失败。
 
 ## 1.1.2 — 2026-10-29
 
