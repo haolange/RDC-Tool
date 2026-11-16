@@ -30,7 +30,7 @@ from rdc_tool.runtime import (
 )
 
 
-async def dispatch(action: str, args: Dict[str, Any]) -> str:
+async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
     if action not in {"get_data", "get_region_values", "get_histogram", "compute_stats", "diff"}:
         return await _dispatch_texture_impl(action, args)
     session_id = str(args.get("session_id", ""))
@@ -45,14 +45,14 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
                     or replay_access._active_event(session_id) != original_event:
                 raise RuntimeError("Original replay event was not restored")
         except Exception as restore_error:
-            return envelope._err(f"Texture readback failed; replay restoration failed: {restore_error}",
+            return envelope.failure(f"Texture readback failed; replay restoration failed: {restore_error}",
                         code="texture_readback_restore_failed", category="runtime",
                         details={**details, "replay_state_restored": False})
-        return envelope._err(str(exc), code="texture_readback_decode_failed", category="validation",
+        return envelope.failure(str(exc), code="texture_readback_decode_failed", category="validation",
                     details={**details, "replay_state_restored": True, "restored_event_id": original_event})
 
 
-async def _dispatch_texture_impl(action: str, args: Dict[str, Any]) -> str:
+async def _dispatch_texture_impl(action: str, args: Dict[str, Any]) -> envelope.Outcome:
     coerce._require(args, "session_id")
     session_id = str(args["session_id"])
     assert live_state._render_service is not None
@@ -69,11 +69,11 @@ async def _dispatch_texture_impl(action: str, args: Dict[str, Any]) -> str:
         subresource = coerce._as_dict(args.get("subresource"), default={})
         representation = str(args.get("representation", "numeric"))
         if representation not in {"numeric", "raw"}:
-            return envelope._err("Invalid texture representation", code="validation_error")
+            return envelope.failure("Invalid texture representation", code="validation_error")
         suffix = ".npz" if representation == "numeric" else ".bin"
         output_path = str(args.get("output_path") or "")
         if output_path and Path(output_path).suffix.lower() != suffix:
-            return envelope._err(f"Texture output_path must use {suffix}", code="texture_output_path_extension_mismatch")
+            return envelope.failure(f"Texture output_path must use {suffix}", code="texture_output_path_extension_mismatch")
         rid = await replay_access._resolve_resource_id(session_id, args["texture_id"])
         controller = await replay_access._get_controller(session_id)
         async def read_texture(event):
@@ -105,7 +105,7 @@ async def _dispatch_texture_impl(action: str, args: Dict[str, Any]) -> str:
         inline = coerce._as_bool(args.get("as_base64"), False)
         if inline:
             if len(data) > 1048576:
-                return envelope._err("Inline texture limit is 1 MiB; select a smaller mip or export", code="output_budget_exceeded")
+                return envelope.failure("Inline texture limit is 1 MiB; select a smaller mip or export", code="output_budget_exceeded")
             result["base64"] = base64.b64encode(data).decode("ascii")
         if output_path:
             out = Path(output_path)
@@ -115,7 +115,7 @@ async def _dispatch_texture_impl(action: str, args: Dict[str, Any]) -> str:
         elif not inline:
             artifact = await live_state._artifact_store.store(data, mime="application/x-npz" if representation == "numeric" else "application/octet-stream", suffix=suffix)
             result.update(artifact_path=artifact_payloads._artifact_path(artifact), saved_path=artifact_payloads._artifact_path(artifact))
-        return envelope._ok(**result)
+        return envelope.success(**result)
 
     if action == "get_pixel_value":
         coerce._require(args, "texture_id", "x", "y")
@@ -127,7 +127,7 @@ async def _dispatch_texture_impl(action: str, args: Dict[str, Any]) -> str:
                 raise
             # _ensure_event validates an explicit id against the action index before SetFrameEvent.
             # This rejection cannot have moved the replay or attempted a texture readback.
-            return envelope._err(
+            return envelope.failure(
                 exc.message,
                 code=exc.code,
                 category="validation",
@@ -150,7 +150,7 @@ async def _dispatch_texture_impl(action: str, args: Dict[str, Any]) -> str:
             value_type=str(args.get("as_type", "float")),
         )
         truth_meta = await truth_matrix._event_truth_metadata(session_id, int(event_id))
-        return envelope._ok(
+        return envelope.success(
             pixel=pixel,
             resolved_event_id=int(event_id),
             texture_id=str(rid),
@@ -176,11 +176,11 @@ async def _dispatch_texture_impl(action: str, args: Dict[str, Any]) -> str:
         stride = coerce._as_int(args.get("stride"), 1)
         as_type = str(args.get("as_type", "float"))
         if stride < 1 or as_type not in {"float", "uint", "int"}:
-            return envelope._err("Invalid region stride or value type", code="validation_error")
+            return envelope.failure("Invalid region stride or value type", code="validation_error")
         arr, stats, resolved_event_id, resolved_texture_id = await read_array(args["texture_id"], subresource, region=region, event_id=args.get("event_id"))
         arr = arr[::stride, ::stride]
         if as_type != "float" and not np.isfinite(arr).all():
-            return envelope._err("Cannot convert non-finite region to integers", code="texture_nonfinite_data")
+            return envelope.failure("Cannot convert non-finite region to integers", code="texture_nonfinite_data")
         if stats.get("value_interpretation") != "raw_unsigned_integer":
             arr = arr.astype({"float": np.float64, "uint": np.uint32, "int": np.int32}[as_type])
         stats = texture_export._sampled_texture_stats(arr, stats, stride)
@@ -191,7 +191,7 @@ async def _dispatch_texture_impl(action: str, args: Dict[str, Any]) -> str:
         artifact_ref = await live_state._artifact_store.store(container.getvalue(), mime="application/x-npz", suffix=".npz")
         artifact_path = artifact_payloads._artifact_path(artifact_ref)
         truth_meta = await truth_matrix._event_truth_metadata(session_id, int(resolved_event_id))
-        return envelope._ok(
+        return envelope.success(
             values=arr.tolist() if inline_complete else None,
             values_status="complete" if inline_complete else "omitted_limit",
             inline_value_limit=inline_value_limit,
@@ -215,7 +215,7 @@ async def _dispatch_texture_impl(action: str, args: Dict[str, Any]) -> str:
         subresource = {"mip": coerce._as_int(args.get("mip"), 0), "slice": coerce._as_int(args.get("slice"), 0), "sample": coerce._as_int(args.get("sample"), 0)}
         arr, stats, resolved_event_id, _ = await read_array(args["texture_id"], subresource, event_id=args.get("event_id"))
         if arr.ndim != 3:
-            return envelope._err("Texture format cannot be decoded into channels", code="texture_layout_unsupported")
+            return envelope.failure("Texture format cannot be decoded into channels", code="texture_layout_unsupported")
         channels = str(args.get("channels", "r")).lower()
         bins = coerce._as_int(args.get("bins"), 256)
         rng = coerce._as_dict(args.get("range"), default={})
@@ -223,27 +223,27 @@ async def _dispatch_texture_impl(action: str, args: Dict[str, Any]) -> str:
         mapping = {"r": 0, "g": 1, "b": 2, "a": 3}
         for c in channels:
             if c not in mapping or mapping[c] >= arr.shape[2]:
-                return envelope._err("Invalid histogram channel", code="validation_error")
+                return envelope.failure("Invalid histogram channel", code="validation_error")
             channel_data = arr[..., mapping[c]].astype("float64")
             if not np.isfinite(channel_data).all():
-                return envelope._err("Histogram contains non-finite samples", code="texture_nonfinite_data")
+                return envelope.failure("Histogram contains non-finite samples", code="texture_nonfinite_data")
             if not channel_data.size or bins <= 0:
-                return envelope._err("Histogram requires nonempty samples and positive bins", code="validation_error")
+                return envelope.failure("Histogram requires nonempty samples and positive bins", code="validation_error")
             low = coerce._as_float(rng.get("min"), float(channel_data.min()))
             high = coerce._as_float(rng.get("max"), float(channel_data.max()))
             if not np.isfinite(low) or not np.isfinite(high) or low > high:
-                return envelope._err("Invalid histogram range", code="validation_error")
+                return envelope.failure("Invalid histogram range", code="validation_error")
             hist, edges = np.histogram(channel_data, bins=bins, range=(low, high))
             out[c] = {"bins": hist.tolist(), "edges": edges.tolist()}
-        return envelope._ok(histogram=out, resolved_event_id=int(resolved_event_id))
+        return envelope.success(histogram=out, resolved_event_id=int(resolved_event_id))
 
     if action == "get_pixel_history":
         coerce._require(args, "x", "y")
         if args.get("texture_id") is not None and args.get("target") is not None:
-            return envelope._err("texture_id and target are mutually exclusive", code="validation_error")
+            return envelope.failure("texture_id and target are mutually exclusive", code="validation_error")
         target = coerce._parse_target_like(args.get("target"))
         if set(target) - {"texture_id", "rt_index"} or (target.get("texture_id") is not None and target.get("rt_index") is not None):
-            return envelope._err("Target requires only one of texture_id or rt_index", code="validation_error")
+            return envelope.failure("Target requires only one of texture_id or rt_index", code="validation_error")
         controller = await replay_access._get_controller(session_id)
         original_event = replay_access._active_event(session_id)
         event_id = await replay_access._ensure_event(session_id, coerce._as_int(args["event_id"]) if args.get("event_id") is not None else None)
@@ -272,7 +272,7 @@ async def _dispatch_texture_impl(action: str, args: Dict[str, Any]) -> str:
         except pixel_trace.PixelHistoryInputAttachmentConflict as exc:
             return await pixel_trace._pixel_history_conflict_error(session_id, original_event, exc)
         except asyncio.TimeoutError:
-            return envelope._err(
+            return envelope.failure(
                 pixel_trace._pixel_history_timeout_message(timeout_policy.PIXEL_HISTORY_TIMEOUT_S),
                 code="pixel_history_timeout",
                 category="runtime",
@@ -286,7 +286,7 @@ async def _dispatch_texture_impl(action: str, args: Dict[str, Any]) -> str:
                 },
             )
         except Exception as exc:
-            return envelope._err(f"PixelHistory unavailable: {exc}")
+            return envelope.failure(f"PixelHistory unavailable: {exc}", code="runtime_error")
         color_type = ("uint" if raw_typeless else pixel_trace._pixel_history_color_type(
             SimpleNamespace(format=view_format) if view_format is not None else texture_desc))
         history = [pixel_trace._pixel_history_item_payload(item, color_type) for item in history_raw]
@@ -294,7 +294,7 @@ async def _dispatch_texture_impl(action: str, args: Dict[str, Any]) -> str:
         history_bindings = None
         if args.get("include_shaders", True):
             history_bindings = await pixel_trace._pixel_history_writer_bindings(session_id, int(event_id), history, controller)
-        return envelope._ok(
+        return envelope.success(
             history=history,
             view_format=str(view_format.Name()) if view_format is not None else None,
             value_interpretation=("raw_unsigned_integer" if raw_typeless else "view_format" if view_format is not None else "resource_format"),
@@ -406,7 +406,7 @@ async def _dispatch_texture_impl(action: str, args: Dict[str, Any]) -> str:
         payload["visual_truth_level"] = "visual_valid"
         payload["evidence_truth_level"] = "visual_evidence_only"
         payload["summary_degraded_reasons"] = list(truth_meta.get("summary_degraded_reasons") or [])
-        return envelope._ok(**payload)
+        return envelope.success(**payload)
 
 
     if action in {"diff", "compute_stats"}:
@@ -417,11 +417,11 @@ async def _dispatch_texture_impl(action: str, args: Dict[str, Any]) -> str:
             arr_a, _, event_a, _ = await read_array(tex_a.get("texture_id"), coerce._as_dict(tex_a.get("subresource"), default={}), event_id=tex_a.get("event_id", args.get("event_id")))
             arr_b, _, event_b, _ = await read_array(tex_b.get("texture_id"), coerce._as_dict(tex_b.get("subresource"), default={}), event_id=tex_b.get("event_id", args.get("event_id")))
             if arr_a.ndim != 3 or arr_b.ndim != 3 or not arr_a.size or not arr_b.size:
-                return envelope._err("Texture channel layout unavailable", code="texture_layout_unsupported")
+                return envelope.failure("Texture channel layout unavailable", code="texture_layout_unsupported")
             if not np.isfinite(arr_a).all() or not np.isfinite(arr_b).all():
-                return envelope._err("Texture diff contains non-finite samples", code="texture_nonfinite_data")
+                return envelope.failure("Texture diff contains non-finite samples", code="texture_nonfinite_data")
             if arr_a.shape != arr_b.shape:
-                return envelope._err("Texture shapes differ", code="texture_shape_mismatch")
+                return envelope.failure("Texture shapes differ", code="texture_shape_mismatch")
             arr_a = arr_a.astype("float64")
             arr_b = arr_b.astype("float64")
             diff = arr_a - arr_b
@@ -432,20 +432,20 @@ async def _dispatch_texture_impl(action: str, args: Dict[str, Any]) -> str:
                        "psnr_peak": 1.0, "psnr_status": "infinite" if mse == 0 else "finite"}
             requested_metrics = args.get("metric", ["mse", "max_abs", "psnr"])
             if not isinstance(requested_metrics, list) or any(m not in {"mse", "max_abs", "psnr"} for m in requested_metrics):
-                return envelope._err("Invalid texture diff metric", code="validation_error")
-            return envelope._ok(diff={key: value for key, value in metrics.items() if key in requested_metrics or key in {"identical", "psnr_peak", "psnr_status"}}, event_a=int(event_a), event_b=int(event_b))
+                return envelope.failure("Invalid texture diff metric", code="validation_error")
+            return envelope.success(diff={key: value for key, value in metrics.items() if key in requested_metrics or key in {"identical", "psnr_peak", "psnr_status"}}, event_a=int(event_a), event_b=int(event_b))
         coerce._require(args, "texture_id")
         arr, stats, resolved_event_id, resolved_texture_id = await read_array(
             args.get("texture_id"), {"mip": coerce._as_int(args.get("mip"), 0), "slice": coerce._as_int(args.get("slice"), 0), "sample": coerce._as_int(args.get("sample"), 0)}, event_id=args.get("event_id"))
         if arr.ndim != 3 or not arr.size:
-            return envelope._err("Texture channel layout unavailable", code="texture_layout_unsupported")
+            return envelope.failure("Texture channel layout unavailable", code="texture_layout_unsupported")
         stride = coerce._as_int(args.get("stride"), 1)
         if stride < 1:
-            return envelope._err("Statistics stride must be positive", code="validation_error")
+            return envelope.failure("Statistics stride must be positive", code="validation_error")
         arr = arr[::stride, ::stride]
         stats = texture_export._sampled_texture_stats(arr, stats, stride)
         truth_meta = await truth_matrix._event_truth_metadata(session_id, int(resolved_event_id))
-        return envelope._ok(
+        return envelope.success(
             stats={**dict(stats or {}), "event_id": int(resolved_event_id)},
             resolved_event_id=int(resolved_event_id),
             texture_id=str(resolved_texture_id),
@@ -463,4 +463,4 @@ async def _dispatch_texture_impl(action: str, args: Dict[str, Any]) -> str:
             summary_degraded_reasons=list(truth_meta.get("summary_degraded_reasons") or []),
         )
 
-    return envelope._err(f"Unsupported texture action: {action}")
+    return envelope.failure(f"Unsupported texture action: {action}", code="runtime_error")

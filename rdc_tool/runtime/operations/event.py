@@ -17,14 +17,14 @@ from rdc_tool.runtime import (
 )
 
 
-async def dispatch(action: str, args: Dict[str, Any]) -> str:
+async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
     if action == "get_api_calls":
         from rdc_tool.core.capture_queries import query_calls
         coerce._require(args, "session_id")
         if (args.get("event_id") is None) == (args.get("chunk_indices") is None):
-            return envelope._err("Specify exactly one of event_id and chunk_indices", code="validation_error")
+            return envelope.failure("Specify exactly one of event_id and chunk_indices", code="validation_error")
         controller = await replay_access._get_controller(str(args["session_id"]))
-        return envelope._ok(**(await renderdoc_api._offload(query_calls, renderdoc_api._get_rd(), controller,
+        return envelope.success(**(await renderdoc_api._offload(query_calls, renderdoc_api._get_rd(), controller,
             event_id=args.get("event_id"), chunk_indices=args.get("chunk_indices"),
             offset=int(args.get("offset", 0)), limit=int(args.get("limit", 50)),
             max_nodes=int(args.get("max_nodes", 4096)), object_path=args.get("object_path"),
@@ -40,12 +40,12 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
         for filter_name in ("flags_include", "flags_exclude"):
             requested = query.get(filter_name, [])
             if not isinstance(requested, list) or any(not isinstance(name, str) or not name for name in requested):
-                return envelope._err(f"{filter_name} must be an array of ActionFlags names", code="validation_error", category="validation", details=validation_details)
+                return envelope.failure(f"{filter_name} must be an array of ActionFlags names", code="validation_error", category="validation", details=validation_details)
             members = []
             for name in requested:
                 member = getattr(action_flags, name, None)
                 if member is None:
-                    return envelope._err(f"Unknown ActionFlags name in {filter_name}: {name}", code="validation_error", category="validation", details=validation_details)
+                    return envelope.failure(f"Unknown ActionFlags name in {filter_name}: {name}", code="validation_error", category="validation", details=validation_details)
                 members.append(member)
             flag_filters[filter_name] = members
     controller = await replay_access._get_controller(session_id)
@@ -77,10 +77,10 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
         await renderdoc_api._offload(controller.SetFrameEvent, resolved_event, True)
         replay_access._store_active_event(session_id, resolved_event)
         await preview_sync._auto_sync_preview_if_enabled(live_state._runtime_context_id())
-        return envelope._ok(active_event_id=resolved_event)
+        return envelope.success(active_event_id=resolved_event)
 
     if action == "get_active":
-        return envelope._ok(active_event_id=replay_access._active_event(session_id))
+        return envelope.success(active_event_id=replay_access._active_event(session_id))
 
 
     if action == "get_action_tree":
@@ -93,7 +93,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
         if requested is not None:
             node = by_event.get(int(requested))
             if node is None:
-                return envelope._err(f"Event not found: {requested}", code="event_not_found")
+                return envelope.failure(f"Event not found: {requested}", code="event_not_found")
             source = [node]
         include_markers = coerce._as_bool(args.get("include_markers"), True)
         include_drawcalls = coerce._as_bool(args.get("include_drawcalls"), True)
@@ -130,20 +130,20 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
         projection = envelope._projection_request(args, "rd.event.get_action_tree")
         if projection:
             result["projections"] = envelope._event_actions_projection(children, include_tsv_text=bool(projection.get("include_tsv_text", False)))
-        return envelope._ok(**result)
+        return envelope.success(**result)
 
     if action == "get_action_details":
         coerce._require(args, "event_id")
         event_id = coerce._as_int(args["event_id"])
         action_obj = by_event.get(event_id)
         if action_obj is None:
-            return envelope._err(f"Event not found: {event_id}")
+            return envelope.failure(f"Event not found: {event_id}", code="runtime_error")
         payload = action_index._action_to_dict(action_obj, include_children=True)
         payload["parent_chain"] = [{"event_id": int(item.eventId), "name": action_index._action_name(item)} for item in _parent_chain(event_id)[:-1]]
         payload["marker_path"] = [str(item.customName) for item in _parent_chain(event_id) if getattr(item, "customName", "") and action_index._map_action_flags(item.flags).get("is_marker")] or None
         payload["depth_output"] = None if renderdoc_api._is_null_resource_id(getattr(action_obj, "depthOut", None)) else str(action_obj.depthOut)
         payload["children_event_ids"] = [int(c.eventId) for c in getattr(action_obj, "children", None) or []]
-        return envelope._ok(action=payload)
+        return envelope.success(action=payload)
 
 
     if action == "get_parent_chain":
@@ -158,7 +158,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
             }
             for item in chain
         ]
-        return envelope._ok(parent_chain=out)
+        return envelope.success(parent_chain=out)
 
     if action == "search_actions":
         max_results = coerce._as_int(args.get("max_results"), 200)
@@ -195,7 +195,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
             )
             if len(matches) >= max_results:
                 break
-        return envelope._ok(matches=matches)
+        return envelope.success(matches=matches)
 
     if action == "list_passes":
         tree = live_state._event_graph_service.build_event_tree(session_id, live_state._session_manager)
@@ -223,7 +223,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
         walk(tree)
         passes = list(pass_map.values())
         passes.sort(key=lambda p: p["begin_event_id"])
-        return envelope._ok(passes=passes)
+        return envelope.success(passes=passes)
 
 
     if action == "get_callstack":
@@ -231,7 +231,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
         event_id = coerce._as_int(args["event_id"])
         action_obj = by_event.get(event_id)
         if action_obj is None:
-            return envelope._err(f"Event not found: {event_id}")
+            return envelope.failure(f"Event not found: {event_id}", code="runtime_error")
         callstack = []
         raw = getattr(action_obj, "callstack", None) or []
         for frame in raw:
@@ -244,7 +244,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
                     "address": str(getattr(frame, "address", "")),
                 },
             )
-        return envelope._ok(callstack=callstack)
+        return envelope.success(callstack=callstack)
 
     if action == "diff_pipeline_state":
         coerce._require(args, "event_a", "event_b")
@@ -271,7 +271,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
                 diff.append({"path": path, "before": va, "after": vb})
 
         walk("", a, b)
-        return envelope._ok(diff=diff)
+        return envelope.success(diff=diff)
 
     if action == "get_resource_usage":
         event_id = args.get("event_id")
@@ -281,6 +281,6 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
             "depth_target": snap.depth_target.model_dump(mode="json") if snap.depth_target else None,
             "bindings": [b.model_dump(mode="json") for b in snap.bindings],
         }
-        return envelope._ok(usage=usage)
+        return envelope.success(usage=usage)
 
-    return envelope._err(f"Unsupported event action: {action}")
+    return envelope.failure(f"Unsupported event action: {action}", code="runtime_error")

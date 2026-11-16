@@ -70,7 +70,7 @@ class PixelHistoryInputAttachmentConflict(Exception):
 
 
 async def _pixel_history_conflict_error(session_id: str, original_event: int,
-                                        conflict: PixelHistoryInputAttachmentConflict) -> str:
+                                        conflict: PixelHistoryInputAttachmentConflict) -> envelope.Outcome:
     details = {"context_id": live_state._runtime_context_id(), "session_id": session_id,
                "failure_stage": "validate_input_attachment", "usage_event_id": conflict.usage_event_id,
                "image_usage_flags": conflict.image_usage_flags}
@@ -79,10 +79,10 @@ async def _pixel_history_conflict_error(session_id: str, original_event: int,
                 or replay_access._active_event(session_id) != original_event:
             raise RuntimeError("Original replay event was not restored")
     except Exception as exc:
-        return envelope._err(f"Pixel History unavailable; replay restoration failed: {exc}",
+        return envelope.failure(f"Pixel History unavailable; replay restoration failed: {exc}",
                     code="pixel_history_unavailable_restore_failed", category="runtime",
                     details={**details, "replay_state_restored": False})
-    return envelope._err(
+    return envelope.failure(
         "Pixel History unavailable: a Vulkan image is used as both input and output attachment "
         "without VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT. Read the region before and after candidate "
         "events and confirm it with draw coverage instead.",

@@ -12,7 +12,7 @@ import pytest
 from rdc_tool.context_snapshot import clear_context_snapshot
 from rdc_tool.core import pipeline_service as pipeline_module
 from rdc_tool.models import ShaderStage
-from rdc_tool.runtime import artifact_payloads, context_records, dispatch, live_state, renderdoc_api, replay_access, shader_values, texture_export, texture_naming, truth_matrix, visual_target
+from rdc_tool.runtime import artifact_payloads, context_records, dispatch, envelope, live_state, renderdoc_api, replay_access, shader_values, texture_export, texture_naming, truth_matrix, visual_target
 from rdc_tool.runtime.operations import capture as capture_ops
 from rdc_tool.runtime.operations import event as event_ops
 from rdc_tool.runtime.operations import export as export_ops
@@ -303,15 +303,15 @@ def test_pixel_value_rejects_missing_event_before_replay_effects(monkeypatch: py
     _seed_session(1248)
     live_state._render_service = SimpleNamespace()
 
-    rejected = json.loads(asyncio.run(texture_ops.dispatch("get_pixel_value", {
+    rejected = asyncio.run(texture_ops.dispatch("get_pixel_value", {
         "session_id": "sess_demo", "event_id": 1247,
         "texture_id": "ResourceId::208592", "x": 675, "y": 65,
-    })))
+    }))
 
-    assert rejected["success"] is False
-    assert rejected["code"] == "event_not_found"
-    assert rejected["category"] == "validation"
-    assert rejected["details"] == {
+    assert rejected.ok is False
+    assert rejected.code == "event_not_found"
+    assert rejected.category == "validation"
+    assert rejected.details == {
         "session_id": "sess_demo", "event_id": 1247,
         "failure_stage": "validate_event", "effects_attempted": False,
         "context_preserved": True,
@@ -333,26 +333,26 @@ def test_search_actions_filters_flags_before_result_limit(monkeypatch: pytest.Mo
     _seed_capture()
     _seed_session(101)
 
-    included = json.loads(asyncio.run(event_ops.dispatch(
+    included = asyncio.run(event_ops.dispatch(
         "search_actions",
         {"session_id": "sess_demo", "query": {"flags_include": ["Drawcall"]}, "max_results": 1},
-    )))
-    assert included["success"] is True
-    assert [item["event_id"] for item in included["matches"]] == [202]
+    ))
+    assert included.ok is True
+    assert [item["event_id"] for item in included.data['matches']] == [202]
 
-    excluded = json.loads(asyncio.run(event_ops.dispatch(
+    excluded = asyncio.run(event_ops.dispatch(
         "search_actions",
         {"session_id": "sess_demo", "query": {"flags_exclude": ["Drawcall"]}, "max_results": 2},
-    )))
-    assert excluded["success"] is True
-    assert [item["event_id"] for item in excluded["matches"]] == [101, 303]
+    ))
+    assert excluded.ok is True
+    assert [item["event_id"] for item in excluded.data['matches']] == [101, 303]
 
-    invalid = json.loads(asyncio.run(event_ops.dispatch(
+    invalid = asyncio.run(event_ops.dispatch(
         "search_actions",
         {"session_id": "sess_demo", "query": {"flags_include": ["NotAFlag"]}, "max_results": 1},
-    )))
-    assert invalid["success"] is False
-    assert invalid["code"] == "validation_error"
+    ))
+    assert invalid.ok is False
+    assert invalid.code == "validation_error"
 
 
 @pytest.mark.parametrize("query", [
@@ -415,17 +415,15 @@ def test_get_action_tree_paginates_and_bounds_nodes(monkeypatch: pytest.MonkeyPa
     _seed_capture()
     _seed_session(101)
 
-    payload = json.loads(
-        asyncio.run(
+    payload = asyncio.run(
             event_ops.dispatch(
                 "get_action_tree",
                 {"session_id": "sess_demo", "offset": 1, "limit": 1, "max_nodes": 2},
             )
         )
-    )
 
-    assert payload["success"] is True
-    assert payload["pagination"] == {
+    assert payload.ok is True
+    assert payload.data['pagination'] == {
         "offset": 1,
         "limit": 1,
         "max_nodes": 2,
@@ -435,8 +433,8 @@ def test_get_action_tree_paginates_and_bounds_nodes(monkeypatch: pytest.MonkeyPa
         "emitted_nodes": 2,
         "visited_nodes": 2,
     }
-    assert payload["root"]["children"][0]["event_id"] == 201
-    assert payload["root"]["children"][0]["children"][0]["event_id"] == 211
+    assert payload.data['root']["children"][0]["event_id"] == 201
+    assert payload.data['root']["children"][0]["children"][0]["event_id"] == 211
 
 
 def test_get_action_tree_does_not_materialize_children_past_node_budget(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -456,19 +454,17 @@ def test_get_action_tree_does_not_materialize_children_past_node_budget(monkeypa
     _seed_capture()
     _seed_session(101)
 
-    payload = json.loads(
-        asyncio.run(
+    payload = asyncio.run(
             event_ops.dispatch(
                 "get_action_tree",
                 {"session_id": "sess_demo", "max_nodes": 2},
             )
         )
-    )
 
-    assert payload["success"] is True
-    assert payload["pagination"]["max_nodes"] == 2
-    assert payload["pagination"]["truncated"] is True
-    root = payload["root"]["children"][0]
+    assert payload.ok is True
+    assert payload.data['pagination']["max_nodes"] == 2
+    assert payload.data['pagination']["truncated"] is True
+    root = payload.data['root']["children"][0]
     assert root["event_id"] == 101
     assert [child["event_id"] for child in root["children"]] == [111]
     assert root["children"][0]["children"] == []
@@ -484,11 +480,11 @@ def test_get_action_tree_supports_targeted_subtree(monkeypatch: pytest.MonkeyPat
     _seed_capture()
     _seed_session(101)
 
-    payload = json.loads(asyncio.run(event_ops.dispatch("get_action_tree", {"session_id": "sess_demo", "event_id": 111})))
+    payload = asyncio.run(event_ops.dispatch("get_action_tree", {"session_id": "sess_demo", "event_id": 111}))
 
-    assert payload["success"] is True
-    assert payload["root"]["children"][0]["event_id"] == 111
-    assert payload["pagination"]["total_root_count"] == 1
+    assert payload.ok is True
+    assert payload.data['root']["children"][0]["event_id"] == 111
+    assert payload.data['pagination']["total_root_count"] == 1
 
 
 @pytest.mark.parametrize("shape,max_nodes,depth,reason,emitted,source_truncated", [
@@ -601,17 +597,15 @@ def test_get_action_tree_tabular_projection_flattens_actions(monkeypatch: pytest
     _seed_capture()
     _seed_session(101)
 
-    payload = json.loads(
-        asyncio.run(
+    payload = asyncio.run(
             event_ops.dispatch(
                 "get_action_tree",
                 {"session_id": "sess_demo", "projection": {"kind": "tabular", "include_tsv_text": True}},
             )
         )
-    )
 
-    assert payload["success"] is True
-    tabular = payload["projections"]["tabular"]
+    assert payload.ok is True
+    tabular = payload.projections["tabular"]
     assert tabular["columns"][:4] == ["format_version", "event_id", "name", "depth"]
     assert tabular["row_count"] == 2
     assert "root_a" in tabular["tsv_text"]
@@ -650,23 +644,23 @@ def test_pipeline_dispatch_uses_one_resolved_event_context(monkeypatch: pytest.M
     _seed_capture()
     _seed_session(53)
 
-    state = json.loads(asyncio.run(pipeline_ops.dispatch("get_state", {"session_id": "sess_demo", "detail": "summary"})))
-    assert state["success"] is True
-    assert state["pipeline_state"]["render_targets"][0]["resource_id"] == "rt@101"
-    assert state["pipeline_state"]["summary_status"] == "verified"
-    assert state["pipeline_state"]["binding_truth_level"] == "binding_verified"
+    state = asyncio.run(pipeline_ops.dispatch("get_state", {"session_id": "sess_demo", "detail": "summary"}))
+    assert state.ok is True
+    assert state.data['pipeline_state']["render_targets"][0]["resource_id"] == "rt@101"
+    assert state.data['pipeline_state']["summary_status"] == "verified"
+    assert state.data['pipeline_state']["binding_truth_level"] == "binding_verified"
     assert pipeline_service.snapshot_calls == [(101, ("shaders", "output_targets", "topology", "viewports_scissors"))]
 
     _poison_active_event(53)
-    shader = json.loads(asyncio.run(pipeline_ops.dispatch("get_shader", {"session_id": "sess_demo", "stage": "ps"})))
-    assert shader["success"] is True
-    assert shader["shader"]["shader_id"] == "shader@101"
+    shader = asyncio.run(pipeline_ops.dispatch("get_shader", {"session_id": "sess_demo", "stage": "ps"}))
+    assert shader.ok is True
+    assert shader.data['shader']["shader_id"] == "shader@101"
     assert len(pipeline_service.snapshot_calls) == 1
 
     _poison_active_event(53)
-    bindings = json.loads(asyncio.run(pipeline_ops.dispatch("get_resource_bindings", {"session_id": "sess_demo", "stage": "ps"})))
-    assert bindings["success"] is True
-    assert bindings["bindings"][0]["resource_id"] == "srv@101"
+    bindings = asyncio.run(pipeline_ops.dispatch("get_resource_bindings", {"session_id": "sess_demo", "stage": "ps"}))
+    assert bindings.ok is True
+    assert bindings.data['bindings'][0]["resource_id"] == "srv@101"
     assert len(pipeline_service.snapshot_calls) == 1
     assert pipeline_service.binding_calls == [101]
     assert pipeline_service.binding_stages == [ShaderStage.PS]
@@ -693,35 +687,32 @@ def test_find_state_change_point_reports_match_and_budget_or_range_exhaustion(mo
         "state_path": "shaders.0.shader_id",
         "target_value": "shader@202",
     }
-    budgeted = json.loads(asyncio.run(macro_ops.dispatch("find_state_change_point", {**base_args, "max_events": 1})))
-    found = json.loads(asyncio.run(macro_ops.dispatch("find_state_change_point", {**base_args, "max_events": 3})))
-    exhausted = json.loads(
-        asyncio.run(
+    budgeted = asyncio.run(macro_ops.dispatch("find_state_change_point", {**base_args, "max_events": 1}))
+    found = asyncio.run(macro_ops.dispatch("find_state_change_point", {**base_args, "max_events": 3}))
+    exhausted = asyncio.run(
             macro_ops.dispatch(
                 "find_state_change_point",
                 {**base_args, "target_value": "shader@999", "max_events": 3},
             )
         )
-    )
 
-    assert budgeted == {
-        "success": True,
-        "found_event_id": None,
-        "examined_events": 1,
-        "complete": False,
-        "range_exhausted": False,
-        "budget_exhausted": True,
-    }
-    assert found["found_event_id"] == 202
-    assert found["examined_events"] == 2
-    assert found["complete"] is True
-    assert found["range_exhausted"] is False
-    assert found["budget_exhausted"] is False
-    assert exhausted["found_event_id"] is None
-    assert exhausted["examined_events"] == 3
-    assert exhausted["complete"] is True
-    assert exhausted["range_exhausted"] is True
-    assert exhausted["budget_exhausted"] is False
+    assert budgeted == envelope.success(
+        found_event_id=None,
+        examined_events=1,
+        complete=False,
+        range_exhausted=False,
+        budget_exhausted=True,
+    )
+    assert found.data['found_event_id'] == 202
+    assert found.data['examined_events'] == 2
+    assert found.data['complete'] is True
+    assert found.data['range_exhausted'] is False
+    assert found.data['budget_exhausted'] is False
+    assert exhausted.data['found_event_id'] is None
+    assert exhausted.data['examined_events'] == 3
+    assert exhausted.data['complete'] is True
+    assert exhausted.data['range_exhausted'] is True
+    assert exhausted.data['budget_exhausted'] is False
     assert all(sections == ("shaders",) for _, sections in pipeline_service.snapshot_calls)
     assert live_state._runtime.replays["sess_demo"].active_event_id == 303
 
@@ -751,11 +742,11 @@ def test_pipeline_truth_only_qualifies_requested_sections(
         return snapshot
 
     monkeypatch.setattr(_FakeSnapshot, "model_dump", section_snapshot)
-    result = json.loads(asyncio.run(pipeline_ops.dispatch("get_state", {
+    result = asyncio.run(pipeline_ops.dispatch("get_state", {
         "session_id": "sess_demo", "event_id": 101, "sections": sections,
-    })))
-    state = result["pipeline_state"]
-    assert result["success"] is True
+    }))
+    state = result.data['pipeline_state']
+    assert result.ok is True
     assert state["summary_status"] == expected_status
     assert state["binding_truth_level"] == f"binding_{expected_status}"
     assert ("binding_unavailable" in state["summary_degraded_reasons"]) == ("shaders" in sections)
@@ -800,11 +791,11 @@ def test_pipeline_summary_and_outputs_include_selected_visual_target(monkeypatch
 
     monkeypatch.setattr(visual_target, "_resolve_visual_target_for_event", _fake_resolve_visual_target_for_event)
 
-    state = json.loads(asyncio.run(pipeline_ops.dispatch("get_state", {"session_id": "sess_demo", "sections": ["output_targets"]})))
+    state = asyncio.run(pipeline_ops.dispatch("get_state", {"session_id": "sess_demo", "sections": ["output_targets"]}))
 
-    assert state["success"] is True
-    assert state["pipeline_state"]["selected_visual_target"]["target_source"] == "event_binding_uav_3"
-    assert state["pipeline_state"]["export_target_available"] is True
+    assert state.ok is True
+    assert state.data['pipeline_state']["selected_visual_target"]["target_source"] == "event_binding_uav_3"
+    assert state.data['pipeline_state']["export_target_available"] is True
     assert pipeline_service.snapshot_calls == [(101, ("output_targets",))]
     assert target_requests == [(101, {"semantic": "event_output"})]
 
@@ -884,15 +875,12 @@ def test_pipeline_get_constant_buffers_uses_collected_entries(monkeypatch: pytes
 
     monkeypatch.setattr(shader_values, "_collect_constant_buffers", _fake_collect_constant_buffers)
 
-    payload = json.loads(
-        asyncio.run(pipeline_ops.dispatch("get_constant_buffers", {"session_id": "sess_demo", "stage": "ps", "include_contents": True})),
-        parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)),
-    )
+    payload = asyncio.run(pipeline_ops.dispatch("get_constant_buffers", {"session_id": "sess_demo", "stage": "ps", "include_contents": True}))
 
-    assert payload["success"] is True
-    assert payload["constant_buffers"][0]["slot"] == 2
-    assert payload["constant_buffers"][0]["contents"][0]["name"] == "Tint"
-    assert payload["constant_buffers"][0]["contents"][0]["value"]["f32v"] == [1.0, "NaN", 0.0, 1.0]
+    assert payload.ok is True
+    assert payload.data['constant_buffers'][0]["slot"] == 2
+    assert payload.data['constant_buffers'][0]["contents"][0]["name"] == "Tint"
+    assert payload.data['constant_buffers'][0]["contents"][0]["value"]["f32v"] == [1.0, "NaN", 0.0, 1.0]
 
 
 def test_pipeline_get_shader_returns_runtime_error_when_stage_is_unbound(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -917,12 +905,12 @@ def test_pipeline_get_shader_returns_runtime_error_when_stage_is_unbound(monkeyp
     _seed_capture()
     _seed_session(101)
 
-    payload = json.loads(asyncio.run(pipeline_ops.dispatch("get_shader", {"session_id": "sess_demo", "stage": "ps"})))
+    payload = asyncio.run(pipeline_ops.dispatch("get_shader", {"session_id": "sess_demo", "stage": "ps"}))
 
-    assert payload["success"] is False
-    assert payload["code"] == "shader_not_bound"
-    assert payload["details"]["resolved_event_id"] == 101
-    assert payload["details"]["stage"] == "PS"
+    assert payload.ok is False
+    assert payload.code == "shader_not_bound"
+    assert payload.details["resolved_event_id"] == 101
+    assert payload.details["stage"] == "PS"
 
 
 def test_resource_usage_exposes_write_classification_and_raw_event_ids(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -954,16 +942,14 @@ def test_resource_usage_exposes_write_classification_and_raw_event_ids(monkeypat
     _seed_capture()
     _seed_session(101)
 
-    usage = json.loads(
-        asyncio.run(
+    usage = asyncio.run(
             resource_ops.dispatch(
                 "get_usage",
                 {"session_id": "sess_demo", "resource_id": "ResourceId::7", "max_events": 10},
             )
         )
-    )
-    assert usage["success"] is True
-    rows = usage["usage"]
+    assert usage.ok is True
+    rows = usage.data['usage']
     assert [(r["event_id"], r["raw_event_id"], r["event_resolvable"]) for r in rows] == [(101, 101, True), (None, 53, False), (None, 1042, False)]
     assert [(r["usage_name"], r["is_read"], r["is_write"]) for r in rows] == [("PS_Resource", True, False), ("CopyDst", False, True), (None, None, None)]
     assert rows[0]["attachments"]["color"] == []
@@ -991,39 +977,33 @@ def test_resource_list_all_tabular_projection(monkeypatch: pytest.MonkeyPatch) -
     _seed_capture()
     _seed_session(101)
 
-    payload = json.loads(
-        asyncio.run(
+    payload = asyncio.run(
             resource_ops.dispatch(
                 "list_all",
                 {"session_id": "sess_demo", "projection": {"kind": "tabular", "include_tsv_text": True}},
             )
         )
-    )
 
-    assert payload["success"] is True
-    tabular = payload["projections"]["tabular"]
+    assert payload.ok is True
+    tabular = payload.projections["tabular"]
     assert tabular["columns"][:9] == ["format_version", "resource_id", "kind", "name", "width", "height", "depth", "format", "byte_size"]
     assert tabular["row_count"] == 1
     assert "ResourceId::7" in tabular["tsv_text"]
     assert "main_color" in tabular["tsv_text"]
 
-    textures_only = json.loads(
-        asyncio.run(resource_ops.dispatch("list_all", {"session_id": "sess_demo", "kind": "texture"}))
-    )
-    assert textures_only["success"] is True
-    assert {item["texture_id"] for item in textures_only["resources"]} == {"ResourceId::7"}
+    textures_only = asyncio.run(resource_ops.dispatch("list_all", {"session_id": "sess_demo", "kind": "texture"}))
+    assert textures_only.ok is True
+    assert {item["texture_id"] for item in textures_only.data['resources']} == {"ResourceId::7"}
 
-    invalid = json.loads(
-        asyncio.run(resource_ops.dispatch("list_all", {"session_id": "sess_demo", "kind": "shader"}))
-    )
-    assert invalid["success"] is False
-    assert invalid["code"] == "validation_error"
+    invalid = asyncio.run(resource_ops.dispatch("list_all", {"session_id": "sess_demo", "kind": "shader"}))
+    assert invalid.ok is False
+    assert invalid.code == "validation_error"
 
 
 def test_capture_close_file_rejects_unknown_handle() -> None:
-    payload = json.loads(asyncio.run(capture_ops.dispatch("close_file", {"capture_file_id": "capf_missing"})))
-    assert payload["success"] is False
-    assert payload["error_message"] == "Unknown capture_file_id: capf_missing"
+    payload = asyncio.run(capture_ops.dispatch("close_file", {"capture_file_id": "capf_missing"}))
+    assert payload.ok is False
+    assert payload.message == "Unknown capture_file_id: capf_missing"
 
 
 def test_restored_capture_thumbnail_rejects_obsolete_size_parameter() -> None:
@@ -1044,11 +1024,11 @@ def test_capture_close_file_rejects_when_replay_depends_on_capture() -> None:
     _seed_capture()
     _seed_session(101)
 
-    payload = json.loads(asyncio.run(capture_ops.dispatch("close_file", {"capture_file_id": "capf_demo"})))
-    assert payload["success"] is False
-    assert payload["code"] == "capture_file_in_use"
-    assert payload["category"] == "runtime"
-    assert payload["details"] == {
+    payload = asyncio.run(capture_ops.dispatch("close_file", {"capture_file_id": "capf_demo"}))
+    assert payload.ok is False
+    assert payload.code == "capture_file_in_use"
+    assert payload.category == "runtime"
+    assert payload.details == {
         "capture_file_id": "capf_demo",
         "dependent_session_ids": ["sess_demo"],
         "dependent_session_count": 1,
@@ -1073,10 +1053,10 @@ def test_capture_close_file_reports_all_dependent_sessions() -> None:
         active_event_id=0,
     )
 
-    payload = json.loads(asyncio.run(capture_ops.dispatch("close_file", {"capture_file_id": "capf_demo"})))
-    assert payload["success"] is False
-    assert payload["details"]["dependent_session_ids"] == ["sess_a", "sess_b"]
-    assert payload["details"]["dependent_session_count"] == 2
+    payload = asyncio.run(capture_ops.dispatch("close_file", {"capture_file_id": "capf_demo"}))
+    assert payload.ok is False
+    assert payload.details["dependent_session_ids"] == ["sess_a", "sess_b"]
+    assert payload.details["dependent_session_count"] == 2
     assert "capf_demo" in live_state._runtime.captures
 
 
@@ -1087,14 +1067,14 @@ def test_capture_close_file_succeeds_after_close_replay() -> None:
     _seed_capture()
     _seed_session(101)
 
-    close_replay = json.loads(asyncio.run(capture_ops.dispatch("close_replay", {"session_id": "sess_demo"})))
-    assert close_replay["success"] is True
+    close_replay = asyncio.run(capture_ops.dispatch("close_replay", {"session_id": "sess_demo"}))
+    assert close_replay.ok is True
     assert manager.closed_sessions == ["sess_demo"]
     assert live_state._runtime.replays == {}
     assert "capf_demo" in live_state._runtime.captures
 
-    close_file = json.loads(asyncio.run(capture_ops.dispatch("close_file", {"capture_file_id": "capf_demo"})))
-    assert close_file["success"] is True
+    close_file = asyncio.run(capture_ops.dispatch("close_file", {"capture_file_id": "capf_demo"}))
+    assert close_file.ok is True
     assert live_state._runtime.captures == {}
     context = context_records._context_snapshot()
     assert context["runtime"]["session_id"] == ""
@@ -1111,34 +1091,28 @@ def test_export_shader_bundle_forwards_requested_event(monkeypatch: pytest.Monke
         assert session_id == "sess_demo"
         return int(event_id or 0)
 
-    async def _fake_dispatch_pipeline(action: str, args: dict[str, object]) -> str:
+    async def _fake_dispatch_pipeline(action: str, args: dict[str, object]) -> envelope.Outcome:
         seen_calls.append({"action": action, **dict(args)})
         stage = str(args["stage"])
         event_id = int(args["event_id"])
-        return json.dumps(
-            {
-                "success": True,
-                "shader": {
+        return envelope.success(shader={
                     "stage": stage.upper(),
                     "shader_id": f"{stage}@{event_id}",
                     "entry_point": f"main_{event_id}",
-                },
-                "resolved_event_id": event_id,
-            }
-        )
+                }, resolved_event_id=event_id)
 
-    async def _fake_dispatch_shader(action: str, args: dict[str, object]) -> str:
+    async def _fake_dispatch_shader(action: str, args: dict[str, object]) -> envelope.Outcome:
         shader_calls.append({"action": action, **dict(args)})
         assert int(args["event_id"]) == 202
         if action == "extract_binary":
             saved_path = str(args["output_path"]) + ".spv"
             Path(saved_path).write_bytes(b"shader-binary")
-            return json.dumps({"success": True, "saved_path": saved_path})
+            return envelope.success(saved_path=saved_path)
         if action == "get_reflection":
-            return json.dumps({"success": True, "reflection": {"entry_points": ["main_202"]}})
+            return envelope.success(reflection={"entry_points": ["main_202"]})
         if action == "get_disassembly":
             assert args["target"] == (disassembly_target or "auto")
-            return json.dumps({"success": True, "disassembly": disassembly_text, "target": "SPIR-V ASM", "source_encoding": "spirvasm", "is_raw_spirv_asm": True, "source_hash": hashlib.sha256(disassembly_text.encode("utf-8")).hexdigest(), "edit_plan": {"can_build": True, "can_edit_text": True}})
+            return envelope.success(disassembly=disassembly_text, target="SPIR-V ASM", source_encoding="spirvasm", is_raw_spirv_asm=True, source_hash=hashlib.sha256(disassembly_text.encode("utf-8")).hexdigest(), edit_plan={"can_build": True, "can_edit_text": True})
         raise AssertionError(action)
 
     monkeypatch.setattr(replay_access, "_ensure_event", _fake_ensure_event)
@@ -1146,22 +1120,20 @@ def test_export_shader_bundle_forwards_requested_event(monkeypatch: pytest.Monke
     monkeypatch.setattr(shader_ops, "dispatch", _fake_dispatch_shader)
 
     output_dir = tmp_path / "shader_bundle"
-    payload = json.loads(
-        asyncio.run(
+    payload = asyncio.run(
             export_ops.dispatch(
                 "shader_bundle",
                 {"session_id": "sess_demo", "event_id": 202, "output_dir": str(output_dir),
                  **({"disassembly_target": disassembly_target} if disassembly_target else {})},
             )
         )
-    )
 
-    assert payload["success"] is True
-    assert payload["resolved_event_id"] == 202
+    assert payload.ok is True
+    assert payload.data['resolved_event_id'] == 202
     assert seen_calls
     assert all(call["action"] == "get_shader" for call in seen_calls)
     assert all(int(call["event_id"]) == 202 for call in seen_calls)
-    assert payload["complete"] is True
+    assert payload.data['complete'] is True
     assert shader_calls
     bundle = json.loads((output_dir / "shader_bundle.json").read_text(encoding="utf-8"))
     assert bundle["requested_event_id"] == 202
@@ -1190,30 +1162,30 @@ def test_shader_bundle_reports_unavailable_requested_exports(monkeypatch: pytest
     async def _fake_ensure_event(session_id: str, event_id: int | None) -> int:
         return int(event_id or 0)
 
-    async def _fake_dispatch_pipeline(action: str, args: dict[str, object]) -> str:
+    async def _fake_dispatch_pipeline(action: str, args: dict[str, object]) -> envelope.Outcome:
         if args["stage"] != "ps":
-            return json.dumps({"success": True, "shader": {}})
-        return json.dumps({"success": True, "shader": {"stage": "PS", "shader_id": "shader-202"}, "resolved_event_id": 202})
+            return envelope.success(shader={})
+        return envelope.success(shader={"stage": "PS", "shader_id": "shader-202"}, resolved_event_id=202)
 
-    async def _fake_dispatch_shader(action: str, args: dict[str, object]) -> str:
+    async def _fake_dispatch_shader(action: str, args: dict[str, object]) -> envelope.Outcome:
         assert action == "get_disassembly"
         assert args["target"] == (disassembly_target or "auto")
-        return json.dumps({"success": False, "code": "shader_disassembly_unavailable", "error_message": "No supported target"})
+        return envelope.failure("No supported target", code="shader_disassembly_unavailable")
 
     monkeypatch.setattr(replay_access, "_ensure_event", _fake_ensure_event)
     monkeypatch.setattr(pipeline_ops, "dispatch", _fake_dispatch_pipeline)
     monkeypatch.setattr(shader_ops, "dispatch", _fake_dispatch_shader)
 
     output_dir = tmp_path / "partial_shader_bundle"
-    payload = json.loads(asyncio.run(export_ops.dispatch("shader_bundle", {
+    payload = asyncio.run(export_ops.dispatch("shader_bundle", {
         "session_id": "sess_demo", "event_id": 202, "output_dir": str(output_dir),
         "include_binaries": False, "include_reflection": False, "include_disassembly": True,
         **({"disassembly_target": disassembly_target} if disassembly_target else {}),
-    })))
+    }))
 
-    assert payload["success"] is True
-    assert payload["complete"] is False
-    assert payload["failures"][0]["code"] == "shader_disassembly_unavailable"
+    assert payload.ok is True
+    assert payload.data['complete'] is False
+    assert payload.data['failures'][0]["code"] == "shader_disassembly_unavailable"
     bundle = json.loads((output_dir / "shader_bundle.json").read_text(encoding="utf-8"))
     assert bundle["shaders"][0]["exports"]["disassembly"]["available"] is False
     assert list(output_dir.iterdir()) == [output_dir / "shader_bundle.json"]
@@ -1224,26 +1196,26 @@ def test_shader_bundle_does_not_substitute_a_different_explicit_target(monkeypat
         return event_id
 
     async def pipeline(action, args):
-        return json.dumps({"success": True, "shader": {"stage": "PS", "shader_id": "shader"} if args["stage"] == "ps" else {}, "resolved_event_id": 202})
+        return envelope.success(shader={"stage": "PS", "shader_id": "shader"} if args["stage"] == "ps" else {}, resolved_event_id=202)
 
     async def shader(action, args):
         assert action == "get_disassembly"
         assert args["target"] == "SPIR-V ASM"
-        return json.dumps({"success": True, "target": "SPIR-V (RenderDoc)", "disassembly": "presentation only"})
+        return envelope.success(target="SPIR-V (RenderDoc)", disassembly="presentation only")
 
     monkeypatch.setattr(replay_access, "_ensure_event", ensure)
     monkeypatch.setattr(pipeline_ops, "dispatch", pipeline)
     monkeypatch.setattr(shader_ops, "dispatch", shader)
     output = tmp_path / "explicit"
-    result = json.loads(asyncio.run(export_ops.dispatch("shader_bundle", {
+    result = asyncio.run(export_ops.dispatch("shader_bundle", {
         "session_id": "sess", "event_id": 202, "output_dir": str(output),
         "include_binaries": False, "include_reflection": False, "disassembly_target": "SPIR-V ASM",
-    })))
-    assert result["success"] is True
-    assert result["complete"] is False
-    assert result["failures"][0]["code"] == "shader_disassembly_target_mismatch"
-    assert result["failures"][0]["requested_target"] == "SPIR-V ASM"
-    assert result["failures"][0]["actual_target"] == "SPIR-V (RenderDoc)"
+    }))
+    assert result.ok is True
+    assert result.data['complete'] is False
+    assert result.data['failures'][0]["code"] == "shader_disassembly_target_mismatch"
+    assert result.data['failures'][0]["requested_target"] == "SPIR-V ASM"
+    assert result.data['failures'][0]["actual_target"] == "SPIR-V (RenderDoc)"
     bundle = json.loads((output / "shader_bundle.json").read_text(encoding="utf-8"))
     assert bundle["shaders"][0]["exports"]["disassembly"]["available"] is False
     assert not (output / "ps-disassembly.txt").exists()
@@ -1266,17 +1238,9 @@ def test_export_screenshot_forwards_requested_event(monkeypatch: pytest.MonkeyPa
         assert int(event_id or 0) == 202
         return str(texture_id), SimpleNamespace(name="main_color", width=1520, height=700)
 
-    async def _fake_dispatch_texture(action: str, args: dict[str, object]) -> str:
+    async def _fake_dispatch_texture(action: str, args: dict[str, object]) -> envelope.Outcome:
         seen_calls.append({"action": action, **dict(args)})
-        return json.dumps(
-            {
-                "success": True,
-                "artifact_path": str(tmp_path / "shot.png"),
-                "saved_path": str(tmp_path / "shot.png"),
-                "image_path": str(tmp_path / "shot.png"),
-                "meta": {"event_id": int(args["event_id"]), "width": 1920, "height": 1080},
-            }
-        )
+        return envelope.success(artifact_path=str(tmp_path / "shot.png"), saved_path=str(tmp_path / "shot.png"), image_path=str(tmp_path / "shot.png"), meta={"event_id": int(args["event_id"]), "width": 1920, "height": 1080})
 
     async def _fake_event_truth_metadata(session_id: str, event_id: int) -> dict[str, object]:
         return {
@@ -1313,70 +1277,58 @@ def test_export_screenshot_forwards_requested_event(monkeypatch: pytest.MonkeyPa
         ),
     )
 
-    payload = json.loads(
-        asyncio.run(
+    payload = asyncio.run(
             export_ops.dispatch(
                 "screenshot",
                 {"session_id": "sess_demo", "event_id": 202, "output_path": str(tmp_path / "shot.png")},
             )
         )
-    )
 
-    assert payload["success"] is True
-    assert payload["meta"]["event_id"] == 202
-    assert (payload["width"], payload["height"]) == (1920, 1080)
-    assert (payload["texture_width"], payload["texture_height"]) == (1520, 700)
+    assert payload.ok is True
+    assert payload.meta["event_id"] == 202
+    assert (payload.data['width'], payload.data['height']) == (1920, 1080)
+    assert (payload.data['texture_width'], payload.data['texture_height']) == (1520, 700)
     assert seen_calls
     assert all(call["action"] == "render_overlay" for call in seen_calls)
     assert all(int(call["event_id"]) == 202 for call in seen_calls)
 
-    async def _missing_dimensions(action: str, args: dict[str, object]) -> str:
-        result = json.loads(await _fake_dispatch_texture(action, args))
-        result["meta"].pop("width")
-        return json.dumps(result)
+    async def _missing_dimensions(action: str, args: dict[str, object]) -> envelope.Outcome:
+        rendered = await _fake_dispatch_texture(action, args)
+        return envelope.Success(data=rendered.data, meta={key: value for key, value in rendered.meta.items() if key != "width"})
 
     monkeypatch.setattr(texture_ops, "dispatch", _missing_dimensions)
-    missing = json.loads(asyncio.run(export_ops.dispatch("screenshot", {
+    missing = asyncio.run(export_ops.dispatch("screenshot", {
         "session_id": "sess_demo", "event_id": 202, "output_path": str(tmp_path / "shot.png"),
-    })))
-    assert missing["success"] is False
-    assert missing["code"] == "screenshot_dimensions_unavailable"
+    }))
+    assert missing.ok is False
+    assert missing.code == "screenshot_dimensions_unavailable"
 
 
 def test_export_shader_bundle_returns_runtime_error_when_event_has_no_bound_shaders(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     async def _fake_ensure_event(session_id: str, event_id: int | None) -> int:
         return int(event_id or 0)
 
-    async def _fake_dispatch_pipeline(action: str, args: dict[str, object]) -> str:
-        return json.dumps(
-            {
-                "success": False,
-                "code": "shader_not_bound",
-                "category": "runtime",
-                "details": {
+    async def _fake_dispatch_pipeline(action: str, args: dict[str, object]) -> envelope.Outcome:
+        return envelope.failure("", code="shader_not_bound", category="runtime", details={
                     "session_id": str(args["session_id"]),
                     "resolved_event_id": int(args["event_id"]),
                     "stage": str(args["stage"]).upper(),
-                },
-            }
-        )
+                })
 
     monkeypatch.setattr(replay_access, "_ensure_event", _fake_ensure_event)
     monkeypatch.setattr(pipeline_ops, "dispatch", _fake_dispatch_pipeline)
 
     output_dir = tmp_path / "shader_bundle_empty"
-    payload = json.loads(
-        asyncio.run(
+    payload = asyncio.run(
             export_ops.dispatch(
                 "shader_bundle",
                 {"session_id": "sess_demo", "event_id": 202, "output_dir": str(output_dir)},
             )
         )
-    )
 
-    assert payload["success"] is False
-    assert payload["code"] == "shader_bundle_empty"
-    assert payload["details"]["resolved_event_id"] == 202
+    assert payload.ok is False
+    assert payload.code == "shader_bundle_empty"
+    assert payload.details["resolved_event_id"] == 202
 
 
 @pytest.mark.parametrize("action", ["get_stage_state", "get_shader", "get_resource_bindings", "get_constant_buffers"])
@@ -1392,14 +1344,14 @@ def test_pipeline_stage_rejection_precedes_native_and_event_access(monkeypatch, 
     monkeypatch.setattr(renderdoc_api, "_get_rd", forbidden)
     monkeypatch.setattr(replay_access, "_get_controller", forbidden)
     monkeypatch.setattr(replay_access, "_ensure_event", forbidden)
-    payload = json.loads(asyncio.run(pipeline_ops.dispatch(
-        action, {"session_id": "not-opened", "event_id": 1691, "stage": stage})))
-    assert payload["success"] is False
-    assert payload["code"] == code
-    assert payload["category"] == category
-    assert payload["details"]["effects_attempted"] is False
-    assert payload["details"]["context_preserved"] is True
-    assert payload["details"]["failure_stage"] == "validate_stage"
+    payload = asyncio.run(pipeline_ops.dispatch(
+        action, {"session_id": "not-opened", "event_id": 1691, "stage": stage}))
+    assert payload.ok is False
+    assert payload.code == code
+    assert payload.category == category
+    assert payload.details["effects_attempted"] is False
+    assert payload.details["context_preserved"] is True
+    assert payload.details["failure_stage"] == "validate_stage"
 
 
 @pytest.mark.parametrize("action", ["get_stage_state", "get_shader", "get_resource_bindings", "get_constant_buffers"])
@@ -1498,17 +1450,15 @@ def test_pipeline_get_stage_state_reports_degraded_binding_truth(monkeypatch: py
     monkeypatch.setattr(visual_target, "_resolve_visual_target_for_event", lambda *args, **kwargs: asyncio.sleep(0, result={}))
     monkeypatch.setattr(shader_values, "_collect_constant_buffers", _fake_collect_constant_buffers)
 
-    payload = json.loads(
-        asyncio.run(
+    payload = asyncio.run(
             pipeline_ops.dispatch(
                 "get_stage_state",
                 {"session_id": "sess_demo", "event_id": 7, "stage": "ps"},
             )
         )
-    )
 
-    assert payload["success"] is True
-    state = payload["stage_state"]
+    assert payload.ok is True
+    state = payload.data['stage_state']
     assert state["binding_truth_level"] == "binding_degraded"
     assert state["summary_degraded"] is True
     assert state["summary_degraded_reasons"] == ["d3d12_reflection_partial"]
@@ -1536,8 +1486,7 @@ def test_export_texture_explicit_hdr_fails_when_encoder_falls_back_to_png(monkey
     monkeypatch.setattr(artifact_payloads, "_artifact_path", lambda artifact_ref: str(tmp_path / "fake.png"))
     monkeypatch.setattr(live_state, "_render_service", _FakeRenderService())
 
-    payload = json.loads(
-        asyncio.run(
+    payload = asyncio.run(
             texture_export._export_texture_file(
                 {
                     "session_id": "sess_demo",
@@ -1548,10 +1497,9 @@ def test_export_texture_explicit_hdr_fails_when_encoder_falls_back_to_png(monkey
                 }
             )
         )
-    )
 
-    assert payload["success"] is False
-    assert payload["code"] == "format_encoder_unavailable"
-    assert payload["details"]["requested_formats"] == ["hdr"]
-    assert payload["details"]["actual_format"] == "png"
-    assert payload["details"]["downgrade_allowed"] is False
+    assert payload.ok is False
+    assert payload.code == "format_encoder_unavailable"
+    assert payload.details["requested_formats"] == ["hdr"]
+    assert payload.details["actual_format"] == "png"
+    assert payload.details["downgrade_allowed"] is False

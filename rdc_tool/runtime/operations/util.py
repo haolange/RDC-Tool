@@ -10,7 +10,7 @@ import numpy as np
 from rdc_tool.runtime import coerce, envelope, live_state
 
 
-async def dispatch(action: str, args: Dict[str, Any]) -> str:
+async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
 
 
     if action == "diff_images":
@@ -19,30 +19,30 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
         supported = {"mse", "max_abs", "psnr", "ssim"}
         if (not isinstance(selected, list) or not selected
                 or any(not isinstance(item, str) or item not in supported for item in selected)):
-            return envelope._err("metrics must be a non-empty list of mse, max_abs, psnr or ssim", code="validation_error")
+            return envelope.failure("metrics must be a non-empty list of mse, max_abs, psnr or ssim", code="validation_error")
         try:
             from PIL import Image
         except Exception as exc:
-            return envelope._err(f"Image diff dependencies missing: {exc}")
+            return envelope.failure(f"Image diff dependencies missing: {exc}", code="runtime_error")
         with Image.open(str(args["image_a_path"])) as image:
             a = np.asarray(image.convert("RGBA"), dtype="float32") / 255.0
         with Image.open(str(args["image_b_path"])) as image:
             b = np.asarray(image.convert("RGBA"), dtype="float32") / 255.0
         if a.shape != b.shape:
-            return envelope._err("Image shapes differ", code="image_shape_mismatch")
+            return envelope.failure("Image shapes differ", code="image_shape_mismatch")
         source_height, source_width = a.shape[:2]
         region = args.get("region")
         if region is not None:
             fields = {"x", "y", "width", "height"}
             if (not isinstance(region, dict) or set(region) != fields
                     or any(type(region[key]) is not int for key in fields)):
-                return envelope._err("region requires integer x/y/width/height", code="invalid_image_region")
+                return envelope.failure("region requires integer x/y/width/height", code="invalid_image_region")
             x, y, width, height = (region[key] for key in ("x", "y", "width", "height"))
             if x < 0 or y < 0 or width < 1 or height < 1 or x + width > source_width or y + height > source_height:
-                return envelope._err("region must be nonempty and inside both images; no clamping or resizing", code="invalid_image_region")
+                return envelope.failure("region must be nonempty and inside both images; no clamping or resizing", code="invalid_image_region")
             a, b = a[y:y + height, x:x + width], b[y:y + height, x:x + width]
         if "ssim" in selected and min(a.shape[:2]) < 11:
-            return envelope._err("SSIM requires both dimensions to be at least 11 pixels", code="ssim_window_too_large")
+            return envelope.failure("SSIM requires both dimensions to be at least 11 pixels", code="ssim_window_too_large")
         diff = a - b
         mse = float((diff ** 2).mean())
         out = {"identical": bool(np.array_equal(a, b)),
@@ -89,7 +89,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
             Image.fromarray(diff_img).save(out_path)
             out["diff_path"] = str(out_path)
             out["diff_visualization"] = "opaque-rgb-absolute-difference-with-alpha-difference-as-gray"
-        return envelope._ok(metrics=out)
+        return envelope.success(metrics=out)
 
 
     if action == "list_artifacts":
@@ -97,14 +97,14 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
         artifacts = live_state._artifact_store.list_artifacts(prefix=prefix)
         projection = envelope._projection_request(args, "rd.util.list_artifacts")
         if projection:
-            return envelope._ok(
+            return envelope.success(
                 artifacts=artifacts,
                 projections=envelope._artifact_rows_projection(
                     artifacts,
                     include_tsv_text=bool(projection.get("include_tsv_text", False)),
                 ),
             )
-        return envelope._ok(artifacts=artifacts)
+        return envelope.success(artifacts=artifacts)
 
     if action == "cleanup_artifacts":
         result = live_state._artifact_store.cleanup_artifacts(
@@ -112,6 +112,6 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
             prefix=str(args.get("prefix", "")),
             max_total_bytes=args.get("max_total_bytes"),
         )
-        return envelope._ok(**result)
+        return envelope.success(**result)
 
-    return envelope._err(f"Unsupported util action: {action}")
+    return envelope.failure(f"Unsupported util action: {action}", code="runtime_error")

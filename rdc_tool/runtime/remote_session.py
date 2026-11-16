@@ -182,7 +182,7 @@ def _remote_consumed_payload(remote_id: str) -> str | None:
         "classification": "tool_usage_conflict",
         "fix_hint": "Reconnect with rd.remote.connect to obtain a new live remote_id.",
     }
-    return envelope._err(
+    return envelope.failure(
         f"Remote handle {tombstone.remote_id} has been consumed by session {tombstone.consumed_by_session_id}",
         code="remote_handle_consumed",
         category="runtime",
@@ -274,7 +274,7 @@ async def _rehydrate_remote_handle_from_snapshot(remote_id: str) -> live_state.R
     return handle
 
 
-def _remote_handle_missing_payload(remote_id: str) -> str:
+def _remote_handle_missing_payload(remote_id: str) -> envelope.Outcome:
     ctx = normalize_context_id(live_state._runtime_context_id())
     snapshot = context_snapshot.load_context_snapshot(ctx, retention=settings._snapshot_retention())
     remote_payload = dict(snapshot.get("remote") or {}) if isinstance(snapshot, dict) else {}
@@ -297,7 +297,7 @@ def _remote_handle_missing_payload(remote_id: str) -> str:
         if endpoint
         else f"Unknown remote_id: {remote_id}"
     )
-    return envelope._err(message, code=code, category="runtime", details=details)
+    return envelope.failure(message, code=code, category="runtime", details=details)
 
 
 def _parse_remote_endpoint(endpoint: str) -> Tuple[str, int]:

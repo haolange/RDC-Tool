@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import difflib
 import hashlib
-import json
 from types import SimpleNamespace
 
 import pytest
@@ -171,8 +170,7 @@ def test_edit_and_replace_records_real_applied_replacement(monkeypatch: pytest.M
     live_state._patch_engine = patch_engine
     live_state._session_manager = session_manager
 
-    payload = json.loads(
-        asyncio.run(
+    payload = asyncio.run(
             shader_ops.dispatch(
                 "edit_and_replace",
                 {
@@ -188,21 +186,20 @@ def test_edit_and_replace_records_real_applied_replacement(monkeypatch: pytest.M
                 },
             )
         )
-    )
 
-    assert payload["success"] is True
-    assert payload["status"] == "applied"
-    assert payload["resolved_event_id"] == 101
-    assert payload["replacement"]["status"] == "applied"
-    assert payload["replacement"]["original_shader_id"] == "ResourceId::77"
-    assert "mock_applied" not in json.dumps(payload)
+    assert payload.ok is True
+    assert payload.data['status'] == "applied"
+    assert payload.data['resolved_event_id'] == 101
+    assert payload.data['replacement']["status"] == "applied"
+    assert payload.data['replacement']["original_shader_id"] == "ResourceId::77"
+    assert "mock_applied" not in repr(payload)
     assert len(patch_engine.calls) == 1
     patch_spec = patch_engine.calls[0]["patch_spec"]
     assert getattr(patch_spec, "target_event_id") == 101
     assert str(getattr(patch_spec, "target_shader_id")) == "ResourceId::77"
     assert live_state._runtime.shader_replacements["sess_demo"][0]["status"] == "applied"
     persisted_spec = live_state._runtime.shader_replacements["sess_demo"][0]["patch_spec"]
-    assert persisted_spec["patch_id"] == payload["replacement_id"]
+    assert persisted_spec["patch_id"] == payload.data['replacement_id']
     assert persisted_spec["target_event_id"] == 101
     assert persisted_spec["target_stage"] == "ps"
     assert persisted_spec["target_shader_id"] == "ResourceId::77"
@@ -232,8 +229,7 @@ def test_edit_and_replace_noop_patch_is_not_recorded_as_active_replacement(monke
 
     patch_engine.apply_patch = _noop_apply_patch  # type: ignore[method-assign]
 
-    payload = json.loads(
-        asyncio.run(
+    payload = asyncio.run(
             shader_ops.dispatch(
                 "edit_and_replace",
                 {
@@ -249,11 +245,10 @@ def test_edit_and_replace_noop_patch_is_not_recorded_as_active_replacement(monke
                 },
             )
         )
-    )
 
-    assert payload["success"] is True
-    assert payload["status"] == "noop"
-    assert payload["replacement"]["status"] == "noop"
+    assert payload.ok is True
+    assert payload.data['status'] == "noop"
+    assert payload.data['replacement']["status"] == "noop"
     assert live_state._runtime.shader_replacements.get("sess_demo", []) == []
 
 
@@ -278,8 +273,7 @@ def test_edit_and_replace_can_emit_patch_artifacts(monkeypatch: pytest.MonkeyPat
         _fake_store_text_artifact_payload,
     )
 
-    payload = json.loads(
-        asyncio.run(
+    payload = asyncio.run(
             shader_ops.dispatch(
                 "edit_and_replace",
                 {
@@ -296,11 +290,10 @@ def test_edit_and_replace_can_emit_patch_artifacts(monkeypatch: pytest.MonkeyPat
                 },
             )
         )
-    )
 
-    assert payload["success"] is True
-    assert len(payload["artifacts"]) == 3
-    replacement = payload["replacement"]
+    assert payload.ok is True
+    assert len(payload.data['replacement']['artifacts']) == 3
+    replacement = payload.data['replacement']
     assert replacement["compile"]["encoding"] == "spirvasm"
     assert replacement["compile"]["disassembly_target"] == "SPIR-V (RenderDoc)"
     assert replacement["artifacts"]["source_before"]["saved_path"].endswith("_before.txt")
@@ -315,8 +308,7 @@ def test_edit_and_replace_accepts_source_text_workflow_inputs(monkeypatch: pytes
     live_state._patch_engine = patch_engine
     live_state._session_manager = session_manager
 
-    payload = json.loads(
-        asyncio.run(
+    payload = asyncio.run(
             shader_ops.dispatch(
                 "edit_and_replace",
                 {
@@ -330,9 +322,8 @@ def test_edit_and_replace_accepts_source_text_workflow_inputs(monkeypatch: pytes
                 },
             )
         )
-    )
 
-    assert payload["success"] is True
+    assert payload.ok is True
     patch_spec = patch_engine.calls[0]["patch_spec"]
     assert getattr(patch_spec, "source_text") == "OpCapability Shader\n"
     assert getattr(patch_spec, "source_target") == "SPIR-V ASM"
@@ -346,8 +337,7 @@ def test_edit_and_replace_rejects_multiple_edit_inputs(monkeypatch: pytest.Monke
     live_state._patch_engine = _FakePatchEngine(success=True)
     live_state._session_manager = _FakeSessionManager()
 
-    payload = json.loads(
-        asyncio.run(
+    payload = asyncio.run(
             shader_ops.dispatch(
                 "edit_and_replace",
                 {
@@ -359,10 +349,9 @@ def test_edit_and_replace_rejects_multiple_edit_inputs(monkeypatch: pytest.Monke
                 },
             )
         )
-    )
 
-    assert payload["success"] is False
-    assert payload["code"] == "validation_error"
+    assert payload.ok is False
+    assert payload.code == "validation_error"
 
 
 def test_edit_and_replace_rejects_replace_expr_patch_op(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -370,8 +359,7 @@ def test_edit_and_replace_rejects_replace_expr_patch_op(monkeypatch: pytest.Monk
     live_state._patch_engine = _FakePatchEngine(success=True)
     live_state._session_manager = _FakeSessionManager()
 
-    payload = json.loads(
-        asyncio.run(
+    payload = asyncio.run(
             shader_ops.dispatch(
                 "edit_and_replace",
                 {
@@ -382,12 +370,11 @@ def test_edit_and_replace_rejects_replace_expr_patch_op(monkeypatch: pytest.Monk
                 },
             )
         )
-    )
 
-    assert payload["success"] is False
-    assert payload["code"] == "validation_error"
-    assert payload["details"]["unsupported_ops"] == ["replace_expr"]
-    assert payload["details"]["agent_text_edit_inputs"] == ["source_text", "diff_text"]
+    assert payload.ok is False
+    assert payload.code == "validation_error"
+    assert payload.details["unsupported_ops"] == ["replace_expr"]
+    assert payload.details["agent_text_edit_inputs"] == ["source_text", "diff_text"]
 
 
 @pytest.mark.parametrize("revert_ok", [True, False])
@@ -418,17 +405,17 @@ def test_revert_replacement_preserves_live_remote_replay(monkeypatch: pytest.Mon
     original = {"replacement_id": "repl_demo", "stage": "PS", "resolved_event_id": 314,
         "original_shader_id": "ResourceId::77", "status": "applied"}
     live_state._runtime.shader_replacements["sess_demo"] = [original]
-    payload = json.loads(asyncio.run(shader_ops.dispatch("revert_replacement", {
-        "session_id": "sess_demo", "replacement_id": "repl_demo"})))
-    assert payload["success"] is revert_ok
+    payload = asyncio.run(shader_ops.dispatch("revert_replacement", {
+        "session_id": "sess_demo", "replacement_id": "repl_demo"}))
+    assert payload.ok is revert_ok
     assert lifecycle_calls == []
     assert live_state._runtime.replays["sess_demo"] is live_replay
     if revert_ok:
-        assert payload["reverted"] is True
+        assert payload.data['reverted'] is True
         assert live_state._runtime.shader_replacements["sess_demo"] == []
         assert updates == [("sess_demo", [])]
     else:
-        assert payload["code"] == "replacement_not_found"
+        assert payload.code == "replacement_not_found"
         assert live_state._runtime.shader_replacements["sess_demo"] == [original]
         assert updates == []
 
@@ -455,8 +442,7 @@ def test_edit_and_replace_returns_capability_failure_without_mock_success(
     live_state._patch_engine = patch_engine
     live_state._session_manager = session_manager
 
-    payload = json.loads(
-        asyncio.run(
+    payload = asyncio.run(
             shader_ops.dispatch(
                 "edit_and_replace",
                 {
@@ -472,14 +458,13 @@ def test_edit_and_replace_returns_capability_failure_without_mock_success(
                 },
             )
         )
-    )
 
-    assert payload["success"] is False
-    assert payload["code"] == "shader_replace_backend_unsupported"
-    assert payload["category"] == "capability"
-    assert payload["details"]["capability"] == "shader_replace"
-    assert "mock_applied" not in json.dumps(payload)
-    assert "status" not in payload
+    assert payload.ok is False
+    assert payload.code == "shader_replace_backend_unsupported"
+    assert payload.category == "capability"
+    assert payload.details["capability"] == "shader_replace"
+    assert "mock_applied" not in repr(payload)
+    assert "status" not in payload.details
     assert patch_engine.calls == []
     assert session_manager.state.capabilities.patch_supported is False
 
@@ -499,8 +484,7 @@ def test_edit_and_replace_preserves_patch_engine_error_details(monkeypatch: pyte
     live_state._patch_engine = patch_engine
     live_state._session_manager = session_manager
 
-    payload = json.loads(
-        asyncio.run(
+    payload = asyncio.run(
             shader_ops.dispatch(
                 "edit_and_replace",
                 {
@@ -516,21 +500,19 @@ def test_edit_and_replace_preserves_patch_engine_error_details(monkeypatch: pyte
                 },
             )
         )
-    )
 
-    assert payload["success"] is False
-    assert payload["code"] == "shader_build_failed"
-    assert payload["category"] == "runtime"
-    assert payload["details"]["failure_stage"] == "build"
-    assert payload["details"]["compiler_output"] == "compile error"
+    assert payload.ok is False
+    assert payload.code == "shader_build_failed"
+    assert payload.category == "runtime"
+    assert payload.details["failure_stage"] == "build"
+    assert payload.details["compiler_output"] == "compile error"
 
 
 def test_get_source_reports_ir_fallback_when_debug_source_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_shader_replace_env(monkeypatch, _EncodingController("SPIRV"))
     live_state._session_manager = _FakeSessionManager()
 
-    payload = json.loads(
-        asyncio.run(
+    payload = asyncio.run(
             shader_ops.dispatch(
                 "get_source",
                 {
@@ -540,22 +522,21 @@ def test_get_source_reports_ir_fallback_when_debug_source_unavailable(monkeypatc
                 },
             )
         )
-    )
 
-    assert payload["success"] is True
-    assert payload["source"] is None
-    assert payload["files"] == []
-    assert payload["source_available"] is False
-    assert payload["failure_reason"] == "source_debug_info_unavailable"
-    assert payload["fallback_tool"] == "rd.shader.get_disassembly"
-    assert payload["fallback_args"]["target"] == "SPIR-V ASM"
-    assert payload["fallback_args"]["source_encoding"] == "spirvasm"
-    assert payload["fallback_args"]["shader_id"] == "ResourceId::77"
-    assert payload["edit_plan"]["input_kind"] == "source_unavailable"
-    assert payload["edit_plan"]["recommended_next_tool"] == "rd.shader.get_disassembly"
-    assert payload["edit_plan"]["can_replace"] is False
-    assert payload["edit_plan"]["allowed_ops"] == []
-    assert "target='SPIR-V ASM'" in payload["edit_plan"]["blocked_reason"]
+    assert payload.ok is True
+    assert payload.data['source'] is None
+    assert payload.data['files'] == []
+    assert payload.data['source_available'] is False
+    assert payload.data['failure_reason'] == "source_debug_info_unavailable"
+    assert payload.data['fallback_tool'] == "rd.shader.get_disassembly"
+    assert payload.data['fallback_args']["target"] == "SPIR-V ASM"
+    assert payload.data['fallback_args']["source_encoding"] == "spirvasm"
+    assert payload.data['fallback_args']["shader_id"] == "ResourceId::77"
+    assert payload.data['edit_plan']["input_kind"] == "source_unavailable"
+    assert payload.data['edit_plan']["recommended_next_tool"] == "rd.shader.get_disassembly"
+    assert payload.data['edit_plan']["can_replace"] is False
+    assert payload.data['edit_plan']["allowed_ops"] == []
+    assert "target='SPIR-V ASM'" in payload.data['edit_plan']["blocked_reason"]
 
 
 @pytest.mark.parametrize("restore_fails", [False, True])
@@ -585,22 +566,22 @@ def test_get_source_unbound_event_proves_restoration_or_reports_failure(
     monkeypatch.setattr(replay_access, "_ensure_event", set_event)
     monkeypatch.setattr(replay_access, "_active_event", lambda _session_id: current_event["value"])
     monkeypatch.setattr(live_state, "_runtime_context_id", lambda: "owned-context")
-    payload = json.loads(asyncio.run(shader_ops.dispatch(
+    payload = asyncio.run(shader_ops.dispatch(
         "get_source", {"session_id": "sess_demo", "event_id": 3029, "stage": "ps"},
-    )))
+    ))
 
-    assert payload["success"] is False
+    assert payload.ok is False
     assert transitions == [3029, 1248]
-    assert payload["details"]["context_id"] == "owned-context"
-    assert payload["details"]["session_id"] == "sess_demo"
+    assert payload.details["context_id"] == "owned-context"
+    assert payload.details["session_id"] == "sess_demo"
     if restore_fails:
-        assert payload["code"] == "shader_inspection_recovery_failed"
-        assert payload["details"]["replay_state_restored"] is False
+        assert payload.code == "shader_inspection_recovery_failed"
+        assert payload.details["replay_state_restored"] is False
         assert current_event["value"] == 3029
     else:
-        assert payload["code"] == "shader_binding_lookup_failed"
-        assert payload["details"]["replay_state_restored"] is True
-        assert payload["details"]["restored_event_id"] == 1248
+        assert payload.code == "shader_binding_lookup_failed"
+        assert payload.details["replay_state_restored"] is True
+        assert payload.details["restored_event_id"] == 1248
         assert current_event["value"] == 1248
 
 
@@ -608,8 +589,7 @@ def test_get_source_reports_dxil_readonly_fallback_when_debug_source_unavailable
     _install_shader_replace_env(monkeypatch, _EncodingController("DXIL"))
     live_state._session_manager = _FakeSessionManager()
 
-    payload = json.loads(
-        asyncio.run(
+    payload = asyncio.run(
             shader_ops.dispatch(
                 "get_source",
                 {
@@ -619,18 +599,17 @@ def test_get_source_reports_dxil_readonly_fallback_when_debug_source_unavailable
                 },
             )
         )
-    )
 
-    assert payload["success"] is True
-    assert payload["source_available"] is False
-    assert payload["fallback_tool"] == "rd.shader.get_disassembly"
-    assert payload["fallback_args"]["target"] == "auto"
-    assert "source_encoding" not in payload["fallback_args"]
-    assert payload["edit_plan"]["shader_format"]["container"] == "dxil"
-    assert payload["edit_plan"]["input_kind"] == "renderdoc_disassembly"
-    assert payload["edit_plan"]["can_replace"] is False
-    assert payload["edit_plan"]["allowed_edit_inputs"] == []
-    assert "rd.shader.extract_binary" in payload["edit_plan"]["fallback_tools"]
+    assert payload.ok is True
+    assert payload.data['source_available'] is False
+    assert payload.data['fallback_tool'] == "rd.shader.get_disassembly"
+    assert payload.data['fallback_args']["target"] == "auto"
+    assert "source_encoding" not in payload.data['fallback_args']
+    assert payload.data['edit_plan']["shader_format"]["container"] == "dxil"
+    assert payload.data['edit_plan']["input_kind"] == "renderdoc_disassembly"
+    assert payload.data['edit_plan']["can_replace"] is False
+    assert payload.data['edit_plan']["allowed_edit_inputs"] == []
+    assert "rd.shader.extract_binary" in payload.data['edit_plan']["fallback_tools"]
 
 
 def test_remote_replacement_validation_uses_live_outputs_without_recovery(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -822,10 +801,10 @@ def test_list_replacements_filters_stale_metadata_when_patch_engine_has_no_live_
         }
     ]
 
-    payload = json.loads(asyncio.run(shader_ops.dispatch("list_replacements", {"session_id": "sess_demo"})))
+    payload = asyncio.run(shader_ops.dispatch("list_replacements", {"session_id": "sess_demo"}))
 
-    assert payload["success"] is True
-    assert payload["replacements"] == []
+    assert payload.ok is True
+    assert payload.data['replacements'] == []
     assert live_state._runtime.shader_replacements["sess_demo"] == []
 
 
@@ -1633,16 +1612,16 @@ def test_get_disassembly_rejects_unknown_target_before_replay_effects(monkeypatc
         raise AssertionError("validation must not set a replay event")
 
     monkeypatch.setattr(replay_access, "_ensure_event", _unexpected_ensure_event)
-    payload = json.loads(asyncio.run(shader_ops.dispatch(
+    payload = asyncio.run(shader_ops.dispatch(
         "get_disassembly", {"session_id": "sess_demo", "event_id": 101, "stage": "ps", "target": "unknown"},
-    )))
+    ))
 
-    assert payload["success"] is False
-    assert payload["code"] == "shader_disassembly_unavailable"
-    assert payload["category"] == "validation"
-    assert payload["details"]["effects_attempted"] is False
-    assert payload["details"]["context_preserved"] is True
-    assert payload["details"]["available_targets"] == ["SPIR-V ASM", "GLSL"]
+    assert payload.ok is False
+    assert payload.code == "shader_disassembly_unavailable"
+    assert payload.category == "validation"
+    assert payload.details["effects_attempted"] is False
+    assert payload.details["context_preserved"] is True
+    assert payload.details["available_targets"] == ["SPIR-V ASM", "GLSL"]
 
 
 @pytest.mark.parametrize("action", ["get_source", "get_disassembly", "compile", "edit_and_replace"])
@@ -1657,17 +1636,17 @@ def test_shader_operations_reject_noncanonical_stage_before_replay_effects(
 
     monkeypatch.setattr(replay_access, "_get_controller", _unexpected_get_controller)
     monkeypatch.setattr(replay_access, "_ensure_event", _unexpected_ensure_event)
-    payload = json.loads(asyncio.run(shader_ops.dispatch(
+    payload = asyncio.run(shader_ops.dispatch(
         action, {"session_id": "sess_demo", "event_id": 101, "stage": "pixel"},
-    )))
+    ))
 
-    assert payload["success"] is False
-    assert payload["code"] == "invalid_shader_stage"
-    assert payload["category"] == "validation"
-    assert payload["details"]["requested_stage"] == "pixel"
-    assert payload["details"]["allowed_stages"] == ["vs", "hs", "ds", "gs", "ps", "cs", "ms", "as"]
-    assert payload["details"]["effects_attempted"] is False
-    assert payload["details"]["context_preserved"] is True
+    assert payload.ok is False
+    assert payload.code == "invalid_shader_stage"
+    assert payload.category == "validation"
+    assert payload.details["requested_stage"] == "pixel"
+    assert payload.details["allowed_stages"] == ["vs", "hs", "ds", "gs", "ps", "cs", "ms", "as"]
+    assert payload.details["effects_attempted"] is False
+    assert payload.details["context_preserved"] is True
 
 
 def test_get_disassembly_reports_raw_spirv_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1680,8 +1659,7 @@ def test_get_disassembly_reports_raw_spirv_metadata(monkeypatch: pytest.MonkeyPa
         classmethod(lambda cls, controller, pipe, refl, stage, session_id, **kwargs: ("OpCapability Shader\n", "SPIRVAsm", "SPIR-V ASM", True)),
     )
 
-    payload = json.loads(
-        asyncio.run(
+    payload = asyncio.run(
             shader_ops.dispatch(
                 "get_disassembly",
                 {
@@ -1692,16 +1670,15 @@ def test_get_disassembly_reports_raw_spirv_metadata(monkeypatch: pytest.MonkeyPa
                 },
             )
         )
-    )
 
-    assert payload["success"] is True
-    assert payload["target"] == "SPIR-V ASM"
-    assert payload["source_encoding"] == "spirvasm"
-    assert payload["is_raw_spirv_asm"] is True
-    assert payload["source_hash"]
-    assert payload["edit_plan"]["input_kind"] == "text_ir"
-    assert payload["edit_plan"]["can_replace"] is True
-    assert payload["edit_plan"]["allowed_ops"] == ["force_full_precision"]
+    assert payload.ok is True
+    assert payload.data['target'] == "SPIR-V ASM"
+    assert payload.data['source_encoding'] == "spirvasm"
+    assert payload.data['is_raw_spirv_asm'] is True
+    assert payload.data['source_hash']
+    assert payload.data['edit_plan']["input_kind"] == "text_ir"
+    assert payload.data['edit_plan']["can_replace"] is True
+    assert payload.data['edit_plan']["allowed_ops"] == ["force_full_precision"]
 
 
 def test_renderdoc_spirv_view_points_to_raw_asm_without_claiming_editability() -> None:
@@ -1723,8 +1700,7 @@ def test_get_disassembly_reports_dxil_readonly_edit_plan(monkeypatch: pytest.Mon
         classmethod(lambda cls, controller, pipe, refl, stage, session_id, **kwargs: ("// DXIL disassembly\n", "DXIL", "DXIL", False)),
     )
 
-    payload = json.loads(
-        asyncio.run(
+    payload = asyncio.run(
             shader_ops.dispatch(
                 "get_disassembly",
                 {
@@ -1735,16 +1711,15 @@ def test_get_disassembly_reports_dxil_readonly_edit_plan(monkeypatch: pytest.Mon
                 },
             )
         )
-    )
 
-    assert payload["success"] is True
-    assert payload["target"] == "DXIL"
-    assert payload["source_encoding"] == "dxil"
-    assert payload["edit_plan"]["shader_format"]["container"] == "dxil"
-    assert payload["edit_plan"]["input_kind"] == "renderdoc_disassembly"
-    assert payload["edit_plan"]["can_edit_text"] is False
-    assert payload["edit_plan"]["can_replace"] is False
-    assert payload["edit_plan"]["recommended_next_tool"] == "rd.shader.extract_binary"
+    assert payload.ok is True
+    assert payload.data['target'] == "DXIL"
+    assert payload.data['source_encoding'] == "dxil"
+    assert payload.data['edit_plan']["shader_format"]["container"] == "dxil"
+    assert payload.data['edit_plan']["input_kind"] == "renderdoc_disassembly"
+    assert payload.data['edit_plan']["can_edit_text"] is False
+    assert payload.data['edit_plan']["can_replace"] is False
+    assert payload.data['edit_plan']["recommended_next_tool"] == "rd.shader.extract_binary"
 
 
 def test_patch_engine_hlsl_full_replacement_builds_and_replaces_without_editing_dxil(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1948,15 +1923,15 @@ def test_disassembly_success_discovers_native_targets_truthfully(monkeypatch, mo
     live_state._session_manager = _FakeSessionManager()
     monkeypatch.setattr(patch_engine_mod.PatchEngine, "_resolve_source", classmethod(
         lambda cls, *args, **kwargs: ("OpCapability Shader\n", "SPIRVAsm", "SPIR-V ASM", True)))
-    payload = json.loads(asyncio.run(shader_ops.dispatch("get_disassembly", {
+    payload = asyncio.run(shader_ops.dispatch("get_disassembly", {
         "session_id": "sess_demo", "event_id": 101, "stage": "ps", "target": "SPIR-V ASM",
-    })))
-    assert payload["success"] is True
-    assert payload["available_targets_status"] == ({"error": "unavailable", "missing": "unsupported"}.get(mode, "complete"))
-    assert payload["available_targets"] == (["SPIR-V (RenderDoc)", "GPU ISA"] if mode == "complete" else [])
-    assert payload["available_targets_error"] == ("native target query failed" if mode == "error" else None)
-    assert payload["target"] == "SPIR-V ASM"
-    assert payload["is_raw_spirv_asm"] is True
+    }))
+    assert payload.ok is True
+    assert payload.data['available_targets_status'] == ({"error": "unavailable", "missing": "unsupported"}.get(mode, "complete"))
+    assert payload.data['available_targets'] == (["SPIR-V (RenderDoc)", "GPU ISA"] if mode == "complete" else [])
+    assert payload.data['available_targets_error'] == ("native target query failed" if mode == "error" else None)
+    assert payload.data['target'] == "SPIR-V ASM"
+    assert payload.data['is_raw_spirv_asm'] is True
 
 
 @pytest.mark.parametrize("mode", ["error", "missing"])
@@ -1971,14 +1946,14 @@ def test_disassembly_target_probe_failure_precedes_event_effects(monkeypatch, mo
     async def unexpected(*args):
         raise AssertionError("target query failure must not set event")
     monkeypatch.setattr(replay_access, "_ensure_event", unexpected)
-    result = json.loads(asyncio.run(shader_ops.dispatch("get_disassembly", {
+    result = asyncio.run(shader_ops.dispatch("get_disassembly", {
         "session_id": "sess_demo", "event_id": 101, "stage": "ps", "target": "GPU ISA",
-    })))
-    assert result["success"] is False
-    assert result["details"]["failure_reason"] == "target_discovery_failed"
-    assert result["details"]["effects_attempted"] is False
-    assert result["details"]["context_preserved"] is True
-    assert result["details"]["available_targets_status"] == ("unavailable" if mode == "error" else "unsupported")
+    }))
+    assert result.ok is False
+    assert result.details["failure_reason"] == "target_discovery_failed"
+    assert result.details["effects_attempted"] is False
+    assert result.details["context_preserved"] is True
+    assert result.details["available_targets_status"] == ("unavailable" if mode == "error" else "unsupported")
 
 
 @pytest.mark.parametrize("text", [
@@ -2018,14 +1993,14 @@ def test_disassembly_diagnostic_is_observed_text_without_raw_edit_authority(monk
     monkeypatch.setattr(patch_engine_mod.PatchEngine, "_get_best_encoding", staticmethod(lambda *_: ("SPIRV", "external ISA")))
     _install_shader_replace_env(monkeypatch, Controller())
     live_state._session_manager = _FakeSessionManager()
-    result = json.loads(asyncio.run(shader_ops.dispatch("get_disassembly", {
+    result = asyncio.run(shader_ops.dispatch("get_disassembly", {
         "session_id": "sess_demo", "event_id": 101, "stage": "ps", "target": "external ISA",
-    })))
-    assert result["success"] is True  # Native text is preserved, not asserted to be executable ISA.
-    assert result["disassembly"] == diagnostic
-    assert result["is_raw_spirv_asm"] is False
-    assert result["edit_plan"]["can_replace"] is False
-    assert result["edit_plan"]["can_build"] is False
+    }))
+    assert result.ok is True  # Native text is preserved, not asserted to be executable ISA.
+    assert result.data['disassembly'] == diagnostic
+    assert result.data['is_raw_spirv_asm'] is False
+    assert result.data['edit_plan']["can_replace"] is False
+    assert result.data['edit_plan']["can_build"] is False
 
 
 def test_explicit_raw_target_requires_actual_instructions_before_build(monkeypatch) -> None:
@@ -2202,17 +2177,17 @@ def test_emitted_build_input_preserves_exact_bytes_and_registry_binding(monkeypa
     monkeypatch.setattr(live_state, '_patch_engine', engine)
     monkeypatch.setattr(live_state, '_session_manager', _FakeSessionManager())
     monkeypatch.setattr(live_state, '_artifact_store', None)
-    payload = json.loads(asyncio.run(shader_ops.dispatch('edit_and_replace', {
+    payload = asyncio.run(shader_ops.dispatch('edit_and_replace', {
         'session_id': 'sess_demo', 'event_id': 101, 'stage': 'ps', 'source_text': 'changed',
-        'emit_patch_artifacts': True, 'output_dir': str(tmp_path)})))
-    assert payload['success'] is True
-    replacement = payload['replacement']
+        'emit_patch_artifacts': True, 'output_dir': str(tmp_path)}))
+    assert payload.ok is True
+    replacement = payload.data['replacement']
     assert replacement['compile']['build_input'] == proof
     binary = replacement['artifacts']['build_input']
     actual = (tmp_path / Path(binary['saved_path']).name).read_bytes()
     assert actual == module
     assert hashlib.sha256(actual).hexdigest() == proof['sha256']
-    assert len(payload['artifacts']) == 4
+    assert len(payload.data['replacement']['artifacts']) == 4
     assert live_state._runtime.shader_replacements['sess_demo'][0]['compile']['build_input'] == proof
 
 
@@ -2253,11 +2228,11 @@ def test_build_input_without_artifact_request_does_not_write(monkeypatch):
     monkeypatch.setattr(live_state, '_patch_engine', engine)
     monkeypatch.setattr(live_state, '_session_manager', _FakeSessionManager())
     monkeypatch.setattr(artifact_payloads, '_store_bytes_artifact_payload', unexpected_store)
-    payload = json.loads(asyncio.run(shader_ops.dispatch('edit_and_replace', {
-        'session_id': 'sess_demo', 'event_id': 101, 'stage': 'ps', 'source_text': 'changed'})))
-    assert payload['success'] is True
-    assert payload['artifacts'] == []
-    assert payload['replacement']['compile']['build_input']['status'] == 'available'
+    payload = asyncio.run(shader_ops.dispatch('edit_and_replace', {
+        'session_id': 'sess_demo', 'event_id': 101, 'stage': 'ps', 'source_text': 'changed'}))
+    assert payload.ok is True
+    assert 'artifacts' not in payload.data['replacement']
+    assert payload.data['replacement']['compile']['build_input']['status'] == 'available'
 
 
 def test_build_input_artifact_write_failure_never_becomes_success(monkeypatch):
@@ -2315,9 +2290,9 @@ class _EmbeddedSourceController(_EncodingController):
 def _embedded_source_result(monkeypatch: pytest.MonkeyPatch, info: object, encoding: str = "SPIRV") -> dict[str, object]:
     _install_shader_replace_env(monkeypatch, _EmbeddedSourceController(info, encoding))
     live_state._session_manager = _FakeSessionManager()
-    return json.loads(asyncio.run(shader_ops.dispatch(
+    return asyncio.run(shader_ops.dispatch(
         "get_source", {"session_id": "sess_demo", "event_id": 101, "stage": "ps", "shader_id": "ResourceId::77"},
-    )))
+    ))
 
 
 def test_get_source_reads_embedded_source_files_without_source_level_debugging(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2329,39 +2304,39 @@ def test_get_source_reads_embedded_source_files_without_source_level_debugging(m
     info = SimpleNamespace(files=files, encoding="HLSL", entrySourceName="Entry", sourceDebugInformation=False,
                            compileFlags=SimpleNamespace(flags=[SimpleNamespace(name="optimization", value="0")]))
     payload = _embedded_source_result(monkeypatch, info)
-    assert payload["success"] is True
-    assert payload["source_available"] is True
-    assert payload["source"] == source
-    assert payload["files"] == [{"filename": f.filename, "contents": f.contents} for f in files]
-    assert payload["source_encoding"].lower() == "hlsl"
-    assert payload["entry_point"] == "Entry"
-    assert payload["source_debug_information"] is False
-    assert payload["compile_flags"] == [{"name": "optimization", "value": "0"}]
-    assert payload["edit_plan"]["input_kind"] == "debug_source"
-    assert "fallback_tool" not in payload
-    assert "failure_reason" not in payload
+    assert payload.ok is True
+    assert payload.data['source_available'] is True
+    assert payload.data['source'] == source
+    assert payload.data['files'] == [{"filename": f.filename, "contents": f.contents} for f in files]
+    assert payload.data['source_encoding'].lower() == "hlsl"
+    assert payload.data['entry_point'] == "Entry"
+    assert payload.data['source_debug_information'] is False
+    assert payload.data['compile_flags'] == [{"name": "optimization", "value": "0"}]
+    assert payload.data['edit_plan']["input_kind"] == "debug_source"
+    assert "fallback_tool" not in payload.data
+    assert "failure_reason" not in payload.data
 
 
 @pytest.mark.parametrize("shader_encoding", ["SPIRV", "HLSL", "GLSL", "DXIL"])
 def test_get_source_retains_include_text_when_entry_contents_are_unavailable(monkeypatch: pytest.MonkeyPatch, shader_encoding: str) -> None:
     files = [SimpleNamespace(filename="entry.hlsl", contents=""), SimpleNamespace(filename="helper.h", contents="float Value;\n")]
     payload = _embedded_source_result(monkeypatch, SimpleNamespace(files=files, encoding="HLSL"), shader_encoding)
-    assert payload["success"] is True
-    assert payload["source_available"] is False
-    assert payload["source"] is None
-    assert payload["files"] == [{"filename": f.filename, "contents": f.contents} for f in files]
-    assert payload["failure_reason"] == "entry_source_contents_unavailable"
-    assert payload["edit_plan"]["can_replace"] is False
+    assert payload.ok is True
+    assert payload.data['source_available'] is False
+    assert payload.data['source'] is None
+    assert payload.data['files'] == [{"filename": f.filename, "contents": f.contents} for f in files]
+    assert payload.data['failure_reason'] == "entry_source_contents_unavailable"
+    assert payload.data['edit_plan']["can_replace"] is False
 
 
 @pytest.mark.parametrize("bad_contents", [None, b"not native text"])
 def test_get_source_does_not_turn_invalid_native_source_into_absence(monkeypatch: pytest.MonkeyPatch, bad_contents: object) -> None:
     info = SimpleNamespace(files=[SimpleNamespace(filename="entry.hlsl", contents=bad_contents)], encoding="HLSL")
     payload = _embedded_source_result(monkeypatch, info)
-    assert payload["success"] is False
-    assert payload["code"] == "shader_source_lookup_failed"
-    assert payload["details"]["failure_stage"] == "source_lookup"
-    assert "source_available" not in payload
+    assert payload.ok is False
+    assert payload.code == "shader_source_lookup_failed"
+    assert payload.details["failure_stage"] == "source_lookup"
+    assert "source_available" not in payload.details
 
 
 def test_get_source_reports_native_source_read_failure(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2371,16 +2346,16 @@ def test_get_source_reports_native_source_read_failure(monkeypatch: pytest.Monke
             raise RuntimeError("native source read failed")
 
     payload = _embedded_source_result(monkeypatch, _UnreadableDebugInfo())
-    assert payload["success"] is False
-    assert payload["code"] == "shader_source_lookup_failed"
-    assert "native source read failed" in payload["error_message"]
+    assert payload.ok is False
+    assert payload.code == "shader_source_lookup_failed"
+    assert "native source read failed" in payload.message
 
 
 def test_get_source_reports_missing_native_metadata_separately_from_empty_files(monkeypatch: pytest.MonkeyPatch) -> None:
     payload = _embedded_source_result(monkeypatch, None)
-    assert payload["success"] is False
-    assert payload["code"] == "shader_source_metadata_unavailable"
-    assert payload["category"] == "capability"
+    assert payload.ok is False
+    assert payload.code == "shader_source_metadata_unavailable"
+    assert payload.category == "capability"
 
 
 @pytest.mark.parametrize("restore_fails", [False, True])
@@ -2406,21 +2381,21 @@ def test_get_source_native_read_failure_restores_prior_event(monkeypatch: pytest
     monkeypatch.setattr(replay_access, "_ensure_event", set_event)
     monkeypatch.setattr(replay_access, "_active_event", lambda _session_id: current_event["value"])
     monkeypatch.setattr(live_state, "_runtime_context_id", lambda: "owned-source-context")
-    payload = json.loads(asyncio.run(shader_ops.dispatch(
+    payload = asyncio.run(shader_ops.dispatch(
         "get_source", {"session_id": "sess_demo", "event_id": 1248, "stage": "ps"},
-    )))
-    assert payload["success"] is False
+    ))
+    assert payload.ok is False
     assert transitions == [1248, 3029]
-    assert payload["details"]["context_id"] == "owned-source-context"
+    assert payload.details["context_id"] == "owned-source-context"
     if restore_fails:
-        assert payload["code"] == "shader_inspection_recovery_failed"
-        assert payload["details"]["original_error_code"] == "shader_source_lookup_failed"
-        assert payload["details"]["replay_state_restored"] is False
+        assert payload.code == "shader_inspection_recovery_failed"
+        assert payload.details["original_error_code"] == "shader_source_lookup_failed"
+        assert payload.details["replay_state_restored"] is False
         assert current_event["value"] == 1248
     else:
-        assert payload["code"] == "shader_source_lookup_failed"
-        assert payload["details"]["replay_state_restored"] is True
-        assert payload["details"]["restored_event_id"] == 3029
+        assert payload.code == "shader_source_lookup_failed"
+        assert payload.details["replay_state_restored"] is True
+        assert payload.details["restored_event_id"] == 3029
         assert current_event["value"] == 3029
 
 
@@ -2429,13 +2404,13 @@ def test_get_source_does_not_invent_missing_source_metadata(monkeypatch: pytest.
     info = SimpleNamespace(files=[SimpleNamespace(filename="main.hlsl", contents="float4 Entry() { return 1; }")],
                            encoding=encoding, entrySourceName="")
     payload = _embedded_source_result(monkeypatch, info)
-    assert payload["success"] is True
-    assert payload["source_available"] is True
-    assert payload["source_encoding"] is None
-    assert payload["entry_point"] is None
-    assert payload["compile_flags"] is None
-    assert payload["source_debug_information"] is None
-    assert payload["edit_plan"]["can_replace"] is False
+    assert payload.ok is True
+    assert payload.data['source_available'] is True
+    assert payload.data['source_encoding'] is None
+    assert payload.data['entry_point'] is None
+    assert payload.data['compile_flags'] is None
+    assert payload.data['source_debug_information'] is None
+    assert payload.data['edit_plan']["can_replace"] is False
 
 
 @pytest.mark.parametrize("target", ["7", "%7", " %7 "])

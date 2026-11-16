@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import struct
 from typing import Any, Dict
 
@@ -10,7 +9,7 @@ from rdc_tool.runtime import coerce, envelope, live_state, renderdoc_api, replay
 from rdc_tool.runtime.operations import buffer as buffer_ops
 
 
-async def dispatch(action: str, args: Dict[str, Any]) -> str:
+async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
     if action == "get_drawcall_mesh_config":
         coerce._require(args, "session_id")
         session_id = str(args["session_id"])
@@ -21,8 +20,8 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
         try:
             inputs = await renderdoc_api._offload(vertex_input, controller, renderdoc_api._get_rd(), event_id, coerce._as_int(args.get("instance"), 0), coerce._as_int(args.get("max_vertices"), 128))
         except ValueError as exc:
-            return envelope._err(str(exc), code="mesh_input_failed")
-        return envelope._ok(mesh_config={"event_id": event_id, "topology": snap.topology, "bindings": [b.model_dump(mode="json") for b in snap.bindings], "vertex_input": inputs})
+            return envelope.failure(str(exc), code="mesh_input_failed")
+        return envelope.success(mesh_config={"event_id": event_id, "topology": snap.topology, "bindings": [b.model_dump(mode="json") for b in snap.bindings], "vertex_input": inputs})
     if action == "get_post_transform_data":
         stage = str(args.get("stage", "")).lower()
         from rdc_tool.core.mesh_data import read_post_transform_window, validate_post_transform_window
@@ -33,11 +32,11 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
                     raise ValueError("Index windows currently require VS output")
                 validate_post_transform_window(args.get("first_index", 0), args.get("index_count"), args.get("max_vertices", 0))
             except ValueError as exc:
-                return envelope._err(str(exc), code="validation_error", category="validation",
+                return envelope.failure(str(exc), code="validation_error", category="validation",
                             details={"session_id": str(args.get("session_id", "")), "failure_stage": "validate_mesh_window",
                                      "effects_attempted": False, "context_preserved": True})
         if stage not in {"vs", "gs"}:
-            return envelope._err("stage must be vs or gs", code="validation_error", category="validation")
+            return envelope.failure("stage must be vs or gs", code="validation_error", category="validation")
         coerce._require(args, "session_id")
         session_id = str(args["session_id"])
         controller = await replay_access._get_controller(session_id)
@@ -53,7 +52,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
         try:
             mesh = await renderdoc_api._offload(controller.GetPostVSData, instance, view_index, rd_stage)
         except Exception as exc:
-            return envelope._err(
+            return envelope.failure(
                 f"Failed to fetch post-transform mesh data: {exc}",
                 code="mesh_post_transform_failed",
                 category="runtime",
@@ -69,7 +68,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
                     pipeline_state = await renderdoc_api._offload(controller.GetPipelineState)
                     gs_shader_id = await renderdoc_api._offload(pipeline_state.GetShader, renderdoc_api._rd_stage("gs"))
                 if renderdoc_api._is_null_resource_id(gs_shader_id):
-                    return envelope._ok(
+                    return envelope.success(
                         mesh_data={
                             "mesh_format": mesh_format,
                             "vertex_rows": [],
@@ -81,7 +80,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
                         },
                         resolved_event_id=int(event_id),
                     )
-            return envelope._err(
+            return envelope.failure(
                 "Post-transform mesh data is unavailable for the requested draw",
                 code="mesh_post_transform_unavailable",
                 category="runtime",
@@ -97,7 +96,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
         vertex_size = int(getattr(mesh, "vertexByteSize", 0) or 0)
         vertex_stride = int(getattr(mesh, "vertexByteStride", 0) or 0)
         if vertex_stride <= 0 or vertex_size < 0:
-            return envelope._err("Invalid post-transform vertex layout", code="mesh_post_transform_unavailable")
+            return envelope.failure("Invalid post-transform vertex layout", code="mesh_post_transform_unavailable")
         unbounded = vertex_size == (1 << 64) - 1
         read_size = (max_vertices * vertex_stride if max_vertices > 0 else 0) if unbounded else (min(vertex_size, max_vertices * vertex_stride) if max_vertices > 0 and vertex_size > 0 else vertex_size)
         window_data = None
@@ -108,13 +107,13 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
                     max_vertices=max_vertices, indexed=not renderdoc_api._is_null_resource_id(getattr(mesh, "indexResourceId", None)))
                 raw = window_data["raw"]
             except (ValueError, TypeError, AttributeError) as exc:
-                return envelope._err(str(exc), code="mesh_post_transform_window_failed", category="runtime",
+                return envelope.failure(str(exc), code="mesh_post_transform_window_failed", category="runtime",
                             details={"session_id": session_id, "resolved_event_id": int(event_id),
                                      "failure_stage": "read_mesh_window", "effects_attempted": True})
         else:
             raw = await renderdoc_api._offload(controller.GetBufferData, vertex_resource_id, vertex_offset, read_size)
             if read_size > 0 and not unbounded and len(raw) != read_size:
-                return envelope._err("Incomplete post-transform vertex readback", code="mesh_post_transform_failed")
+                return envelope.failure("Incomplete post-transform vertex readback", code="mesh_post_transform_failed")
         mesh_format = texture_export._mesh_format_payload(mesh)
         rows = texture_export._mesh_vertex_rows(raw, stride=vertex_stride, max_vertices=max_vertices)
         from rdc_tool.core.replay_facts import mesh_attributes, post_transform_outputs
@@ -133,7 +132,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
         if window_data is not None:
             window = window_data["window"]
             truncated = window["first_index"] > 0 or window["first_index"] + window["index_count"] < window["total_indices"] or not window["vertex_mapping_complete"]
-        return envelope._ok(
+        return envelope.success(
             mesh_data={
                 "mesh_format": mesh_format,
                 "vertex_rows": rows,
@@ -149,11 +148,11 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
         coerce._require(args, "session_id", "index_buffer_id")
         format_name = str(args.get("format", "u32")).lower()
         if format_name not in {"u16", "u32"}:
-            return envelope._err("Index format must be u16 or u32", code="validation_error")
+            return envelope.failure("Index format must be u16 or u32", code="validation_error")
         fmt = "<I" if format_name == "u32" else "<H"
         size = 4 if fmt == "<I" else 2
         count = coerce._as_int(args.get("index_count"), 128)
-        data_resp = await buffer_ops.dispatch(
+        data_result = await buffer_ops.dispatch(
             "get_data",
             {
                 "session_id": args["session_id"],
@@ -163,16 +162,15 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
                 "as_base64": True,
             },
         )
-        payload = json.loads(data_resp)
-        if not payload.get("success"):
-            return data_resp
+        if not data_result.ok:
+            return data_result
         import base64
 
-        raw = base64.b64decode(payload.get("base64", ""))
+        raw = base64.b64decode(data_result.data.get("base64", ""))
         indices = []
         for i in range(0, len(raw), size):
             if i + size > len(raw):
                 break
             indices.append(struct.unpack(fmt, raw[i : i + size])[0])
-        return envelope._ok(indices=indices)
-    return envelope._err(f"Unsupported mesh action: {action}")
+        return envelope.success(indices=indices)
+    return envelope.failure(f"Unsupported mesh action: {action}", code="runtime_error")

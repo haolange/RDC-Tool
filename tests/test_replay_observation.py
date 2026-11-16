@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from types import SimpleNamespace
 from pathlib import Path
 
@@ -51,31 +50,31 @@ def replay(monkeypatch):
 
 
 def call(action, args):
-    return json.loads(asyncio.run(observation.handle(action, args)))
+    return asyncio.run(observation.handle(action, args))
 
 
 def test_complete_events_do_not_apply_or_truncate(replay):
     result = call('get_replay_events', {})
-    assert result['complete'] and len(result['events']) == 2501
+    assert result.data['complete'] and len(result.data['events']) == 2501
     assert replay == []
 
 
 def test_current_event_observation_and_real_attachment_slot(replay, tmp_path):
     result = call('observe', {'out_path': str(tmp_path / 'a.png'), 'target': {'rt_index': 3}})
-    assert result['image_event_id'] == result['event_id'] == 42
+    assert result.data['image_event_id'] == result.data['event_id'] == 42
     assert replay == [42]
-    assert result['target']['output_slot'] == 3
-    assert result['remote_display'] == {'status': 'presented', 'event_id': 42, 'texture_id': 'resource-7', 'sequence': 1, 'reason': None}
+    assert result.data['target']['output_slot'] == 3
+    assert result.data['remote_display'] == {'status': 'presented', 'event_id': 42, 'texture_id': 'resource-7', 'sequence': 1, 'reason': None}
     second = call('observe', {'out_path': str(tmp_path / 'b.png'), 'event_id': 12})
-    assert second['revision'] == result['revision'] + 1
-    assert second['image_event_id'] == 12
+    assert second.data['revision'] == result.data['revision'] + 1
+    assert second.data['image_event_id'] == 12
 
 
 def test_missing_target_clears_image_but_preserves_applied_event(replay, tmp_path):
     result = call('observe', {'out_path': str(tmp_path / 'a.png'), 'event_id': 18, 'target': {'rt_index': 0}})
-    assert result['success']
-    assert result['event_id'] == 18 and result['image_event_id'] is None
-    assert result['image_path'] is None and result['image_error']['code'] == 'missing_target'
+    assert result.ok
+    assert result.data['event_id'] == 18 and result.data['image_event_id'] is None
+    assert result.data['image_path'] is None and result.data['image_error']['code'] == 'missing_target'
 
 
 def test_final_without_evidence_is_not_claimed(replay, tmp_path, monkeypatch):
@@ -83,15 +82,15 @@ def test_final_without_evidence_is_not_claimed(replay, tmp_path, monkeypatch):
         raise ValueError('No unique Present')
     monkeypatch.setattr(observation, '_final_target', unavailable)
     result = call('observe', {'out_path': str(tmp_path / 'a.png'), 'final_output': True})
-    assert not result['is_final_output'] and result['final_output_error']
-    assert result['event_id'] == 42
+    assert not result.data['is_final_output'] and result.data['final_output_error']
+    assert result.data['event_id'] == 42
 
 
 def test_invalid_event_and_existing_path_never_apply(replay, tmp_path):
     destination = tmp_path / 'existing.png'
     destination.write_bytes(b'original')
-    assert not call('observe', {'out_path': str(destination)})['success']
-    assert not call('observe', {'out_path': str(tmp_path / 'new.png'), 'event_id': 9999})['success']
+    assert not call('observe', {'out_path': str(destination)}).ok
+    assert not call('observe', {'out_path': str(tmp_path / 'new.png'), 'event_id': 9999}).ok
     assert replay == [] and destination.read_bytes() == b'original'
 
 
@@ -102,8 +101,8 @@ def test_export_failure_removes_partial_file(replay, tmp_path, monkeypatch):
     monkeypatch.setattr(live_state, '_render_service', SimpleNamespace(save_texture_file=broken))
     destination = tmp_path / 'a.png'
     result = call('observe', {'out_path': str(destination)})
-    assert result['image_path'] is None and result['image_error']
-    assert result['image_error']['code'] == 'export_failure'
+    assert result.data['image_path'] is None and result.data['image_error']
+    assert result.data['image_error']['code'] == 'export_failure'
     assert not destination.exists()
 
 
@@ -127,8 +126,8 @@ def test_no_output_is_distinct_from_missing_target(replay, tmp_path, monkeypatch
         return []
     monkeypatch.setattr(replay_access, '_output_target_resource_ids', outputs)
     result = call('observe', {'out_path': str(tmp_path / 'empty.png'), 'event_id': 5})
-    assert result['event_id'] == 5 and result['image_path'] is None
-    assert result['image_error']['code'] == 'no_color_output'
+    assert result.data['event_id'] == 5 and result.data['image_path'] is None
+    assert result.data['image_error']['code'] == 'no_color_output'
 
 
 def test_manual_present_uses_same_verified_target_as_open(replay, tmp_path, monkeypatch):
@@ -146,33 +145,33 @@ def test_manual_present_uses_same_verified_target_as_open(replay, tmp_path, monk
     opened = call('observe', {'out_path': str(tmp_path / 'open.png'), 'final_output': True})
     selected = call('observe', {'out_path': str(tmp_path / 'manual.png'), 'event_id': 14})
     explicit = call('observe', {'out_path': str(tmp_path / 'target.png'), 'event_id': 14, 'target': {'texture_id': 'swap-buffer'}})
-    assert explicit['image_event_id'] == 14
-    assert opened['target'] == selected['target']
-    assert selected['is_final_output'] and selected['image_event_id'] == 14
-    assert Path(opened['image_path']).read_bytes() == Path(selected['image_path']).read_bytes()
+    assert explicit.data['image_event_id'] == 14
+    assert opened.data['target'] == selected.data['target']
+    assert selected.data['is_final_output'] and selected.data['image_event_id'] == 14
+    assert Path(opened.data['image_path']).read_bytes() == Path(selected.data['image_path']).read_bytes()
 
 def test_observation_reports_actual_replacement_state(replay, tmp_path, monkeypatch):
     monkeypatch.setattr(context_records, '_replacement_metadata_entries', lambda session: [])
     monkeypatch.setattr(live_state._runtime, 'restored_shader_sessions', set())
     baseline = call('observe', {'out_path': str(tmp_path / 'baseline.png')})
-    assert baseline['modification_state'] == 'baseline'
-    assert baseline['display_parameters'] == {'mip': 0, 'slice': 0, 'sample': 0, 'range_min': 0.0, 'range_max': 1.0}
+    assert baseline.data['modification_state'] == 'baseline'
+    assert baseline.data['display_parameters'] == {'mip': 0, 'slice': 0, 'sample': 0, 'range_min': 0.0, 'range_max': 1.0}
     monkeypatch.setattr(context_records, '_replacement_metadata_entries', lambda session: [{'replacement_id': 'patch'}])
-    assert call('observe', {'out_path': str(tmp_path / 'modified.png')})['modification_state'] == 'intervention'
+    assert call('observe', {'out_path': str(tmp_path / 'modified.png')}).data['modification_state'] == 'intervention'
     monkeypatch.setattr(context_records, '_replacement_metadata_entries', lambda session: [])
     live_state._runtime.restored_shader_sessions.add('sess')
-    assert call('observe', {'out_path': str(tmp_path / 'restored.png')})['modification_state'] == 'restored'
+    assert call('observe', {'out_path': str(tmp_path / 'restored.png')}).data['modification_state'] == 'restored'
 
 def test_remote_failure_does_not_reuse_previous_receipt(replay, tmp_path, monkeypatch):
     first = call('observe', {'out_path': str(tmp_path / 'first.png')})
-    assert first['remote_display']['status'] == 'presented'
+    assert first.data['remote_display']['status'] == 'presented'
     async def failed(*args):
         raise RuntimeError('surface lost')
     monkeypatch.setattr(live_state, '_session_manager', SimpleNamespace(present_remote=failed))
     result = call('observe', {'out_path': str(tmp_path / 'second.png'), 'event_id': 12})
-    assert result['remote_display'] == {'status': 'unavailable', 'event_id': 12,
+    assert result.data['remote_display'] == {'status': 'unavailable', 'event_id': 12,
         'texture_id': 'resource-7', 'sequence': None, 'reason': 'surface lost'}
-    assert result['image_event_id'] == 12
+    assert result.data['image_event_id'] == 12
 
 
 def test_no_color_sends_native_clear(replay, tmp_path, monkeypatch):
@@ -186,12 +185,12 @@ def test_no_color_sends_native_clear(replay, tmp_path, monkeypatch):
     monkeypatch.setattr(live_state, '_session_manager', SimpleNamespace(present_remote=present))
     result = call('observe', {'out_path': str(tmp_path / 'clear.png'), 'event_id': 5})
     assert calls == [('sess', 5, None)]
-    assert result['remote_display'] == {'status': 'unavailable', 'event_id': 5,
+    assert result.data['remote_display'] == {'status': 'unavailable', 'event_id': 5,
         'texture_id': None, 'sequence': 9, 'reason': 'no_color_output'}
 
 
 def test_local_receipt_is_explicitly_not_applicable(replay, tmp_path, monkeypatch):
     monkeypatch.setattr(context_records, '_context_state', lambda _: {'current_session_id': 'sess', 'backend': 'local'})
     result = call('observe', {'out_path': str(tmp_path / 'local.png')})
-    assert result['remote_display'] == {'status': 'not_applicable', 'event_id': 42,
+    assert result.data['remote_display'] == {'status': 'not_applicable', 'event_id': 42,
         'texture_id': None, 'sequence': None, 'reason': None}

@@ -151,7 +151,7 @@ async def _save_texture_export(
     }
 
 
-async def _export_texture_file(args: Dict[str, Any]) -> str:
+async def _export_texture_file(args: Dict[str, Any]) -> envelope.Outcome:
     coerce._require(args, "session_id", "texture_id", "output_path")
     session_id = str(args["session_id"])
     event_id = coerce._as_int(args.get("event_id"), replay_access._active_event(session_id))
@@ -203,8 +203,8 @@ async def _export_texture_file(args: Dict[str, Any]) -> str:
         )
         if uses_display_controls:
             if export_format not in {"png", "jpg", "exr", "hdr"}:
-                return envelope._err(
-                    "Display-mapped texture export only supports png, jpg, exr, hdr when channels/remap/flip_y are requested",
+                return envelope.failure(
+                    "Display-mapped texture export only supports png, jpg, exr, hdr when channels/remap/flip_y are requested", code="runtime_error",
                 )
             export_item = await _render_texture_export(
                 session_id=session_id,
@@ -226,7 +226,7 @@ async def _export_texture_file(args: Dict[str, Any]) -> str:
                         "downgrade_allowed": False,
                     }
                 )
-                return envelope._err(
+                return envelope.failure(
                     f"Requested texture format '{details.get('requested_format')}' was encoded as '{details.get('actual_format')}'",
                     code="format_encoder_unavailable",
                     category="runtime",
@@ -253,7 +253,7 @@ async def _export_texture_file(args: Dict[str, Any]) -> str:
                     "downgrade_allowed": False,
                 }
             )
-            return envelope._err(
+            return envelope.failure(
                 f"Requested texture format '{details.get('requested_format')}' was encoded as '{details.get('actual_format')}'",
                 code="format_encoder_unavailable",
                 category="runtime",
@@ -262,7 +262,7 @@ async def _export_texture_file(args: Dict[str, Any]) -> str:
         exports.append(export_item)
     if not multi_export:
         single = exports[0]
-        return envelope._ok(
+        return envelope.success(
             artifact_path=single["artifact_path"],
             saved_path=single["saved_path"],
             meta=single["meta"],
@@ -272,7 +272,7 @@ async def _export_texture_file(args: Dict[str, Any]) -> str:
             name_info=name_info,
             texture_format=texture_naming._texture_format_name(texture_desc),
         )
-    return envelope._ok(
+    return envelope.success(
         exports=exports,
         saved_paths=[item["saved_path"] for item in exports],
         selected_formats=selected_formats,
@@ -283,7 +283,7 @@ async def _export_texture_file(args: Dict[str, Any]) -> str:
     )
 
 
-async def _export_buffer_file(args: Dict[str, Any]) -> str:
+async def _export_buffer_file(args: Dict[str, Any]) -> envelope.Outcome:
     coerce._require(args, "session_id", "buffer_id", "output_path")
     session_id = str(args["session_id"])
     controller = await replay_access._get_controller(session_id)
@@ -296,15 +296,15 @@ async def _export_buffer_file(args: Dict[str, Any]) -> str:
     out = Path(str(args["output_path"]))
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_bytes(data)
-    return envelope._ok(saved_path=str(out), byte_size=len(data))
+    return envelope.success(saved_path=str(out), byte_size=len(data))
 
 
-async def _export_mesh_file(args: Dict[str, Any]) -> str:
+async def _export_mesh_file(args: Dict[str, Any]) -> envelope.Outcome:
     coerce._require(args, "session_id", "output_path")
     space = args.get("space", "postvs")
     include_attributes = coerce._as_bool(args.get("include_attributes"), False)
     if args.get("format", "obj") != "obj" or space not in {"postvs", "vs_input"} or (space == "postvs" and include_attributes):
-        return envelope._err("Post-VS OBJ supports positions only; attributes require explicit VS input space", code="mesh_export_unsupported")
+        return envelope.failure("Post-VS OBJ supports positions only; attributes require explicit VS input space", code="mesh_export_unsupported")
     session_id = str(args["session_id"])
     event_id = await replay_access._ensure_event(session_id, coerce._as_int(args["event_id"]) if args.get("event_id") is not None else None)
     controller = await replay_access._get_controller(session_id)
@@ -314,42 +314,42 @@ async def _export_mesh_file(args: Dict[str, Any]) -> str:
             data = await renderdoc_api._offload(vertex_input, controller, renderdoc_api._get_rd(), event_id, 0, 0)
             content, primitive_count = input_obj(data, include_attributes)
         except MeshReadError as exc:
-            return envelope._err(str(exc), code="mesh_input_failed")
+            return envelope.failure(str(exc), code="mesh_input_failed")
         except ValueError as exc:
-            return envelope._err(str(exc), code="mesh_export_unsupported")
+            return envelope.failure(str(exc), code="mesh_export_unsupported")
         out = Path(str(args["output_path"]))
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(content, encoding="utf-8")
-        return envelope._ok(saved_path=str(out), export_format="obj", space=space, include_attributes=include_attributes,
+        return envelope.success(saved_path=str(out), export_format="obj", space=space, include_attributes=include_attributes,
                    resolved_event_id=event_id, vertex_count=data["vertex_count"], primitive_count=primitive_count,
                    attributes={key: ("present" if key == "position" or include_attributes else "not_requested") for key in ("position", "normal", "uv")})
     mesh = await renderdoc_api._offload(controller.GetPostVSData, 0, 0, renderdoc_api._get_rd().MeshDataStage.VSOut)
     if renderdoc_api._is_null_resource_id(mesh.vertexResourceId):
-        return envelope._err("No post-transform vertex data", code="mesh_post_transform_unavailable")
+        return envelope.failure("No post-transform vertex data", code="mesh_post_transform_unavailable")
     fmt = mesh.format
     if int(fmt.compByteWidth) != 4 or int(fmt.compCount) < 3 or int(fmt.compType) != int(renderdoc_api._get_rd().CompType.Float):
-        return envelope._err("OBJ export requires 32-bit float post-transform positions", code="mesh_export_unsupported")
+        return envelope.failure("OBJ export requires 32-bit float post-transform positions", code="mesh_export_unsupported")
     stride = int(mesh.vertexByteStride)
     if stride < int(fmt.compCount) * 4:
-        return envelope._err("Invalid post-transform vertex stride", code="mesh_post_transform_unavailable")
+        return envelope.failure("Invalid post-transform vertex stride", code="mesh_post_transform_unavailable")
     raw = await renderdoc_api._offload(controller.GetBufferData, mesh.vertexResourceId, int(mesh.vertexByteOffset), int(mesh.vertexByteSize))
     if not raw or len(raw) % stride:
-        return envelope._err("Incomplete post-transform vertex readback", code="mesh_post_transform_failed")
+        return envelope.failure("Incomplete post-transform vertex readback", code="mesh_post_transform_failed")
     positions = [struct.unpack_from("<fff", raw, offset) for offset in range(0, len(raw), stride)]
     if any(not math.isfinite(component) for position in positions for component in position):
-        return envelope._err("Post-transform positions contain non-finite values", code="mesh_export_unsupported")
+        return envelope.failure("Post-transform positions contain non-finite values", code="mesh_export_unsupported")
     if not renderdoc_api._is_null_resource_id(mesh.indexResourceId):
         index_stride = int(mesh.indexByteStride)
         if index_stride not in {2, 4}:
-            return envelope._err("Unsupported mesh index width", code="mesh_export_unsupported")
+            return envelope.failure("Unsupported mesh index width", code="mesh_export_unsupported")
         index_raw = await renderdoc_api._offload(controller.GetBufferData, mesh.indexResourceId, int(mesh.indexByteOffset), int(mesh.numIndices) * index_stride)
         if len(index_raw) != int(mesh.numIndices) * index_stride:
-            return envelope._err("Incomplete post-transform index readback", code="mesh_post_transform_failed")
+            return envelope.failure("Incomplete post-transform index readback", code="mesh_post_transform_failed")
         indices = [item[0] + int(getattr(mesh, "baseVertex", 0)) for item in struct.iter_unpack("<H" if index_stride == 2 else "<I", index_raw)]
     else:
         indices = list(range(len(positions)))
     if any(index < 0 or index >= len(positions) for index in indices):
-        return envelope._err("Post-transform index outside vertex data", code="mesh_post_transform_failed")
+        return envelope.failure("Post-transform index outside vertex data", code="mesh_post_transform_failed")
     topology = int(mesh.topology)
     rd_topology = renderdoc_api._get_rd().Topology
     if topology == int(rd_topology.TriangleList):
@@ -361,14 +361,14 @@ async def _export_mesh_file(args: Dict[str, Any]) -> str:
     elif topology == int(rd_topology.PointList):
         primitives = [("p", [index]) for index in indices]
     else:
-        return envelope._err(f"Unsupported OBJ topology: {mesh.topology}", code="mesh_export_unsupported")
+        return envelope.failure(f"Unsupported OBJ topology: {mesh.topology}", code="mesh_export_unsupported")
     lines = [f"# RDC-Tool post-VS positions, event {event_id}"]
     lines.extend("v " + " ".join(format(value, ".9g") for value in position) for position in positions)
     lines.extend(kind + " " + " ".join(str(index+1) for index in primitive) for kind, primitive in primitives)
     out = Path(str(args["output_path"]))
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    return envelope._ok(saved_path=str(out), export_format="obj", space="postvs", include_attributes=False,
+    return envelope.success(saved_path=str(out), export_format="obj", space="postvs", include_attributes=False,
                resolved_event_id=event_id, vertex_count=len(positions), primitive_count=len(primitives),
                attributes={"position": "present", "normal": "unsupported", "uv": "unsupported"})
 

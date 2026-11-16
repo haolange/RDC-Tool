@@ -11,7 +11,7 @@ from rdc_tool.context_snapshot import clear_context_snapshot, load_context_snaps
 from rdc_tool.preview_geometry import fit_size_within_bounds
 from rdc_tool.runtime_state import clear_context_state, load_context_state, save_context_state
 from rdc_tool.context_snapshot import normalize_context_id
-from rdc_tool.runtime import context_records, dispatch, live_state, preview_sync, renderdoc_api, replay_access, session_recovery, truth_matrix, visual_target
+from rdc_tool.runtime import context_records, dispatch, envelope, live_state, preview_sync, renderdoc_api, replay_access, session_recovery, truth_matrix, visual_target
 from rdc_tool.runtime.operations import export as export_ops
 from rdc_tool.runtime.operations import texture as texture_ops
 
@@ -679,15 +679,7 @@ def test_export_screenshot_defaults_to_swapchain_present_target(
         assert action == "render_overlay"
         assert args["texture_id"] == "ResourceId::swapchain"
         assert args["event_id"] == 90
-        return json.dumps(
-            {
-                "success": True,
-                "artifact_path": str(saved_path),
-                "saved_path": str(saved_path),
-                "image_path": str(saved_path),
-                "meta": {"width": 1920, "height": 1080},
-            }
-        )
+        return envelope.success(artifact_path=str(saved_path), saved_path=str(saved_path), image_path=str(saved_path), meta={"width": 1920, "height": 1080})
 
     monkeypatch.setattr(renderdoc_api, "_offload", _inline_offload)
     monkeypatch.setattr(replay_access, "_get_controller", _fake_get_controller)
@@ -704,8 +696,7 @@ def test_export_screenshot_defaults_to_swapchain_present_target(
         lambda: SimpleNamespace(ActionFlags=SimpleNamespace(Present=1024)),
     )
 
-    payload = json.loads(
-        asyncio.run(
+    payload = asyncio.run(
             export_ops.dispatch(
                 "screenshot",
                 {
@@ -716,14 +707,13 @@ def test_export_screenshot_defaults_to_swapchain_present_target(
                 },
             )
         )
-    )
 
-    assert payload["success"] is True
-    assert payload["resolved_event_id"] == 90
-    assert payload["present_event_id"] == 90
-    assert payload["texture_id"] == "ResourceId::swapchain"
-    assert payload["target_source"] == "swapchain_present"
-    assert payload["summary_degraded"] is False
+    assert payload.ok is True
+    assert payload.data['resolved_event_id'] == 90
+    assert payload.data['present_event_id'] == 90
+    assert payload.data['texture_id'] == "ResourceId::swapchain"
+    assert payload.data['target_source'] == "swapchain_present"
+    assert payload.data['summary_degraded'] is False
 
 
 def test_export_screenshot_falls_back_when_swapchain_target_is_unavailable(
@@ -772,15 +762,7 @@ def test_export_screenshot_falls_back_when_swapchain_target_is_unavailable(
         assert action == "render_overlay"
         assert args["texture_id"] == "ResourceId::777"
         assert args["event_id"] == 103
-        return json.dumps(
-            {
-                "success": True,
-                "artifact_path": str(saved_path),
-                "saved_path": str(saved_path),
-                "image_path": str(saved_path),
-                "meta": {"width": 128, "height": 128},
-            }
-        )
+        return envelope.success(artifact_path=str(saved_path), saved_path=str(saved_path), image_path=str(saved_path), meta={"width": 128, "height": 128})
 
     monkeypatch.setattr(visual_target, "_resolve_swapchain_present_target", _fake_resolve_swapchain_present_target)
     monkeypatch.setattr(visual_target, "_choose_visual_output_target", _fake_choose_visual_output_target)
@@ -788,8 +770,7 @@ def test_export_screenshot_falls_back_when_swapchain_target_is_unavailable(
     monkeypatch.setattr(replay_access, "_binding_name_index_for_event", lambda session_id, event_id: asyncio.sleep(0, result={}))
     monkeypatch.setattr(texture_ops, "dispatch", _fake_dispatch_texture)
 
-    payload = json.loads(
-        asyncio.run(
+    payload = asyncio.run(
             export_ops.dispatch(
                 "screenshot",
                 {
@@ -801,13 +782,12 @@ def test_export_screenshot_falls_back_when_swapchain_target_is_unavailable(
                 },
             )
         )
-    )
 
-    assert payload["success"] is True
-    assert payload["target_source"] == "event_output_fallback"
-    assert payload["fallback_reason"] == "swapchain_target_unavailable"
-    assert payload["summary_degraded"] is True
-    assert "swapchain_target_unavailable" in payload["summary_degraded_reasons"]
+    assert payload.ok is True
+    assert payload.data['target_source'] == "event_output_fallback"
+    assert payload.data['fallback_reason'] == "swapchain_target_unavailable"
+    assert payload.data['summary_degraded'] is True
+    assert "swapchain_target_unavailable" in payload.data['summary_degraded_reasons']
 
 
 def test_export_screenshot_fails_when_swapchain_and_event_target_are_unavailable(
@@ -836,18 +816,18 @@ def test_export_screenshot_fails_when_swapchain_and_event_target_are_unavailable
     monkeypatch.setattr(visual_target, "_choose_visual_output_target", _no_event_target)
 
     output = tmp_path / "unavailable.png"
-    payload = json.loads(asyncio.run(export_ops.dispatch("screenshot", {
+    payload = asyncio.run(export_ops.dispatch("screenshot", {
         "session_id": "sess-preview",
         "event_id": 103,
         "file_format": "png",
         "output_path": str(output),
         "target": {"semantic": "swapchain"},
-    })))
+    }))
 
-    assert payload["success"] is False
-    assert payload["code"] == "preview_event_output_unavailable"
-    assert payload["details"]["failure_stage"] == "resolve_visual_target"
-    assert payload["details"]["swapchain_error"]["code"] == "swapchain_target_unavailable"
+    assert payload.ok is False
+    assert payload.code == "preview_event_output_unavailable"
+    assert payload.details["failure_stage"] == "resolve_visual_target"
+    assert payload.details["swapchain_error"]["code"] == "swapchain_target_unavailable"
     assert not output.exists()
 
 
@@ -889,15 +869,7 @@ def test_export_screenshot_event_output_semantic_preserves_visual_selection(
 
     async def _fake_dispatch_texture(action: str, args: dict[str, object]):  # type: ignore[no-untyped-def]
         assert args["texture_id"] == "ResourceId::event"
-        return json.dumps(
-            {
-                "success": True,
-                "artifact_path": str(saved_path),
-                "saved_path": str(saved_path),
-                "image_path": str(saved_path),
-                "meta": {"width": 128, "height": 128},
-            }
-        )
+        return envelope.success(artifact_path=str(saved_path), saved_path=str(saved_path), image_path=str(saved_path), meta={"width": 128, "height": 128})
 
     monkeypatch.setattr(visual_target, "_resolve_swapchain_present_target", _fail_swapchain)
     monkeypatch.setattr(visual_target, "_choose_visual_output_target", _fake_choose_visual_output_target)
@@ -905,8 +877,7 @@ def test_export_screenshot_event_output_semantic_preserves_visual_selection(
     monkeypatch.setattr(replay_access, "_binding_name_index_for_event", lambda session_id, event_id: asyncio.sleep(0, result={}))
     monkeypatch.setattr(texture_ops, "dispatch", _fake_dispatch_texture)
 
-    payload = json.loads(
-        asyncio.run(
+    payload = asyncio.run(
             export_ops.dispatch(
                 "screenshot",
                 {
@@ -918,12 +889,11 @@ def test_export_screenshot_event_output_semantic_preserves_visual_selection(
                 },
             )
         )
-    )
 
-    assert payload["success"] is True
-    assert payload["target_source"] == "event_output_slot"
-    assert payload["chosen_output_slot"] == 1
-    assert payload["requested_semantic"] == "event_output"
+    assert payload.ok is True
+    assert payload.data['target_source'] == "event_output_slot"
+    assert payload.data['chosen_output_slot'] == 1
+    assert payload.data['requested_semantic'] == "event_output"
 
 
 def test_export_screenshot_preserves_event_binding_target_source(
@@ -964,27 +934,14 @@ def test_export_screenshot_preserves_event_binding_target_source(
 
     async def _fake_dispatch_texture(action: str, args: dict[str, object]):  # type: ignore[no-untyped-def]
         assert action == "render_overlay"
-        return json.dumps(
-            {
-                "success": True,
-                "artifact_path": str(saved_path),
-                "saved_path": str(saved_path),
-                "image_path": str(saved_path),
-                "meta": {"width": 128, "height": 128},
-                "binding_truth_level": "binding_verified",
-                "visual_truth_level": "visual_valid",
-                "evidence_truth_level": "visual_evidence_only",
-                "summary_degraded_reasons": [],
-            }
-        )
+        return envelope.success(artifact_path=str(saved_path), saved_path=str(saved_path), image_path=str(saved_path), meta={"width": 128, "height": 128}, binding_truth_level="binding_verified", visual_truth_level="visual_valid", evidence_truth_level="visual_evidence_only", summary_degraded_reasons=[])
 
     monkeypatch.setattr(visual_target, "_choose_visual_output_target", _fake_choose_visual_output_target)
     monkeypatch.setattr(truth_matrix, "_event_truth_metadata", _fake_event_truth_metadata)
     monkeypatch.setattr(replay_access, "_binding_name_index_for_event", _fake_binding_name_index)
     monkeypatch.setattr(texture_ops, "dispatch", _fake_dispatch_texture)
 
-    payload = json.loads(
-        asyncio.run(
+    payload = asyncio.run(
             export_ops.dispatch(
                 "screenshot",
                 {
@@ -996,13 +953,12 @@ def test_export_screenshot_preserves_event_binding_target_source(
                 },
             )
         )
-    )
 
-    assert payload["success"] is True
-    assert payload["resolved_event_id"] == 103
-    assert payload["texture_id"] == "ResourceId::777"
-    assert payload["target_source"] == "event_binding_uav_3"
-    assert payload["saved_path"] == str(saved_path)
+    assert payload.ok is True
+    assert payload.data['resolved_event_id'] == 103
+    assert payload.data['texture_id'] == "ResourceId::777"
+    assert payload.data['target_source'] == "event_binding_uav_3"
+    assert payload.data['saved_path'] == str(saved_path)
 
 
 def test_export_screenshot_returns_structured_save_texture_failure(
@@ -1040,23 +996,14 @@ def test_export_screenshot_returns_structured_save_texture_failure(
 
     async def _fake_dispatch_texture(action: str, args: dict[str, object]):  # type: ignore[no-untyped-def]
         assert action == "render_overlay"
-        return json.dumps(
-            {
-                "success": False,
-                "error_message": "SaveTexture failed: test",
-                "code": "texture_save_failed",
-                "category": "runtime",
-                "details": {"renderdoc_status": "Failed"},
-            }
-        )
+        return envelope.failure("SaveTexture failed: test", code="texture_save_failed", category="runtime", details={"renderdoc_status": "Failed"})
 
     monkeypatch.setattr(visual_target, "_choose_visual_output_target", _fake_choose_visual_output_target)
     monkeypatch.setattr(truth_matrix, "_event_truth_metadata", _fake_event_truth_metadata)
     monkeypatch.setattr(replay_access, "_binding_name_index_for_event", _fake_binding_name_index)
     monkeypatch.setattr(texture_ops, "dispatch", _fake_dispatch_texture)
 
-    payload = json.loads(
-        asyncio.run(
+    payload = asyncio.run(
             export_ops.dispatch(
                 "screenshot",
                 {
@@ -1068,17 +1015,16 @@ def test_export_screenshot_returns_structured_save_texture_failure(
                 },
             )
         )
-    )
 
-    assert payload["success"] is False
-    assert payload["code"] == "texture_save_failed"
-    assert payload["category"] == "runtime"
-    assert payload["details"]["session_id"] == "sess-preview"
-    assert payload["details"]["event_id"] == 103
-    assert payload["details"]["texture_id"] == "ResourceId::777"
-    assert payload["details"]["target_source"] == "event_output_slot"
-    assert payload["details"]["chosen_output_slot"] == 1
-    assert payload["details"]["failure_stage"] == "save_texture"
+    assert payload.ok is False
+    assert payload.code == "texture_save_failed"
+    assert payload.category == "runtime"
+    assert payload.details["session_id"] == "sess-preview"
+    assert payload.details["event_id"] == 103
+    assert payload.details["texture_id"] == "ResourceId::777"
+    assert payload.details["target_source"] == "event_output_slot"
+    assert payload.details["chosen_output_slot"] == 1
+    assert payload.details["failure_stage"] == "save_texture"
 
 
 def test_set_active_waits_for_preview_sync(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1353,22 +1299,22 @@ def test_export_screenshot_target_failure_restores_original_event(
     monkeypatch.setattr(visual_target, "_resolve_visual_target_for_event", _missing_target)
     monkeypatch.setattr(replay_access, "_ensure_event", _restore)
     output = tmp_path / "missing.png"
-    payload = json.loads(asyncio.run(export_ops.dispatch("screenshot", {
+    payload = asyncio.run(export_ops.dispatch("screenshot", {
         "session_id": "sess-preview", "event_id": 103,
         "output_path": str(output), "target": {"semantic": "event_output"},
-    })))
+    }))
 
-    assert payload["success"] is False
+    assert payload.ok is False
     assert not output.exists()
     if expected_proof:
-        assert payload["code"] == "preview_event_output_unavailable"
-        assert payload["details"]["replay_state_restored"] is True
-        assert payload["details"]["restored_event_id"] == original_event
-        assert payload["details"]["artifact_write_attempted"] is False
+        assert payload.code == "preview_event_output_unavailable"
+        assert payload.details["replay_state_restored"] is True
+        assert payload.details["restored_event_id"] == original_event
+        assert payload.details["artifact_write_attempted"] is False
         assert state["event"] == original_event
     elif restore_fails:
-        assert payload["code"] == "screenshot_target_recovery_failed"
-        assert payload["details"]["replay_state_restored"] is False
+        assert payload.code == "screenshot_target_recovery_failed"
+        assert payload.details["replay_state_restored"] is False
     else:
-        assert payload["code"] == "preview_event_output_unavailable"
-        assert "replay_state_restored" not in payload["details"]
+        assert payload.code == "preview_event_output_unavailable"
+        assert "replay_state_restored" not in payload.details

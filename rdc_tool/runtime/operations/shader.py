@@ -44,11 +44,11 @@ async def _disassembly_target_metadata(controller: Any) -> Dict[str, Any]:
     return result
 
 
-async def dispatch(action: str, args: Dict[str, Any]) -> str:
+async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
     if "stage" in args:
         requested_stage = str(args["stage"]).strip()
         if requested_stage not in renderdoc_api._stage_candidates():
-            return envelope._err(
+            return envelope.failure(
                 f"Invalid shader stage: {args['stage']}",
                 code="invalid_shader_stage",
                 category="validation",
@@ -63,13 +63,13 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
     if action == "compile":
         session_id = str(args.get("session_id") or context_records._context_snapshot().get("runtime", {}).get("session_id") or "").strip()
         if not session_id:
-            return envelope._err(
+            return envelope.failure(
                 "rd.shader.compile requires session_id or a current context session",
                 code="validation_error",
                 category="validation",
             )
         if session_id not in live_state._runtime.replays:
-            return envelope._err(
+            return envelope.failure(
                 "rd.shader.compile requires session_id to reference a live replay session",
                 code="validation_error",
                 category="validation",
@@ -80,7 +80,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
         try:
             source_payload = shader_patches._normalize_shader_source_input(args)
         except (OSError, ValueError) as exc:
-            return envelope._err(
+            return envelope.failure(
                 str(exc),
                 code="validation_error",
                 category="validation",
@@ -132,7 +132,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
             "context_preserved": True,
         }
         if build_encoding is None:
-            return envelope._err(
+            return envelope.failure(
                 f"Requested shader source encoding is unsupported for this session: {requested_encoding_name}",
                 code="shader_compile_encoding_unsupported", category="validation",
                 details={
@@ -144,7 +144,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
                 },
             )
         if requested_encoding_name in {"dxil", "dxbc"}:
-            return envelope._err(
+            return envelope.failure(
                 f"{requested_encoding_name.upper()} compile requires a binary container input, not source text.",
                 code="shader_compile_encoding_unsupported",
                 category="validation",
@@ -168,7 +168,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
                 PatchEngine._source_bytes_for_build, source, build_encoding_name, "SPIR-V ASM"
             )
         except (OSError, ValueError, RuntimeError) as exc:
-            return envelope._err(
+            return envelope.failure(
                 str(exc), code="shader_compile_assembly_failed", category="validation",
                 details={"requested_source_encoding": requested_encoding_name,
                          "build_encoding": build_encoding_name, **source_details,
@@ -185,14 +185,14 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
         )
         if not renderdoc_api._is_null_resource_id(shader_id) and _compiler_output_is_fatal(messages):
             await renderdoc_api._offload(controller.FreeTargetResource, shader_id)
-            return envelope._err(
+            return envelope.failure(
                 str(messages), code="shader_compile_failed", category="runtime",
                 details={"session_id": session_id, "stage": stage.upper(),
                          "requested_source_encoding": requested_encoding_name,
                          "failure_stage": "native_build_diagnostics", **source_details},
             )
         if renderdoc_api._is_null_resource_id(shader_id):
-            return envelope._err(
+            return envelope.failure(
                 str(messages or "BuildTargetShader returned a null shader id"),
                 code="shader_compile_failed",
                 category="runtime",
@@ -262,7 +262,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
                 artifact = await live_state._artifact_store.store(raw_bytes, mime="application/octet-stream", suffix=suffix)
                 result["artifact_path"] = artifact_payloads._artifact_path(artifact)
             result["byte_size"] = len(raw_bytes)
-        return envelope._ok(**result)
+        return envelope.success(**result)
 
     coerce._require(args, "session_id")
     session_id = str(args["session_id"])
@@ -270,11 +270,11 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
         try:
             shader_debug._require_shader_debug_handle(session_id, str(args.get("shader_debug_id", "")))
             if args.get("detail_level", "full") not in ("summary", "full"):
-                return envelope._err("detail_level must be summary or full", code="validation_error", category="validation",
+                return envelope.failure("detail_level must be summary or full", code="validation_error", category="validation",
                             details={"session_id": session_id, "effects_attempted": False, "context_preserved": True,
                                      "failure_stage": "validate_debug_request"})
         except CoreError as exc:
-            return envelope._err(exc.message, code=exc.code, category=exc.category, details=dict(exc.details))
+            return envelope.failure(exc.message, code=exc.code, category=exc.category, details=dict(exc.details))
     controller = await replay_access._get_controller(session_id)
     if action == "get_disassembly":
         requested_target = str(args.get("target", "auto")).strip()
@@ -282,7 +282,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
         if requested_target and requested_target.lower() != "auto" and not PatchEngine._is_raw_spirv_asm_request(requested_target, requested_encoding):
             target_discovery = await _disassembly_target_metadata(controller)
             if target_discovery["available_targets_status"] != "complete":
-                return envelope._err(
+                return envelope.failure(
                     "Unable to discover native disassembly targets", code="shader_disassembly_unavailable", category="runtime",
                     details={"session_id": session_id, "requested_target": requested_target,
                              "failure_stage": "validate_target", "failure_reason": "target_discovery_failed",
@@ -290,7 +290,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
                 )
             targets = target_discovery["available_targets"]
             if not PatchEngine._find_matching_target(targets, requested_target):
-                return envelope._err(
+                return envelope.failure(
                     f"Requested disassembly target is unavailable: {requested_target}",
                     code="shader_disassembly_unavailable",
                     category="validation",
@@ -398,7 +398,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
         mode = str(args.get("mode", "pixel")).lower()
         params = coerce._as_dict(args.get("params"))
         if mode != "pixel":
-            return envelope._err(
+            return envelope.failure(
                 f"Unsupported shader debug mode: {mode}",
                 code="validation_error",
                 category="validation",
@@ -433,7 +433,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
             if str(debug_capability.get("status") or "") == "blocked_current_session":
                 capability_code = "shader_debug_event_binding_unavailable"
                 capability_message = "Shader debug is blocked until a valid remote event-bound target is established"
-            return envelope._capability_error(
+            return envelope.capability_failure(
                 capability_code,
                 capability_message,
                 capability="shader_debug",
@@ -843,13 +843,13 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
                 "pixel_history_timeout_count": int(pixel_history_timeout_count),
             }
             if error_category == "runtime":
-                return envelope._err(
+                return envelope.failure(
                     error_message,
                     code=error_code,
                     category=error_category,
                     details=details,
                 )
-            return envelope._capability_error(
+            return envelope.capability_failure(
                 error_code,
                 error_message,
                 capability="shader_debug",
@@ -873,7 +873,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
             selected_target_source=last_target_source,
             pixel_history_summary=dict(last_history_summary),
         )
-        return envelope._ok(
+        return envelope.success(
             shader_debug_id=shader_debug_id,
             initial_state={"pc": 0},
             resolved_context=resolved_context,
@@ -885,11 +885,11 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
     if action in {"get_debug_state", "list_replacements", "revert_replacement", "edit_and_replace", "get_messages", "extract_binary", "get_source", "list_entry_points", "get_bindpoint_mapping", "get_constant_block_layout", "get_constant_buffer_contents", "get_reflection", "get_disassembly"}:
         pass
     else:
-        return envelope._err(f"Unsupported shader action: {action}")
+        return envelope.failure(f"Unsupported shader action: {action}", code="runtime_error")
 
     if action == "get_debug_state":
         handle = shader_debug._require_shader_debug_handle(session_id, str(args.get("shader_debug_id", "")))
-        return envelope._ok(
+        return envelope.success(
             state=shader_debug._shader_debug_state_payload(handle, args.get("detail_level", "full")),
             resolved_event_id=int(handle.event_id or 0),
             resolved_context=handle.resolved_context,
@@ -899,17 +899,17 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
 
     if action == "list_replacements":
         replacements = shader_patches._list_replacement_payloads(session_id)
-        return envelope._ok(replacements=replacements)
+        return envelope.success(replacements=replacements)
 
     if action == "revert_replacement":
         coerce._require(args, "replacement_id")
         replacement_id = str(args["replacement_id"])
         repl = shader_patches._list_replacement_payloads(session_id)
         if live_state._patch_engine is None:
-            return envelope._err("Shader patch engine is not initialized", code="shader_replace_unavailable", category="runtime")
+            return envelope.failure("Shader patch engine is not initialized", code="shader_replace_unavailable", category="runtime")
         reverted = await live_state._patch_engine.revert_patch(session_id, replacement_id, live_state._session_manager)
         if not reverted:
-            return envelope._err(
+            return envelope.failure(
                 f"Unknown replacement_id: {replacement_id}",
                 code="replacement_not_found",
                 category="not_found",
@@ -921,12 +921,12 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
         live_state._runtime.shader_replacements[session_id] = remaining_replacements
         live_state._runtime.restored_shader_sessions.add(session_id)
         shader_patches._sync_context_session_replacements(session_id, remaining_replacements)
-        return envelope._ok(replacement_id=replacement_id, reverted=True)
+        return envelope.success(replacement_id=replacement_id, reverted=True)
 
     if action == "edit_and_replace":
         stage = renderdoc_api._parse_stage(args.get("stage"))
         if live_state._patch_engine is None:
-            return envelope._capability_error(
+            return envelope.capability_failure(
                 "shader_replace_unavailable",
                 "Runtime shader replacement is not initialized",
                 capability="shader_replace",
@@ -936,7 +936,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
             )
         patch_supported, patch_reason = truth_matrix._session_replace_capability(session_id, controller)
         if not patch_supported:
-            return envelope._capability_error(
+            return envelope.capability_failure(
                 "shader_replace_backend_unsupported",
                 "Runtime shader replacement is unavailable for this replay backend",
                 capability="shader_replace",
@@ -958,7 +958,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
                 source_payload = shader_patches._normalize_shader_source_input(args)
                 source_text = str(source_payload["source"])
             except (OSError, ValueError) as exc:
-                return envelope._err(
+                return envelope.failure(
                     str(exc),
                     code="validation_error",
                     category="validation",
@@ -982,7 +982,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
             if item
         )
         if edit_input_count != 1:
-            return envelope._err(
+            return envelope.failure(
                 "rd.shader.edit_and_replace requires exactly one edit input: ops, source_text/source_path, or diff_text",
                 code="validation_error",
                 category="validation",
@@ -995,7 +995,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
                 if str((item or {}).get("op") if isinstance(item, dict) else "") not in supported_ops
             ]
             if invalid_ops:
-                return envelope._err(
+                return envelope.failure(
                     "Unsupported shader patch op. Use force_full_precision, insert_guard, source_text, or diff_text.",
                     code="validation_error",
                     category="validation",
@@ -1013,7 +1013,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
                 require_reflection=False,
             )
         except CoreError as exc:
-            return envelope._err(exc.message, code=exc.code, category=exc.category, details=dict(exc.details))
+            return envelope.failure(exc.message, code=exc.code, category=exc.category, details=dict(exc.details))
         source_target = str(args.get("source_target") or "")
         source_encoding = str(args.get("source_encoding") or "")
         expected_source_hash = str(args.get("expected_source_hash") or "")
@@ -1059,7 +1059,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
             }
             if patch_result.error_details:
                 error_details.update(dict(patch_result.error_details))
-            return envelope._err(
+            return envelope.failure(
                 patch_result.error_message or "Shader replacement failed",
                 code=patch_result.error_code or "shader_replace_failed",
                 category=patch_result.error_category or "runtime",
@@ -1108,7 +1108,6 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
             source_available=bool(patch_result.source_before_text),
         )
         replacement["edit_plan"] = edit_plan
-        artifacts: List[Dict[str, Any]] = []
         if emit_patch_artifacts or patch_output_dir:
             base_stem = f"shader_patch_ev{int(event_id)}_{stage}_{patch_spec.patch_id}"
             before_payload = await artifact_payloads._store_text_artifact_payload(
@@ -1160,7 +1159,6 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
                 for key, value in patch_artifacts.items()
                 if value
             }
-            artifacts = [value for value in patch_artifacts.values() if value]
         if not no_source_change:
             shader_patches._store_replacement_payload(session_id, replacement)
             try:
@@ -1210,20 +1208,19 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
                     code = "shader_replace_preserve_outputs_failed"
                     category = "runtime"
                     message = str(exc)
-                return envelope._err(
+                return envelope.failure(
                     message or "Remote shader replacement failed persistence validation",
                     code=code,
                     category=category,
                     details=details,
                 )
-        return envelope._ok(
+        return envelope.success(
             replacement_id=replacement["replacement_id"],
             status=replacement["status"],
             resolved_event_id=int(event_id),
             messages=replacement["messages"],
             edit_plan=edit_plan,
             replacement=replacement,
-            artifacts=artifacts,
         )
 
     if action == "get_messages":
@@ -1233,7 +1230,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
         for r in replacements:
             for msg in r.get("messages", []):
                 messages.append({"severity": "info", "message": msg})
-        return envelope._ok(messages=messages, severity_min=severity_min)
+        return envelope.success(messages=messages, severity_min=severity_min)
 
     if action == "extract_binary":
         shader_id = str(args.get("shader_id", "")).strip()
@@ -1244,10 +1241,10 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
                 require_reflection=True,
             )
         except CoreError as exc:
-            return envelope._err(exc.message, code=exc.code, category=exc.category, details=dict(exc.details))
+            return envelope.failure(exc.message, code=exc.code, category=exc.category, details=dict(exc.details))
         raw_bytes = shader_patches._shader_raw_bytes(reflection)
         if not raw_bytes:
-            return envelope._capability_error(
+            return envelope.capability_failure(
                 "shader_binary_export_unavailable",
                 "Shader reflection does not expose raw bytes for the requested shader",
                 capability="shader_binary_export",
@@ -1284,15 +1281,15 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
             import base64
 
             result["base64"] = base64.b64encode(raw_bytes).decode("ascii")
-        return envelope._ok(**result)
-    async def _inspection_error(message: str, code: str, details: Dict[str, Any], category: str = "runtime") -> str:
+        return envelope.success(**result)
+    async def _inspection_error(message: str, code: str, details: Dict[str, Any], category: str = "runtime") -> envelope.Outcome:
         if inspection_original_event > 0:
             try:
                 restored_event = await replay_access._ensure_event(session_id, inspection_original_event)
                 if restored_event != inspection_original_event or replay_access._active_event(session_id) != inspection_original_event:
                     raise RuntimeError("Replay event did not match the original event after restoration")
             except Exception as restore_error:
-                return envelope._err(
+                return envelope.failure(
                     f"Failed to restore replay after shader inspection failed: {restore_error}",
                     code="shader_inspection_recovery_failed", category="runtime",
                     details={**details, "context_id": live_state._runtime_context_id(), "session_id": session_id,
@@ -1301,7 +1298,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
                 )
             details = {**details, "context_id": live_state._runtime_context_id(),
                        "replay_state_restored": True, "restored_event_id": inspection_original_event}
-        return envelope._err(message, code=code, category=category, details=details)
+        return envelope.failure(message, code=code, category=category, details=details)
 
     if action == "get_source":
         requested_shader_id = str(args.get("shader_id", "")).strip()
@@ -1314,7 +1311,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
         except CoreError as exc:
             if exc.code in {"shader_binding_lookup_failed", "shader_reflection_unavailable"}:
                 return await _inspection_error(exc.message, exc.code, dict(exc.details))
-            return envelope._err(exc.message, code=exc.code, category=exc.category, details=dict(exc.details))
+            return envelope.failure(exc.message, code=exc.code, category=exc.category, details=dict(exc.details))
         try:
             source_encoding = shader_patches._shader_encoding_name(getattr(reflection, "encoding", ""))
             debug_info = getattr(reflection, "debugInfo", None)
@@ -1366,7 +1363,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
             "shader_id": resolved_shader_id, "stage": stage_name.upper(), "resolved_event_id": int(event_id),
         }
         if source is not None:
-            return envelope._ok(**common, edit_plan=shader_patches._shader_edit_plan(source_encoding=debug_encoding, source=source))
+            return envelope.success(**common, edit_plan=shader_patches._shader_edit_plan(source_encoding=debug_encoding, source=source))
         edit_plan = shader_patches._shader_edit_plan(source_encoding=source_encoding, source_available=False)
         fallback_args = shader_patches._shader_source_fallback_args(
             session_id=session_id, event_id=int(event_id), stage=stage_name,
@@ -1376,7 +1373,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
             "tool": "rd.shader.get_disassembly", "args": fallback_args,
             "reason": "entry shader source contents are unavailable" if files else "original shader source is unavailable from capture debug information",
         }
-        return envelope._ok(
+        return envelope.success(
             **common, fallback=fallback, fallback_tool="rd.shader.get_disassembly", fallback_args=fallback_args,
             edit_plan=edit_plan, failure_stage="source_lookup",
             failure_reason="entry_source_contents_unavailable" if files else "source_debug_info_unavailable",
@@ -1391,7 +1388,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
                 require_reflection=True,
             )
         except CoreError as exc:
-            return envelope._err(exc.message, code=exc.code, category=exc.category, details=dict(exc.details))
+            return envelope.failure(exc.message, code=exc.code, category=exc.category, details=dict(exc.details))
         slot_value = coerce._as_int(args.get("slot"), 0) if args.get("slot") is not None else None
         native_shader_id = await renderdoc_api._offload(pipe.GetShader, renderdoc_api._rd_stage(stage_name))
         cbuffer_entries = await shader_values._collect_constant_buffers(
@@ -1440,7 +1437,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
                         },
                     }
                     cbuffer_payload["decode_status"] = "raw_fallback"
-                    return envelope._ok(cbuffer=cbuffer_payload, shader_id=resolved_shader_id, resolved_event_id=int(event_id))
+                    return envelope.success(cbuffer=cbuffer_payload, shader_id=resolved_shader_id, resolved_event_id=int(event_id))
                 except Exception as exc:
                     cbuffer_payload["raw_fallback_error"] = str(exc)
             return await _inspection_error(
@@ -1464,7 +1461,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
                 details={"session_id": session_id, "shader_id": resolved_shader_id, "resolved_event_id": int(event_id), "stage": stage_name.upper(), "slot": slot_value,
                          "failure_stage": "decode_constant_buffer", "failure_reason": "slot_unavailable"},
             )
-        return envelope._ok(cbuffer=cbuffer_payload, shader_id=resolved_shader_id, resolved_event_id=int(event_id))
+        return envelope.success(cbuffer=cbuffer_payload, shader_id=resolved_shader_id, resolved_event_id=int(event_id))
 
     if action in {"list_entry_points", "get_bindpoint_mapping", "get_constant_block_layout", "get_reflection", "get_disassembly"}:
         shader_id = str(args.get("shader_id", "")).strip()
@@ -1475,12 +1472,12 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
                 require_reflection=action in {"get_reflection", "get_disassembly"},
             )
         except CoreError as exc:
-            return envelope._err(exc.message, code=exc.code, category=exc.category, details=dict(exc.details))
+            return envelope.failure(exc.message, code=exc.code, category=exc.category, details=dict(exc.details))
         if action == "list_entry_points":
             entries = []
             if reflection is not None:
                 entries.append({"name": str(getattr(reflection, "entryPoint", "main")), "stage": stage.upper()})
-            return envelope._ok(entry_points=entries, shader_id=shader_id, resolved_event_id=int(event_id))
+            return envelope.success(entry_points=entries, shader_id=shader_id, resolved_event_id=int(event_id))
         if action == "get_bindpoint_mapping":
             mapping = []
             if reflection is not None:
@@ -1488,7 +1485,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
                     mapping.append({"resource_name": str(getattr(ro, "name", "")), "bindpoint": int(getattr(ro, "bindPoint", 0)), "type": "SRV", "stage": stage.upper()})
                 for rw in getattr(reflection, "readWriteResources", []) or []:
                     mapping.append({"resource_name": str(getattr(rw, "name", "")), "bindpoint": int(getattr(rw, "bindPoint", 0)), "type": "UAV", "stage": stage.upper()})
-            return envelope._ok(mapping=mapping, shader_id=shader_id, resolved_event_id=int(event_id))
+            return envelope.success(mapping=mapping, shader_id=shader_id, resolved_event_id=int(event_id))
         if action == "get_constant_block_layout":
             block_name_or_index = args.get("block_name_or_index")
             blocks = getattr(reflection, "constantBlocks", []) or []
@@ -1505,7 +1502,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
             if selected is None and blocks:
                 selected = blocks[0]
             if selected is None:
-                return envelope._ok(layout={}, shader_id=shader_id, resolved_event_id=int(event_id))
+                return envelope.success(layout={}, shader_id=shader_id, resolved_event_id=int(event_id))
             layout = {
                 "name": str(getattr(selected, "name", "")),
                 "byte_size": int(getattr(selected, "byteSize", 0)),
@@ -1518,7 +1515,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
                     for v in (getattr(selected, "variables", []) or [])
                 ],
             }
-            return envelope._ok(layout=layout, shader_id=shader_id, resolved_event_id=int(event_id))
+            return envelope.success(layout=layout, shader_id=shader_id, resolved_event_id=int(event_id))
         if action == "get_reflection":
             native_debug_info = getattr(reflection, "debugInfo", None) if reflection is not None else None
             native_debuggable = getattr(native_debug_info, "debuggable", None)
@@ -1542,7 +1539,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
                     refl["resources"].append({"name": str(getattr(ro, "name", "")), "bindpoint": int(getattr(ro, "bindPoint", 0)), "type": "SRV"})
                 for cb in getattr(reflection, "constantBlocks", []) or []:
                     refl["constant_blocks"].append({"name": str(getattr(cb, "name", "")), "byte_size": int(getattr(cb, "byteSize", 0))})
-            return envelope._ok(reflection=refl, shader_id=shader_id, resolved_event_id=int(event_id))
+            return envelope.success(reflection=refl, shader_id=shader_id, resolved_event_id=int(event_id))
         if action == "get_disassembly":
             requested_target = str(args.get("target", "auto"))
             requested_encoding = str(args.get("source_encoding") or "")
@@ -1558,7 +1555,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
                     requested_encoding=requested_encoding,
                 )
             except RuntimeError as exc:
-                return envelope._err(
+                return envelope.failure(
                     str(exc),
                     code="shader_disassembly_unavailable",
                     category="runtime",
@@ -1583,7 +1580,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
                 source_available=bool(text),
             )
             if not text:
-                return envelope._ok(
+                return envelope.success(
                     disassembly="",
                     target=str(resolved_target or ""),
                     source_encoding=source_encoding_name,
@@ -1594,7 +1591,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
                     source_hash="",
                     **target_discovery,
                 )
-            return envelope._ok(
+            return envelope.success(
                 disassembly=str(text),
                 target=str(resolved_target or ""),
                 source_encoding=source_encoding_name,
@@ -1606,4 +1603,4 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
                 **target_discovery,
             )
 
-    return envelope._err(f"Unsupported shader action: {action}")
+    return envelope.failure(f"Unsupported shader action: {action}", code="runtime_error")

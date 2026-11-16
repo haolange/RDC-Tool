@@ -29,7 +29,7 @@ from rdc_tool.runtime_state import read_runtime_logs
 from rdc_tool.utils.artifact_store import ArtifactStore
 
 
-async def dispatch(action: str, args: Dict[str, Any]) -> str:
+async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
     if action == "init":
         global_env = coerce._as_dict(args.get("global_env"), default={})
         live_state._runtime.enable_remote = coerce._as_bool(args.get("enable_remote"), True)
@@ -39,7 +39,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
         context_records._sync_context_metrics(live_state._runtime_context_id())
         version = await _core_get_version_value()
         capabilities = await _core_capabilities(detail="summary")
-        return envelope._ok(api_version=version, capabilities=capabilities)
+        return envelope.success(api_version=version, capabilities=capabilities)
 
     if action == "shutdown":
         unique_remote_ids = {
@@ -89,15 +89,15 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
         live_state._runtime.hydrated_contexts.clear()
         context_records._reset_context_snapshot()
         live_state._runtime.initialized = False
-        return envelope._ok(released=released)
+        return envelope.success(released=released)
 
     if action == "get_version":
         version = await _core_get_version_value()
-        return envelope._ok(version=version, commit_hash=None, build_date=None)
+        return envelope.success(version=version, commit_hash=None, build_date=None)
 
     if action == "get_capabilities":
         detail = str(args.get("detail_level", "summary"))
-        return envelope._ok(capabilities=await _core_capabilities(detail=detail))
+        return envelope.success(capabilities=await _core_capabilities(detail=detail))
 
     if action == "set_config":
         coerce._require(args, "config")
@@ -105,16 +105,16 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
         applied = settings._apply_runtime_config(cfg)
         if live_state._artifact_store is not None:
             live_state._artifact_store = ArtifactStore(root=Path(str((live_state._config or RdcToolConfig()).artifact.store_path)).resolve())
-        return envelope._ok(applied=applied)
+        return envelope.success(applied=applied)
 
     if action == "get_config":
-        return envelope._ok(config=settings._serialize_runtime_config())
+        return envelope.success(config=settings._serialize_runtime_config())
 
     if action == "set_log_level":
         level = str(args.get("level", "info")).upper()
         logging.getLogger().setLevel(level)
         settings._apply_runtime_config({"log_level": level})
-        return envelope._ok()
+        return envelope.success()
 
     if action == "get_logs":
         since_ms = args.get("since_ms")
@@ -138,7 +138,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
             if idx < cutoff:
                 continue
             out.append(item)
-        return envelope._ok(logs=out[-max_lines:])
+        return envelope.success(logs=out[-max_lines:])
 
     if action == "get_operation_history":
         state = context_records._context_state(live_state._runtime_context_id())
@@ -157,10 +157,10 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
             if status_filter and status_filter != str(entry.get("status") or "").lower():
                 continue
             items.append(entry)
-        return envelope._ok(context_id=live_state._runtime_context_id(), operations=items[:max_items])
+        return envelope.success(context_id=live_state._runtime_context_id(), operations=items[:max_items])
 
     if action == "get_runtime_metrics":
-        return envelope._ok(**discovery._runtime_metrics_payload(live_state._runtime_context_id()))
+        return envelope.success(**discovery._runtime_metrics_payload(live_state._runtime_context_id()))
 
     if action == "list_tools":
         detail_level = str(args.get("detail_level") or "summary").strip().lower() or "summary"
@@ -178,11 +178,11 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
             ),
             detail_level="full" if detail_level == "full" else "summary",
         )
-        return envelope._ok(tool_count=len(tools), tools=tools)
+        return envelope.success(tool_count=len(tools), tools=tools)
 
 
     if action == "get_tool_graph":
-        return envelope._ok(
+        return envelope.success(
             **discovery._tool_graph_payload(
                 query=str(args.get("query") or ""),
                 namespace=str(args.get("namespace") or ""),
@@ -217,10 +217,10 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
             checks.append({"name": "remote_runtime", "ok": live_state._runtime.enable_remote})
         success = all(bool(item.get("ok")) for item in checks)
         if not success:
-            return envelope._err("healthcheck failed", checks=checks)
-        return envelope._ok(checks=checks)
+            return envelope.failure("healthcheck failed", code="runtime_error", details={"checks": checks})
+        return envelope.success(checks=checks)
 
-    return envelope._err(f"Unsupported core action: {action}")
+    return envelope.failure(f"Unsupported core action: {action}", code="runtime_error")
 
 
 async def _core_get_version_value() -> str:

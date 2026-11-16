@@ -6,7 +6,7 @@ from types import MappingProxyType, ModuleType
 from typing import Any, Dict, Mapping
 
 from rdc_tool.core.errors import NotFoundError
-from rdc_tool.runtime import context_records, live_state, replay_access
+from rdc_tool.runtime import context_records, envelope, live_state, replay_access
 from rdc_tool.runtime.operations import (
     buffer,
     capture,
@@ -37,14 +37,12 @@ OPERATION_MODULES: Mapping[str, ModuleType] = MappingProxyType({
 })
 
 
-def _prerequisite_error(tool_name: str, requirement: str, via_tools: list[str], reason: str) -> Dict[str, Any]:
-    return {
-        "success": False,
-        "error_message": f"{tool_name} requires {requirement} before execution",
-        "code": f"missing_prerequisite_{requirement.replace('.', '_')}",
-        "category": "runtime",
-        "details": {"prerequisite": requirement, "via_tools": list(via_tools), "reason": reason, "tool_name": tool_name},
-    }
+def _prerequisite_error(tool_name: str, requirement: str, via_tools: list[str], reason: str) -> envelope.Failure:
+    return envelope.failure(
+        f"{tool_name} requires {requirement} before execution",
+        code=f"missing_prerequisite_{requirement.replace('.', '_')}",
+        details={"prerequisite": requirement, "via_tools": list(via_tools), "reason": reason, "tool_name": tool_name},
+    )
 
 
 def _when_applies(args: Dict[str, Any], when: str) -> bool:
@@ -78,7 +76,7 @@ def _has_prerequisite(requirement: str, args: Dict[str, Any]) -> bool:
     return True
 
 
-def _unmet_prerequisite(tool_name: str, args: Dict[str, Any]) -> Dict[str, Any] | None:
+def _unmet_prerequisite(tool_name: str, args: Dict[str, Any]) -> envelope.Failure | None:
     for item in OPERATION_INDEX[tool_name].get("prerequisites", []):
         requirement = str(item.get("requires") or "").strip()
         if not requirement or not _when_applies(args, str(item.get("when") or "").strip()) or _has_prerequisite(requirement, args):
@@ -88,7 +86,7 @@ def _unmet_prerequisite(tool_name: str, args: Dict[str, Any]) -> Dict[str, Any] 
     return None
 
 
-async def route(operation: str, args: Dict[str, Any]) -> Any:
+async def route(operation: str, args: Dict[str, Any]) -> envelope.Outcome:
     definition = OPERATION_INDEX.get(operation)
     if definition is None:
         raise NotFoundError(f"Unsupported operation: {operation}")
@@ -97,7 +95,7 @@ async def route(operation: str, args: Dict[str, Any]) -> Any:
     try:
         validate_operation_arguments(operation, args)
     except ValueError as exc:
-        return {"success": False, "error_message": str(exc), "code": "validation_error", "category": "validation"}
+        return envelope.failure(str(exc), code="validation_error", category="validation")
     unmet = _unmet_prerequisite(operation, args)
     if unmet is not None:
         return unmet

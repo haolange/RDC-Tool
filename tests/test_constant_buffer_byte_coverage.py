@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from rdc_tool.core.errors import CoreError
-from rdc_tool.runtime import renderdoc_api, shader_values, texture_export
+from rdc_tool.runtime import envelope, renderdoc_api, shader_values, texture_export
 from rdc_tool.runtime.operations import export as export_ops
 from rdc_tool.runtime.operations import pipeline as pipeline_ops
 
@@ -111,14 +111,14 @@ def test_negative_window_budget_is_validation_failure():
 
 def test_decoded_export_propagates_unavailable_values_as_partial(monkeypatch, tmp_path):
     async def pipeline(_action, _args):
-        return json.dumps({"success": True, "constant_buffers": [{"slot": 0, "decode_error": "budget_limited", "contents": []}]})
+        return envelope.success(constant_buffers=[{"slot": 0, "decode_error": "budget_limited", "contents": []}])
     monkeypatch.setattr(pipeline_ops, "dispatch", pipeline)
-    result = json.loads(asyncio.run(export_ops.dispatch("cbuffer_dump", {
+    result = asyncio.run(export_ops.dispatch("cbuffer_dump", {
         "session_id": "test-session", "output_dir": str(tmp_path), "stages": ["ps"], "max_bytes": 16,
-    })))
-    assert result["success"] is True
-    assert result["partial"] is True
-    assert result["failures"][0]["code"] == "constant_buffer_decode_unavailable"
+    }))
+    assert result.ok is True
+    assert result.data['partial'] is True
+    assert result.data['failures'][0]["code"] == "constant_buffer_decode_unavailable"
     assert json.loads((tmp_path / "cbuffer_ps.json").read_text())[0]["contents"] == []
 
 
@@ -126,17 +126,17 @@ def test_decoded_export_propagates_unavailable_values_as_partial(monkeypatch, tm
 def test_raw_export_budget_zero_means_the_block_not_zero_native_length(monkeypatch, tmp_path, budget, expected, partial):
     requests = []
     async def pipeline(_action, _args):
-        return json.dumps({"success": True, "constant_buffers": [{"slot": 0, "resource_id": "ResourceId::99", "offset": 8, "byte_size": 64, "size": 80}]})
+        return envelope.success(constant_buffers=[{"slot": 0, "resource_id": "ResourceId::99", "offset": 8, "byte_size": 64, "size": 80}])
     async def export(args):
         requests.append(args)
-        return json.dumps({"success": True, "saved_path": args["output_path"]})
+        return envelope.success(saved_path=args["output_path"])
     monkeypatch.setattr(pipeline_ops, "dispatch", pipeline)
     monkeypatch.setattr(texture_export, "_export_buffer_file", export)
-    result = json.loads(asyncio.run(export_ops.dispatch("cbuffer_dump", {
+    result = asyncio.run(export_ops.dispatch("cbuffer_dump", {
         "session_id": "test-session", "output_dir": str(tmp_path), "stages": ["ps"], "max_bytes": budget,
         "include_decoded": False, "include_raw": True,
-    })))
+    }))
     assert requests[0]["size"] == expected
-    assert result["partial"] is partial
+    assert result.data['partial'] is partial
     saved = json.loads((tmp_path / "cbuffer_ps.json").read_text())[0]
     assert saved["raw_export_coverage"]["truncated"] is partial

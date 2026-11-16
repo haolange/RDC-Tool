@@ -28,7 +28,7 @@ from rdc_tool.runtime import (
 from rdc_tool.runtime_state import list_context_ids
 
 
-async def dispatch(action: str, args: Dict[str, Any]) -> str:
+async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
     if action in {"get_replay_events", "observe"}:
         return await observation.handle(action, args)
     context_id = normalize_context_id(args.get("context_id") or live_state._runtime_context_id())
@@ -64,7 +64,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
             active_operation = {}
         from rdc_tool.runtime_process_identity import runtime_process_identity
 
-        return envelope._ok(
+        return envelope.success(
             **snapshot,
             session_locator=discovery._session_locator_projection(snapshot, state),
             current_session_id=current_session_id,
@@ -86,7 +86,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
         state = context_records._context_state(requested_context)
         context_records._store_context_state(state, requested_context)
         snapshot = context_records._sync_context_snapshot_from_state(requested_context)
-        return envelope._ok(
+        return envelope.success(
             **snapshot,
             current_session_id=str(state.get("current_session_id") or ""),
             sessions=list(state.get("sessions", {}).values()),
@@ -96,7 +96,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
 
     if action == "list_contexts":
         context_ids = sorted({normalize_context_id(item) for item in list_context_ids()} | {context_id})
-        return envelope._ok(context_id=context_id, contexts=[discovery._context_summary(item) for item in context_ids])
+        return envelope.success(context_id=context_id, contexts=[discovery._context_summary(item) for item in context_ids])
 
 
     if action == "clear_context":
@@ -135,7 +135,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
             except Exception as exc:
                 cleanup_errors.append(str(exc))
         if cleanup_errors:
-            return envelope._err("Context cleanup failed", code="context_cleanup_failed", details={"cleanup_errors": cleanup_errors, "cleanup_reason_code": "session_cleanup_failed"})
+            return envelope.failure("Context cleanup failed", code="context_cleanup_failed", details={"cleanup_errors": cleanup_errors, "cleanup_reason_code": "session_cleanup_failed"})
         for rid, handle in list(live_state._runtime.remotes.items()):
             if normalize_context_id(handle.origin_context_id) != requested_context:
                 continue
@@ -145,7 +145,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
             else:
                 live_state._runtime.remotes.pop(rid, None)
         if cleanup_errors:
-            return envelope._err("Context cleanup failed", code="context_cleanup_failed", details={"cleanup_errors": cleanup_errors, "cleanup_reason_code": "remote_handle_cleanup_failed"})
+            return envelope.failure("Context cleanup failed", code="context_cleanup_failed", details={"cleanup_errors": cleanup_errors, "cleanup_reason_code": "remote_handle_cleanup_failed"})
         # A restarted daemon has no RemoteHandle, but the persisted snapshot
         # still owns the exact ADB forward created by this context. Reuse the
         # bootstrap cleanup, which verifies the current forward identity.
@@ -189,10 +189,10 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
                     except Exception as exc:
                         cleanup_errors.append(str(exc))
         if cleanup_errors:
-            return envelope._err("Context cleanup failed", code="context_cleanup_failed", details={"cleanup_errors": cleanup_errors, "cleanup_reason_code": "expired_remote_cleanup_failed"})
+            return envelope.failure("Context cleanup failed", code="context_cleanup_failed", details={"cleanup_errors": cleanup_errors, "cleanup_reason_code": "expired_remote_cleanup_failed"})
         snapshot = context_records._reset_context_snapshot(requested_context)
         state = context_records._context_state(requested_context)
-        return envelope._ok(
+        return envelope.success(
             **snapshot,
             current_session_id=str(state.get("current_session_id") or ""),
             sessions=list(state.get("sessions", {}).values()),
@@ -211,26 +211,26 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
                 retention=settings._snapshot_retention(),
             )
         except ValueError as exc:
-            return envelope._err(str(exc), code="validation_error", category="validation")
+            return envelope.failure(str(exc), code="validation_error", category="validation")
         snapshot = context_records._store_context_snapshot(snapshot, context_id)
-        return envelope._ok(**snapshot)
+        return envelope.success(**snapshot)
 
     if action == "open_preview":
         requested_session_id = str(args.get("session_id") or "").strip()
         try:
             payload = await preview_sync._open_context_preview(context_id, requested_session_id=requested_session_id)
         except CoreError as exc:
-            return envelope._err(exc.message, code=exc.code, category=exc.category, details=dict(exc.details))
-        return envelope._ok(**payload)
+            return envelope.failure(exc.message, code=exc.code, category=exc.category, details=dict(exc.details))
+        return envelope.success(**payload)
 
     if action == "close_preview":
         payload = await preview_sync._close_context_preview(context_id)
-        return envelope._ok(**payload)
+        return envelope.success(**payload)
 
     if action == "list_sessions":
         state = context_records._sync_context_metrics(context_id)
         snapshot = context_records._context_snapshot(context_id)
-        return envelope._ok(
+        return envelope.success(
             context_id=context_id,
             current_session_id=str(state.get("current_session_id") or ""),
             sessions=list(state.get("sessions", {}).values()),
@@ -249,7 +249,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
                     await replay_access._ensure_live_session(session_id)
                 except CoreError as exc:
                     if exc.code == "session_resume_failed":
-                        return envelope._err(
+                        return envelope.failure(
                             exc.message,
                             code=exc.code,
                             category=exc.category,
@@ -259,7 +259,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
         await preview_sync._auto_sync_preview_if_enabled(context_id)
         snapshot = context_records._context_snapshot(context_id)
         state = context_records._context_state(context_id)
-        return envelope._ok(
+        return envelope.success(
             **snapshot,
             current_session_id=str(state.get("current_session_id") or ""),
             sessions=list(state.get("sessions", {}).values()),
@@ -275,7 +275,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
             state = context_records._context_state(context_id)
             session = dict(state.get("sessions", {}).get(requested_session_id) or {})
             if not session:
-                return envelope._err(
+                return envelope.failure(
                     f"Unknown session_id: {requested_session_id}",
                     code="session_not_found",
                     category="not_found",
@@ -286,7 +286,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
                     await replay_access._ensure_live_session(requested_session_id)
                 except CoreError as exc:
                     if exc.code == "session_resume_failed":
-                        return envelope._err(
+                        return envelope.failure(
                             exc.message,
                             code=exc.code,
                             category=exc.category,
@@ -295,7 +295,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
                 state = context_records._context_state(context_id)
                 session = dict(state.get("sessions", {}).get(requested_session_id) or {})
                 if not bool(session.get("is_live")):
-                    return envelope._err(
+                    return envelope.failure(
                         f"Session could not be resumed: {requested_session_id}",
                         code="session_resume_failed",
                         category="runtime",
@@ -305,7 +305,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
         await preview_sync._auto_sync_preview_if_enabled(context_id)
         state = context_records._context_state(context_id)
         snapshot = context_records._context_snapshot(context_id)
-        return envelope._ok(
+        return envelope.success(
             **snapshot,
             current_session_id=str(state.get("current_session_id") or ""),
             sessions=list(state.get("sessions", {}).values()),
@@ -314,4 +314,4 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
             recent_operations=list(state.get("recent_operations") or []),
         )
 
-    return envelope._err(f"Unsupported session action: {action}")
+    return envelope.failure(f"Unsupported session action: {action}", code="runtime_error")

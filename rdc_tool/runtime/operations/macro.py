@@ -8,7 +8,7 @@ from typing import Any, Dict
 from rdc_tool.runtime import coerce, envelope, live_state, replay_access
 
 
-async def dispatch(action: str, args: Dict[str, Any]) -> str:
+async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
     coerce._require(args, "session_id")
     session_id = str(args["session_id"])
     if action == "find_state_change_point":
@@ -21,13 +21,13 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
         found = None
         budget = coerce._as_int(args.get("max_events"), 2000)
         if start_evt < 0 or end_evt < start_evt or budget < 1 or not path:
-            return envelope._err("Invalid event range, state path or event budget", code="validation_error")
+            return envelope.failure("Invalid event range, state path or event budget", code="validation_error")
         section_by_field = {"shaders": "shaders", "render_targets": "output_targets", "depth_target": "output_targets",
                             "topology": "topology", "viewport": "viewports_scissors", "scissor": "viewports_scissors",
                             "blend_states": "blend", "depth_stencil": "depth_stencil", "bindings": "bindings", "api": None}
         root_field = path.split(".")[0]
         if root_field not in section_by_field:
-            return envelope._err(f"Unknown pipeline state path: {path}", code="validation_error")
+            return envelope.failure(f"Unknown pipeline state path: {path}", code="validation_error")
         section = section_by_field[root_field]
         _, flat, _ = await replay_access._load_action_index(session_id)
         events = sorted({int(a.eventId) for a in flat if start_evt <= int(a.eventId) <= end_evt})
@@ -49,12 +49,12 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
                     ok = False
                     break
             if not ok:
-                return envelope._err(f"Unknown pipeline state path: {path}", code="validation_error")
+                return envelope.failure(f"Unknown pipeline state path: {path}", code="validation_error")
             if cursor == target_value:
                 found = evt
                 break
-        return envelope._ok(found_event_id=found, examined_events=examined, complete=found is not None or examined == len(events),
+        return envelope.success(found_event_id=found, examined_events=examined, complete=found is not None or examined == len(events),
                    range_exhausted=found is None and examined == len(events), budget_exhausted=found is None and examined < len(events))
 
 
-    return envelope._err(f"Unsupported macro action: {action}")
+    return envelope.failure(f"Unsupported macro action: {action}", code="runtime_error")

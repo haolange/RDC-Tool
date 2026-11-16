@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from rdc_tool.runtime import coerce, envelope, live_state, renderdoc_api, replay_access, texture_naming
 
 
-async def dispatch(action: str, args: Dict[str, Any]) -> str:
+async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
     coerce._require(args, "session_id")
     session_id = str(args["session_id"])
     controller = await replay_access._get_controller(session_id)
@@ -115,14 +114,14 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
         stores = await renderdoc_api._offload(controller.GetDescriptorStores)
         store = next((item for item in stores if str(item.resourceId) == str(args["descriptor_store_id"])), None)
         if store is None:
-            return envelope._err("Descriptor store not found", code="resource_not_found")
+            return envelope.failure("Descriptor store not found", code="resource_not_found")
         first, count = int(args.get("first", 0)), int(args.get("count", 64))
         kind = str(args.get("type", "resource"))
         if first < 0 or not 1 <= count <= 1024 or first > store.descriptorCount or kind not in {"resource", "sampler"}:
-            return envelope._err("Invalid descriptor range or type", code="validation_error")
+            return envelope.failure("Invalid descriptor range or type", code="validation_error")
         count = min(count, store.descriptorCount-first)
         if count == 0:
-            return envelope._ok(descriptors=[], total=store.descriptorCount, next_first=None)
+            return envelope.success(descriptors=[], total=store.descriptorCount, next_first=None)
         rd = renderdoc_api._get_rd()
         descriptor_range = rd.DescriptorRange()
         descriptor_range.offset = store.firstDescriptorOffset + first * store.descriptorByteSize
@@ -133,8 +132,8 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
         values = await renderdoc_api._offload(reader, store.resourceId, [descriptor_range])
         locations = await renderdoc_api._offload(controller.GetDescriptorLocations, store.resourceId, [descriptor_range])
         if len(values) != count or len(locations) != count:
-            return envelope._err("Incomplete descriptor range read", code="descriptor_read_failed")
-        return envelope._ok(descriptor_store_id=str(store.resourceId), resolved_event_id=replay_access._active_event(session_id),
+            return envelope.failure("Incomplete descriptor range read", code="descriptor_read_failed")
+        return envelope.success(descriptor_store_id=str(store.resourceId), resolved_event_id=replay_access._active_event(session_id),
             descriptors=[{"index": first+i, "descriptor": native_value(value),
                           "location": native_value(locations[i])} for i, value in enumerate(values)],
             total=store.descriptorCount,
@@ -143,7 +142,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
     if action == "list_all":
         kind = args.get("kind", "all")
         if kind not in {"all", "texture", "buffer", "descriptor_store"}:
-            return envelope._err("Invalid resource kind", code="validation_error")
+            return envelope.failure("Invalid resource kind", code="validation_error")
         payload: Dict[str, Any] = {}
         if kind == "all":
             native_textures, native_buffers, native_stores, descriptions = await load_identity_inventory()
@@ -173,7 +172,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
         if projection:
             payload["projections"] = envelope._resource_rows_projection(
                 resources, include_tsv_text=bool(projection.get("include_tsv_text", False)))
-        return envelope._ok(**payload)
+        return envelope.success(**payload)
     if action == "get_details":
         coerce._require(args, "resource_id")
         requested = args["resource_id"]
@@ -184,7 +183,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
                         for collection in (textures, buffers, stores, descriptions)
                         for item in collection if texture_naming._resource_id_matches(item.resourceId, requested)), None)
         if matched is None:
-            return envelope._err(f"Resource not found: {requested}", code="resource_not_found", category="validation",
+            return envelope.failure(f"Resource not found: {requested}", code="resource_not_found", category="validation",
                         details={"session_id": session_id, "failure_stage": "resolve_resource",
                                  "effects_attempted": False, "context_preserved": True})
         rid = str(matched)
@@ -194,7 +193,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
         if details is None and description is not None:
             details = {"resource_id": rid, "name": str(description.name)}
         if details is None:
-            return envelope._err(f"Resource metadata unavailable: {rid}", code="resource_details_unavailable")
+            return envelope.failure(f"Resource metadata unavailable: {rid}", code="resource_details_unavailable")
         if args.get("include_initialization", False):
             details["initialization"] = ({"status": "available",
                 "chunk_indices": [int(index) for index in description.initialisationChunks],
@@ -202,7 +201,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
                 "derived_resources": [str(value) for value in description.derivedResources],
                 "scope": "captured_initialization"} if description is not None else
                 {"status": "not_recorded"})
-        return envelope._ok(details=details)
+        return envelope.success(details=details)
     if action == "get_usage":
         coerce._require(args, "resource_id")
         rid = await replay_access._resolve_resource_id(session_id, args["resource_id"])
@@ -218,22 +217,21 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
                     **usage_access(renderdoc_api._get_rd(), entry.usage),
                 },
             )
-        return envelope._ok(usage=usage[: coerce._as_int(args.get("max_events"), 10000)])
+        return envelope.success(usage=usage[: coerce._as_int(args.get("max_events"), 10000)])
     if action == "set_alias":
         coerce._require(args, "resource_id", "alias")
         live_state._runtime.aliases[str(args["resource_id"])] = str(args["alias"])
-        return envelope._ok()
+        return envelope.success()
     if action == "estimate_memory":
         if args.get("resource_id") is not None:
-            details_response = await dispatch("get_details", {"session_id": session_id, "resource_id": args["resource_id"]})
-            payload = json.loads(details_response)
-            if not payload.get("success"):
-                return details_response
-            details = payload.get("details", {})
+            described = await dispatch("get_details", {"session_id": session_id, "resource_id": args["resource_id"]})
+            if not described.ok:
+                return described
+            details = described.data.get("details", {})
             bytes_est = int(details.get("byte_size") or (details.get("width", 0) * details.get("height", 0) * 4))
-            return envelope._ok(memory={"bytes": bytes_est, "human": coerce._format_size(bytes_est)})
+            return envelope.success(memory={"bytes": bytes_est, "human": coerce._format_size(bytes_est)})
         textures = await list_textures()
         buffers = await list_buffers()
         total = sum(int(t.get("width", 0) * t.get("height", 0) * 4) for t in textures) + sum(int(b.get("byte_size", 0)) for b in buffers)
-        return envelope._ok(memory={"bytes": total, "human": coerce._format_size(total)})
-    return envelope._err(f"Unsupported resource action: {action}")
+        return envelope.success(memory={"bytes": total, "human": coerce._format_size(total)})
+    return envelope.failure(f"Unsupported resource action: {action}", code="runtime_error")

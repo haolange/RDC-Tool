@@ -24,14 +24,14 @@ from rdc_tool.runtime import (
 )
 
 
-async def dispatch(action: str, args: Dict[str, Any]) -> str:
+async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
     if action == "open_file":
         coerce._require(args, "file_path")
         file_path = str(args["file_path"])
         read_only = coerce._as_bool(args.get("read_only"), True)
         path = Path(file_path)
         if not path.is_file():
-            return envelope._err(f"Capture file not found: {file_path}")
+            return envelope.failure(f"Capture file not found: {file_path}", code="runtime_error")
         state = context_records._context_state(live_state._runtime_context_id())
         limits = dict(state.get("limits") or {})
         file_meta = context_records._capture_file_metadata(str(path))
@@ -40,7 +40,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
             metrics["rejection_count"] = int(metrics.get("rejection_count") or 0) + 1
             state["metrics"] = metrics
             context_records._store_context_state(state, live_state._runtime_context_id())
-            return envelope._err(
+            return envelope.failure(
                 f"Capture file exceeds limit: {file_path}",
                 code="capture_file_too_large",
                 category="runtime",
@@ -55,7 +55,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
             metrics["rejection_count"] = int(metrics.get("rejection_count") or 0) + 1
             state["metrics"] = metrics
             context_records._store_context_state(state, live_state._runtime_context_id())
-            return envelope._err(
+            return envelope.failure(
                 "Capture file limit exceeded",
                 code="capture_limit_exceeded",
                 category="runtime",
@@ -98,16 +98,16 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
             driver=driver,
         )
         context_records._set_context_capture_file(capture_file_id)
-        return envelope._ok(context_id=live_state._runtime_context_id(), capture_file_id=capture_file_id, driver=driver)
+        return envelope.success(context_id=live_state._runtime_context_id(), capture_file_id=capture_file_id, driver=driver)
 
     if action == "close_file":
         coerce._require(args, "capture_file_id")
         capture_file_id = str(args["capture_file_id"])
         if capture_file_id not in live_state._runtime.captures:
-            return envelope._err(f"Unknown capture_file_id: {capture_file_id}")
+            return envelope.failure(f"Unknown capture_file_id: {capture_file_id}", code="runtime_error")
         dependent_session_ids = replay_access._capture_dependent_session_ids(capture_file_id)
         if dependent_session_ids:
-            return envelope._err(
+            return envelope.failure(
                 f"Capture file still in use: {capture_file_id}",
                 code="capture_file_in_use",
                 category="runtime",
@@ -119,21 +119,21 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
             )
         live_state._runtime.captures.pop(capture_file_id, None)
         context_records._clear_context_capture_file(capture_file_id)
-        return envelope._ok()
+        return envelope.success()
 
     if action == "get_thumbnail":
         from rdc_tool.core.capture_queries import read_thumbnail
         coerce._require(args, "capture_file_id")
         handle = live_state._runtime.captures.get(str(args["capture_file_id"]))
         if handle is None:
-            return envelope._err("Unknown capture_file_id", code="capture_not_found")
+            return envelope.failure("Unknown capture_file_id", code="capture_not_found")
         image_format = str(args.get("format", "png")).lower()
         max_size = int(args.get("max_size", 256))
         if image_format not in {"png", "jpg"} or not 1 <= max_size <= 2048:
-            return envelope._err("Invalid thumbnail format or size", code="validation_error")
+            return envelope.failure("Invalid thumbnail format or size", code="validation_error")
         data = await renderdoc_api._offload(read_thumbnail, renderdoc_api._get_rd(), handle.file_path, image_format, max_size)
         if not data:
-            return envelope._err("Capture has no embedded thumbnail", code="thumbnail_unavailable")
+            return envelope.failure("Capture has no embedded thumbnail", code="thumbnail_unavailable")
         result = {"capture_file_id": str(args["capture_file_id"]), "format": image_format,
                   "byte_size": len(data), "source": "embedded_capture_thumbnail"}
         if args.get("output_path"):
@@ -143,13 +143,13 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
             result["saved_path"] = str(path)
         else:
             result["base64"] = base64.b64encode(data).decode("ascii")
-        return envelope._ok(**result)
+        return envelope.success(**result)
 
     if action == "get_info":
         coerce._require(args, "capture_file_id")
         handle = live_state._runtime.captures.get(str(args["capture_file_id"]))
         if handle is None:
-            return envelope._err(f"Unknown capture_file_id: {args['capture_file_id']}")
+            return envelope.failure(f"Unknown capture_file_id: {args['capture_file_id']}", code="runtime_error")
         path = Path(handle.file_path)
         metadata = {
             "path": str(path),
@@ -158,7 +158,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
             "size_bytes": int(path.stat().st_size) if path.exists() else 0,
             "mtime_utc": datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat() if path.exists() else None,
         }
-        return envelope._ok(metadata=coerce._sanitize_dict(metadata))
+        return envelope.success(metadata=coerce._sanitize_dict(metadata))
 
 
     if action == "open_replay":
@@ -166,11 +166,11 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
         capture_file_id = str(args["capture_file_id"])
         handle = live_state._runtime.captures.get(capture_file_id)
         if handle is None:
-            return envelope._err(f"Unknown capture_file_id: {capture_file_id}")
+            return envelope.failure(f"Unknown capture_file_id: {capture_file_id}", code="runtime_error")
         state = context_records._context_state(live_state._runtime_context_id())
         for existing_session_id, replay in list(live_state._runtime.replays.items()):
             if str(getattr(replay, "capture_file_id", "") or "") == capture_file_id:
-                return envelope._ok(
+                return envelope.success(
                     session_id=str(existing_session_id),
                     capture_file_id=capture_file_id,
                     active_event_id=int(getattr(replay, "active_event_id", 0) or 0),
@@ -190,7 +190,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
                 live_state._runtime.replays.pop(stale_session_id, None)
                 context_records._clear_context_runtime(stale_session_id)
             except Exception as exc:
-                return envelope._err(
+                return envelope.failure(
                     "A stale replay session for this capture could not be cleaned up before reopen",
                     code="stale_session_requires_restart",
                     category="runtime",
@@ -214,7 +214,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
             metrics["rejection_count"] = int(metrics.get("rejection_count") or 0) + 1
             state["metrics"] = metrics
             context_records._store_context_state(state, live_state._runtime_context_id())
-            return envelope._err(
+            return envelope.failure(
                 "Session limit exceeded for current context",
                 code="session_limit_exceeded",
                 category="runtime",
@@ -231,7 +231,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
             metrics["rejection_count"] = int(metrics.get("rejection_count") or 0) + 1
             state["metrics"] = metrics
             context_records._store_context_state(state, live_state._runtime_context_id())
-            return envelope._err(
+            return envelope.failure(
                 "Estimated replay memory exceeds limit",
                 code="replay_memory_limit_exceeded",
                 category="runtime",
@@ -259,7 +259,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
             if remote_handle is None:
                 return remote_session._remote_handle_missing_payload(remote_id)
             if not remote_handle.connected or remote_handle.remote_server is None:
-                return envelope._err(
+                return envelope.failure(
                     f"Remote handle {remote_id} is not connected",
                     code="remote_not_connected",
                     category="runtime",
@@ -268,7 +268,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
             try:
                 remote_session._assert_remote_handle_context(remote_handle)
             except CoreError as exc:
-                return envelope._err(exc.message, code=exc.code, category=exc.category, details=dict(exc.details))
+                return envelope.failure(exc.message, code=exc.code, category=exc.category, details=dict(exc.details))
             remote_handle_for_session = remote_handle
             remote_endpoint = remote_records._remote_url(remote_handle.host, remote_handle.port)
             backend_type = "remote"
@@ -350,7 +350,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
                 progress_pct=1.0,
                 details={"session_id": session_info.session_id, "capture_file_id": capture_file_id},
             )
-            return envelope._ok(
+            return envelope.success(
                 context_id=live_state._runtime_context_id(),
                 session_id=session_info.session_id,
                 capture_file_id=capture_file_id,
@@ -386,6 +386,6 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
         if owned_remote is not None and owned_remote.remote_id in live_state._runtime.remotes:
             remote_session._set_context_remote_live(owned_remote.remote_id, remote_records._remote_url(owned_remote.host, owned_remote.port))
         context_records._clear_context_runtime(session_id)
-        return envelope._ok()
+        return envelope.success()
 
-    return envelope._err(f"Unsupported capture action: {action}")
+    return envelope.failure(f"Unsupported capture action: {action}", code="runtime_error")

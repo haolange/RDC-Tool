@@ -17,7 +17,7 @@ from rdc_tool.runtime import (
 )
 
 
-async def dispatch(action: str, args: Dict[str, Any]) -> str:
+async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
     coerce._require(args, "session_id")
     session_id = str(args["session_id"])
     await replay_access._ensure_live_session(session_id)
@@ -35,7 +35,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
         replay.active_event_id = active_event_id
         context_records._set_context_frame(session_id, replay.frame_index, active_event_id)
         await preview_sync._auto_sync_preview_if_enabled(live_state._runtime_context_id())
-        return envelope._ok(active_event_id=active_event_id)
+        return envelope.success(active_event_id=active_event_id)
 
     if action == "get_frame_info":
         roots = await renderdoc_api._offload(controller.GetRootActions)
@@ -57,7 +57,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
             "drawcall_count": drawcalls,
             "marker_count": markers,
         }
-        return envelope._ok(frame_info=frame_info)
+        return envelope.success(frame_info=frame_info)
 
     if action == "get_api_properties":
         props = await renderdoc_api._offload(controller.GetAPIProperties)
@@ -66,7 +66,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
             "local_renderer": str(getattr(props, "localRenderer", "")),
             "shader_debugging": bool(getattr(props, "shaderDebugging", False)),
         }
-        return envelope._ok(api_properties=api_properties)
+        return envelope.success(api_properties=api_properties)
 
     if action == "get_driver_info":
         props = await renderdoc_api._offload(controller.GetAPIProperties)
@@ -77,6 +77,6 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
             "driver_name": str(getattr(props, "localRenderer", "")),
             "replay_api": str(getattr(props, "pipelineType", "")),
         }
-        return envelope._ok(driver_info=coerce._sanitize_dict(info))
+        return envelope.success(driver_info=coerce._sanitize_dict(info))
 
-    return envelope._err(f"Unsupported replay action: {action}")
+    return envelope.failure(f"Unsupported replay action: {action}", code="runtime_error")

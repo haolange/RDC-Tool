@@ -1,5 +1,4 @@
 import asyncio
-import json
 from types import SimpleNamespace
 
 import pytest
@@ -34,30 +33,30 @@ def native_debug(monkeypatch):
     monkeypatch.setattr(replay_access, '_get_controller', get_controller)
     monkeypatch.setattr(renderdoc_api, '_offload', offload)
     def call(action, **args):
-        return json.loads(asyncio.run(debug_ops.dispatch(action, {'session_id': 'replay', 'shader_debug_id': 'trace', **args})))
+        return asyncio.run(debug_ops.dispatch(action, {'session_id': 'replay', 'shader_debug_id': 'trace', **args}))
     return SimpleNamespace(call=call, handle=handle, advances=advances, freed=freed, controller=controller)
 
 
 def test_native_batches_and_before_after_are_preserved(native_debug):
     d = native_debug
-    assert d.call('get_variables')['variables'] == []
+    assert d.call('get_variables').data['variables'] == []
     assert not d.advances
-    assert d.call('step')['state']['pc'] == 1
-    assert d.call('get_variables')['variables'][0]['value'] == {'f32v': [1.0]}
-    assert d.call('step')['state']['pc'] == 2
+    assert d.call('step').data['state']['pc'] == 1
+    assert d.call('get_variables').data['variables'][0]['value'] == {'f32v': [1.0]}
+    assert d.call('step').data['state']['pc'] == 2
     assert len(d.advances) == 1
-    assert {v['name']: v['value'] for v in d.call('get_variables')['variables']} == {'x': {'f32v': [1.0]}, 'y': {'u32v': [2]}}
-    assert d.call('run_to', target={'pc': 3})['state']['pc'] == 3
+    assert {v['name']: v['value'] for v in d.call('get_variables').data['variables']} == {'x': {'f32v': [1.0]}, 'y': {'u32v': [2]}}
+    assert d.call('run_to', target={'pc': 3}).data['state']['pc'] == 3
     assert len(d.advances) == 1
-    assert d.call('evaluate_expression', expression='x')['value'] == {'f32v': [3.0]}
+    assert d.call('evaluate_expression', expression='x').data['value'] == {'f32v': [3.0]}
     d.call('set_breakpoints', breakpoints=[{'pc': 4}])
     stopped = d.call('continue')
-    assert stopped['stopped_reason'] == 'breakpoint'
-    assert stopped['state']['pc'] == 4
-    assert [v['name'] for v in d.call('get_variables')['variables']] == ['x']
-    assert d.call('get_callstack')['callstack'] == [{'function': name, 'file': None, 'line': None, 'pc': 4} for name in ['main', 'lighting']]
-    assert d.call('continue')['stopped_reason'] == 'finished'
-    assert d.call('get_variables', name_filter='y')['variables'] == []
+    assert stopped.data['stopped_reason'] == 'breakpoint'
+    assert stopped.data['state']['pc'] == 4
+    assert [v['name'] for v in d.call('get_variables').data['variables']] == ['x']
+    assert d.call('get_callstack').data['callstack'] == [{'function': name, 'file': None, 'line': None, 'pc': 4} for name in ['main', 'lighting']]
+    assert d.call('continue').data['stopped_reason'] == 'finished'
+    assert d.call('get_variables', name_filter='y').data['variables'] == []
     d.call('finish')
     assert d.freed == [d.handle.trace]
     assert 'trace' not in live_state._runtime.shader_debugs
@@ -75,10 +74,10 @@ def test_invalid_requests_do_not_touch_controller(monkeypatch, native_debug, act
         raise AssertionError('invalid request must precede native access')
     monkeypatch.setattr(replay_access, '_get_controller', forbidden)
     result = native_debug.call(action, **args)
-    assert result['success'] is False
-    assert result['code'] == 'validation_error'
-    assert result['details']['effects_attempted'] is False
-    assert result['details']['context_preserved'] is True
+    assert result.ok is False
+    assert result.code == 'validation_error'
+    assert result.details['effects_attempted'] is False
+    assert result.details['context_preserved'] is True
 
 
 def test_typed_members_and_truncation_do_not_mutate_snapshot(native_debug):
@@ -87,12 +86,12 @@ def test_typed_members_and_truncation_do_not_mutate_snapshot(native_debug):
         {'name': 'albedo', 'type': 'Float', 'value': {'f32v': [0.5]}, 'members': []}]},
         'other': {'name': 'other', 'type': 'UInt', 'value': {'u32v': [7]}, 'members': []}}
     bounded = d.call('get_variables', max_variables=1, expand_depth=0)
-    assert bounded['truncated'] is True
-    assert bounded['variables'][0]['members_truncated'] is True
-    assert bounded['variables'][0]['members'] == []
+    assert bounded.data['truncated'] is True
+    assert bounded.data['variables'][0]['members_truncated'] is True
+    assert bounded.data['variables'][0]['members'] == []
     expanded = d.call('get_variables', name_filter='material', expand_depth=1)
-    assert expanded['truncated'] is False
-    assert expanded['variables'][0]['members'][0]['value'] == {'f32v': [0.5]}
+    assert expanded.data['truncated'] is False
+    assert expanded.data['variables'][0]['members'][0]['value'] == {'f32v': [0.5]}
     assert len(d.handle.variables['material']['members']) == 1
 
 
@@ -122,8 +121,8 @@ def test_current_catalog_admits_trace_pc_and_rejects_unimplemented_modes():
 
 
 def shader_state(d, **args):
-    return json.loads(asyncio.run(shader_ops.dispatch('get_debug_state', {
-        'session_id': 'replay', 'shader_debug_id': 'trace', **args})))
+    return asyncio.run(shader_ops.dispatch('get_debug_state', {
+        'session_id': 'replay', 'shader_debug_id': 'trace', **args}))
 
 
 def test_sparse_native_instruction_map_is_not_trace_pc_or_array_index(native_debug):
@@ -134,7 +133,7 @@ def test_sparse_native_instruction_map_is_not_trace_pc_or_array_index(native_deb
     d.handle.trace = SimpleNamespace(instInfo=[info(5, 12), info(100, 20, 2)])
     for pc, instruction, mapped in [(300, 99, 5), (301, 100, 100), (302, 6, 5)]:
         d.handle.current_state = SimpleNamespace(stepIndex=pc, nextInstruction=instruction)
-        result = shader_state(d, detail_level='summary')['state']
+        result = shader_state(d, detail_level='summary').data['state']
         assert result['pc'] == pc and result['next_instruction'] == instruction
         assert result['has_native_state'] is True
         location = result['source_location']
@@ -150,22 +149,22 @@ def test_sparse_native_instruction_map_is_not_trace_pc_or_array_index(native_deb
             assert location['column_start'] is None and location['column_end'] == 4
         assert 'variables' not in result
     d.handle.current_state.nextInstruction = 4
-    assert shader_state(d)['state']['source_location'] is None
+    assert shader_state(d).data['state']['source_location'] is None
     assert not d.advances
 
 
 def test_initial_missing_metadata_and_native_pc_zero_are_distinct(native_debug):
     d = native_debug
-    initial = shader_state(d)['state']
+    initial = shader_state(d).data['state']
     assert initial['pc'] == 0 and initial['has_native_state'] is False
     assert initial['next_instruction'] is None and initial['source_location'] is None
     assert initial['variables'] == [] and initial['callstack'] == []
     d.handle.current_state = SimpleNamespace(stepIndex=0)
-    observed = shader_state(d)['state']
+    observed = shader_state(d).data['state']
     assert observed['has_native_state'] is True and observed['next_instruction'] is None
     d.handle.trace = SimpleNamespace(instInfo=[SimpleNamespace(instruction=0, lineInfo=SimpleNamespace())])
     d.handle.current_state.nextInstruction = 0
-    location = shader_state(d)['state']['source_location']
+    location = shader_state(d).data['state']['source_location']
     assert location['disassembly_line'] is None and location['file_index'] is None
 
 
@@ -176,7 +175,7 @@ def test_full_state_is_bounded_and_snapshot_is_not_mutated(native_debug):
         nested = {'name': str(index), 'members': [nested]}
     d.handle.variables = {'first': nested, **{str(i): {'name': str(i)} for i in range(70)}}
     d.handle.current_state = SimpleNamespace(stepIndex=8, nextInstruction=90, callstack=[str(i) for i in range(70)])
-    result = shader_state(d)['state']
+    result = shader_state(d).data['state']
     assert len(result['variables']) == 64 and result['variable_count'] == 71 and result['variables_truncated']
     assert result['variable_member_depth'] == 2
     bounded_leaf = result['variables'][0]['members'][0]['members'][0]
@@ -191,18 +190,18 @@ def test_bad_state_detail_rejected_before_native(monkeypatch, native_debug, deta
         raise AssertionError('invalid detail must precede controller access')
     monkeypatch.setattr(replay_access, '_get_controller', forbidden)
     result = shader_state(native_debug, detail_level=detail)
-    assert not result['success'] and result['code'] == 'validation_error'
-    assert result['details']['effects_attempted'] is False
-    assert result['details']['context_preserved'] is True
+    assert not result.ok and result.code == 'validation_error'
+    assert result.details['effects_attempted'] is False
+    assert result.details['context_preserved'] is True
 
 
 def test_step_state_exposes_location_without_changing_pc_target(native_debug):
     d = native_debug
-    result = d.call('step')['state']
+    result = d.call('step').data['state']
     assert result['pc'] == 1 and result['has_native_state'] is True
     assert result['next_instruction'] is None
     d.handle.current_state.nextInstruction = 490
-    result = d.call('run_to', target={'pc': 1})['state']
+    result = d.call('run_to', target={'pc': 1}).data['state']
     assert result['pc'] == 1 and result['next_instruction'] == 490
     assert len(d.advances) == 1
 

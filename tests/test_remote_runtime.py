@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import struct
 import sys
 from pathlib import Path
@@ -18,7 +17,7 @@ from rdc_tool import remote_bootstrap
 from rdc_tool.core.errors import RuntimeToolError
 from rdc_tool.remote_bootstrap import AndroidBootstrapResult
 import time
-from rdc_tool.runtime import context_records, live_state, preview_sync, remote_records, remote_session, remote_target, renderdoc_api, replay_access, session_recovery, shader_patches, truth_matrix
+from rdc_tool.runtime import context_records, envelope, live_state, preview_sync, remote_records, remote_session, remote_target, renderdoc_api, replay_access, session_recovery, shader_patches, truth_matrix
 from rdc_tool.runtime.operations import buffer as buffer_ops
 from rdc_tool.runtime.operations import capture as capture_ops
 from rdc_tool.runtime.operations import core as core_ops
@@ -140,8 +139,8 @@ def test_android_recovery_uses_discovered_socket_and_fresh_local_forward(monkeyp
     monkeypatch.setattr(preview_sync, '_close_preview_binding', noop)
     monkeypatch.setattr(context_records, '_reset_context_snapshot', lambda ctx: {'context_id': ctx})
     live_state._runtime.remotes['remote_original'] = handle
-    cleared = json.loads(asyncio.run(session_ops.dispatch('clear_context', {})))
-    assert cleared['success'] is True
+    cleared = asyncio.run(session_ops.dispatch('clear_context', {}))
+    assert cleared.ok is True
     assert retired == ['tcp:58884', 'tcp:62000']
 
 
@@ -329,10 +328,10 @@ def test_revert_keeps_remote_and_never_runs_owned_cleanup(monkeypatch) -> None:
     monkeypatch.setattr(replay_access, '_ensure_event', event)
     monkeypatch.setattr(session_recovery, '_recover_single_session_from_state', recover)
     monkeypatch.setattr(shader_patches, '_sync_context_session_replacements', lambda *args: None)
-    payload = json.loads(asyncio.run(shader_ops.dispatch('revert_replacement', {
-        'session_id': session_id, 'replacement_id': 'patch-a'})))
-    assert payload['success'] is True
-    assert payload['reverted'] is True
+    payload = asyncio.run(shader_ops.dispatch('revert_replacement', {
+        'session_id': session_id, 'replacement_id': 'patch-a'}))
+    assert payload.ok is True
+    assert payload.data['reverted'] is True
     assert lifecycle == []
     assert live_state._runtime.remotes['remote_original'] is handle
     assert live_state._runtime.replays[session_id] is live_replay
@@ -506,13 +505,11 @@ def test_dispatch_remote_connect_returns_live_handle_and_server_info(monkeypatch
     clear_context_snapshot()
     live_state._runtime.context_snapshots.clear()
     try:
-        payload = json.loads(
-            asyncio.run(remote_ops.dispatch("connect", {"host": "127.0.0.1", "port": 38920, "timeout_ms": 1000}))
-        )
-        assert payload["success"] is True
-        assert payload["detail"]["connected"] is True
-        assert payload["server_info"]["capabilities"]["supported_replays"] == ["Vulkan"]
-        remote_id = payload["remote_id"]
+        payload = asyncio.run(remote_ops.dispatch("connect", {"host": "127.0.0.1", "port": 38920, "timeout_ms": 1000}))
+        assert payload.ok is True
+        assert payload.data['detail']["connected"] is True
+        assert payload.data['server_info']["capabilities"]["supported_replays"] == ["Vulkan"]
+        remote_id = payload.data['remote_id']
         assert live_state._runtime.remotes[remote_id].connected is True
     finally:
         clear_context_snapshot()
@@ -540,11 +537,9 @@ def test_dispatch_remote_connect_failure_does_not_allocate_remote_id(monkeypatch
     live_state._runtime.remotes.clear()
     live_state._runtime.enable_remote = True
     try:
-        payload = json.loads(
-            asyncio.run(remote_ops.dispatch("connect", {"host": "127.0.0.1", "port": 38920, "timeout_ms": 1000}))
-        )
-        assert payload["success"] is False
-        assert "remote_id" not in payload
+        payload = asyncio.run(remote_ops.dispatch("connect", {"host": "127.0.0.1", "port": 38920, "timeout_ms": 1000}))
+        assert payload.ok is False
+        assert "remote_id" not in payload.details
         assert live_state._runtime.remotes == {}
     finally:
         live_state._runtime.remotes.clear()
@@ -578,8 +573,7 @@ def test_dispatch_remote_connect_allows_omitting_host_for_adb_android(monkeypatc
     clear_context_snapshot()
     live_state._runtime.context_snapshots.clear()
     try:
-        payload = json.loads(
-            asyncio.run(
+        payload = asyncio.run(
                 remote_ops.dispatch(
                     "connect",
                     {
@@ -591,11 +585,10 @@ def test_dispatch_remote_connect_allows_omitting_host_for_adb_android(monkeypatc
                     },
                 )
             )
-        )
-        assert payload["success"] is True
-        assert payload["detail"]["transport"] == "adb_android"
-        assert payload["detail"]["endpoint"] == "127.0.0.1:39920"
-        remote_id = payload["remote_id"]
+        assert payload.ok is True
+        assert payload.data['detail']["transport"] == "adb_android"
+        assert payload.data['detail']["endpoint"] == "127.0.0.1:39920"
+        remote_id = payload.data['remote_id']
         assert live_state._runtime.remotes[remote_id].requested_host == "127.0.0.1"
     finally:
         clear_context_snapshot()
@@ -645,15 +638,13 @@ def test_dispatch_capture_open_replay_keeps_live_remote_handle(monkeypatch) -> N
     live_state._runtime.context_snapshots.clear()
 
     try:
-        payload = json.loads(
-            asyncio.run(
+        payload = asyncio.run(
                 capture_ops.dispatch(
                     "open_replay",
                     {"capture_file_id": "capf_demo", "options": {"remote_id": "remote_demo"}},
                 )
             )
-        )
-        assert payload["success"] is True
+        assert payload.ok is True
         assert fake_manager.backend_config is not None
         assert fake_manager.backend_config["type"] == "remote"
         assert fake_manager.backend_config["host"] == "127.0.0.1"
@@ -666,17 +657,17 @@ def test_dispatch_capture_open_replay_keeps_live_remote_handle(monkeypatch) -> N
         assert "remote_demo" not in live_state._runtime.consumed_remotes
 
         controller_calls_after_open_replay = fake_manager.controller_calls
-        context_payload = json.loads(asyncio.run(session_ops.dispatch("get_context", {})))
-        assert context_payload["success"] is True
-        assert context_payload["runtime"]["session_id"] == "sess_demo"
-        assert context_payload["remote"]["state"] == "live_handle"
-        assert context_payload["remote"]["origin_remote_id"] == "remote_demo"
-        assert context_payload["remote"]["active_session_ids"] == ["sess_demo"]
-        assert context_payload["remote"]["context_locality"] == "strict"
-        assert context_payload["remote"]["reuse_policy"] == "must_reconnect"
-        assert context_payload["remote_handle_origin_context"] == "default"
-        assert context_payload["remote_capability_matrix"]["endpoint"]["status"] == "verified"
-        assert context_payload["remote_capability_matrix"]["fix_verification"]["status"] == "not_currently_probed"
+        context_payload = asyncio.run(session_ops.dispatch("get_context", {}))
+        assert context_payload.ok is True
+        assert context_payload.data['runtime']["session_id"] == "sess_demo"
+        assert context_payload.data['remote']["state"] == "live_handle"
+        assert context_payload.data['remote']["origin_remote_id"] == "remote_demo"
+        assert context_payload.data['remote']["active_session_ids"] == ["sess_demo"]
+        assert context_payload.data['remote']["context_locality"] == "strict"
+        assert context_payload.data['remote']["reuse_policy"] == "must_reconnect"
+        assert context_payload.data['remote_handle_origin_context'] == "default"
+        assert context_payload.data['remote_capability_matrix']["endpoint"]["status"] == "verified"
+        assert context_payload.data['remote_capability_matrix']["fix_verification"]["status"] == "not_currently_probed"
         assert fake_manager.controller_calls == controller_calls_after_open_replay
     finally:
         clear_context_snapshot()
@@ -704,11 +695,11 @@ def test_remote_handle_reuse_across_contexts_fails(monkeypatch) -> None:
         )
     }
     try:
-        payload = json.loads(asyncio.run(remote_ops.dispatch("ping", {"remote_id": "remote_demo"})))
-        assert payload["success"] is False
-        assert payload["code"] == "remote_handle_context_mismatch"
-        assert payload["details"]["origin_context_id"] == "ctx_a"
-        assert payload["details"]["current_context_id"] == "ctx_b"
+        payload = asyncio.run(remote_ops.dispatch("ping", {"remote_id": "remote_demo"}))
+        assert payload.ok is False
+        assert payload.code == "remote_handle_context_mismatch"
+        assert payload.details["origin_context_id"] == "ctx_a"
+        assert payload.details["current_context_id"] == "ctx_b"
     finally:
         live_state._CURRENT_CONTEXT_ID.reset(token)
         live_state._runtime.remotes = original_remotes
@@ -724,10 +715,10 @@ def test_consumed_remote_handle_reports_lifecycle_error() -> None:
         )
     }
     try:
-        payload = json.loads(asyncio.run(remote_ops.dispatch("ping", {"remote_id": "remote_demo"})))
-        assert payload["success"] is False
-        assert payload["code"] == "remote_handle_consumed"
-        assert payload["details"]["consumed_by_session_id"] == "sess_demo"
+        payload = asyncio.run(remote_ops.dispatch("ping", {"remote_id": "remote_demo"}))
+        assert payload.ok is False
+        assert payload.code == "remote_handle_consumed"
+        assert payload.details["consumed_by_session_id"] == "sess_demo"
     finally:
         live_state._runtime.consumed_remotes = original_consumed
 
@@ -757,17 +748,15 @@ def test_dispatch_remote_launch_app_surfaces_execute_and_inject_status(monkeypat
     }
     live_state._runtime.enable_remote = True
     try:
-        payload = json.loads(
-            asyncio.run(
+        payload = asyncio.run(
                 remote_ops.dispatch(
                     "launch_app",
                     {"remote_id": "remote_demo", "exe_path": "com.android.settings", "working_dir": "", "cmdline": "", "env": {}, "capture_options": {}},
                 )
             )
-        )
-        assert payload["success"] is False
-        assert payload["code"] == "remote_launch_failed"
-        assert "Couldn't connect to target program" in payload["error_message"]
+        assert payload.ok is False
+        assert payload.code == "remote_launch_failed"
+        assert "Couldn't connect to target program" in payload.message
     finally:
         live_state._runtime.remotes = original_remotes
         live_state._runtime.enable_remote = original_enable_remote
@@ -793,17 +782,15 @@ def test_dispatch_mesh_post_transform_gs_returns_empty_payload_when_stage_not_bo
     monkeypatch.setattr(renderdoc_api, "_rd_stage", lambda stage: stage)
     monkeypatch.setattr(renderdoc_api, "_get_rd", lambda: SimpleNamespace(MeshDataStage=SimpleNamespace(VSOut="vs", GSOut="gs")))
 
-    payload = json.loads(
-        asyncio.run(
+    payload = asyncio.run(
             mesh_ops.dispatch(
                 "get_post_transform_data",
                 {"session_id": "sess_demo", "event_id": 314, "stage": "gs", "instance": 0, "max_vertices": 64},
             )
         )
-    )
 
-    assert payload["success"] is True
-    mesh = payload["mesh_data"]
+    assert payload.ok is True
+    mesh = payload.data['mesh_data']
     assert mesh["stage"] == "GS"
     assert mesh["stage_bound"] is False
     assert mesh["vertex_count"] == 0
@@ -824,17 +811,15 @@ def test_dispatch_mesh_post_transform_vs_serializes_format_payload(monkeypatch) 
     monkeypatch.setattr(replay_access, "_ensure_event", _fake_ensure_event)
     monkeypatch.setattr(renderdoc_api, "_get_rd", lambda: SimpleNamespace(MeshDataStage=SimpleNamespace(VSOut="vs", GSOut="gs")))
 
-    payload = json.loads(
-        asyncio.run(
+    payload = asyncio.run(
             mesh_ops.dispatch(
                 "get_post_transform_data",
                 {"session_id": "sess_demo", "event_id": 314, "stage": "vs", "instance": 0, "view_index": 0, "max_vertices": 8},
             )
         )
-    )
 
-    assert payload["success"] is True
-    mesh = payload["mesh_data"]
+    assert payload.ok is True
+    mesh = payload.data['mesh_data']
     assert mesh["vertex_count"] == 2
     assert mesh["mesh_format"]["format"]["compCount"] == 4
     assert mesh["mesh_format"]["format"]["compByteWidth"] == 4
@@ -893,8 +878,7 @@ def test_export_mesh_writes_real_indexed_obj_and_rejects_unsupported_options(
     monkeypatch.setattr(renderdoc_api, "_is_null_resource_id", lambda rid: str(rid) in {"", "0", "ResourceId::0"})
 
     output_path = tmp_path / "triangle.obj"
-    payload = json.loads(
-        asyncio.run(
+    payload = asyncio.run(
             export_ops.dispatch(
                 "mesh",
                 {
@@ -907,20 +891,17 @@ def test_export_mesh_writes_real_indexed_obj_and_rejects_unsupported_options(
                 },
             )
         )
-    )
     rejected_path = tmp_path / "unsupported.ply"
-    rejected = json.loads(
-        asyncio.run(
+    rejected = asyncio.run(
             export_ops.dispatch(
                 "mesh",
                 {"session_id": "sess_demo", "output_path": str(rejected_path), "format": "ply"},
             )
         )
-    )
 
-    assert payload["success"] is True
-    assert payload["vertex_count"] == 3
-    assert payload["primitive_count"] == 1
+    assert payload.ok is True
+    assert payload.data['vertex_count'] == 3
+    assert payload.data['primitive_count'] == 1
     assert output_path.read_text(encoding="utf-8").splitlines() == [
         "# RDC-Tool post-VS positions, event 17",
         "v 0 0 0",
@@ -928,8 +909,8 @@ def test_export_mesh_writes_real_indexed_obj_and_rejects_unsupported_options(
         "v 0 1 0",
         "f 1 2 3",
     ]
-    assert rejected["success"] is False
-    assert rejected["code"] == "mesh_export_unsupported"
+    assert rejected.ok is False
+    assert rejected.code == "mesh_export_unsupported"
     assert not rejected_path.exists()
 
 
@@ -959,20 +940,18 @@ def test_buffer_base64_read_stays_in_memory_without_an_artifact(monkeypatch: pyt
     monkeypatch.setattr(replay_access, "_resolve_resource_id", _fake_resolve_resource_id)
     monkeypatch.setattr(replay_access, "_active_event", lambda _: 11)
 
-    payload = json.loads(
-        asyncio.run(
+    payload = asyncio.run(
             buffer_ops.dispatch(
                 "get_data",
                 {"session_id": "sess_demo", "buffer_id": "ResourceId::buffer", "as_base64": True},
             )
         )
-    )
 
-    assert payload == {"success": True, "byte_size": 3, "base64": "AQID", "buffer_id": "ResourceId::buffer",
-                       "state": "current", "resolved_event_id": 11, "restored_event_id": 11,
-                       "replay_state_restored": True, "initial_provenance": None}
+    assert payload == envelope.success(byte_size=3, base64="AQID", buffer_id="ResourceId::buffer", state="current",
+                                       resolved_event_id=11, restored_event_id=11, replay_state_restored=True,
+                                       initial_provenance=None)
     assert restored == [11, 11]
-    assert "artifact_path" not in payload
+    assert "artifact_path" not in payload.data
 
 
 def test_capture_copy_reports_actual_native_progress(monkeypatch):
@@ -1075,8 +1054,8 @@ def test_clear_context_closes_only_owned_remotes_and_retains_failed_ownership(mo
     monkeypatch.setattr(remote_target, '_disconnect_remote_handle_sync', disconnect)
     resets = []
     monkeypatch.setattr(context_records, '_reset_context_snapshot', lambda ctx: resets.append(ctx) or {'context_id': ctx})
-    result = json.loads(asyncio.run(session_ops.dispatch('clear_context', {})))
-    assert result['success'] is (not cleanup_errors)
+    result = asyncio.run(session_ops.dispatch('clear_context', {}))
+    assert result.ok is (not cleanup_errors)
     assert live_state._runtime.remotes['foreign'] is foreign
     assert ('owned' in live_state._runtime.remotes) is bool(cleanup_errors)
     assert resets == ([] if cleanup_errors else ['clear-test'])
@@ -1154,10 +1133,10 @@ def test_clear_context_deferred_remote_releases_only_verified_owned_forward(
     resets = []
     monkeypatch.setattr(context_records, '_reset_context_snapshot', lambda ctx: resets.append(ctx) or {'context_id': ctx})
 
-    result = json.loads(asyncio.run(session_ops.dispatch('clear_context', {})))
-    assert result['success'] is expected_success
+    result = asyncio.run(session_ops.dispatch('clear_context', {}))
+    assert result.ok is expected_success
     if not expected_success:
-        assert result['details']['cleanup_reason_code'] in {'session_cleanup_failed', 'expired_remote_cleanup_failed'}
+        assert result.details['cleanup_reason_code'] in {'session_cleanup_failed', 'expired_remote_cleanup_failed'}
     assert len(cleanups) == (1 if not record_live and forward_identity_valid else 0)
     if cleanups:
         assert (cleanups[0].device_serial, cleanups[0].forward_spec, cleanups[0].remote_port) == (

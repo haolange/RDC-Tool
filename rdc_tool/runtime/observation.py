@@ -37,14 +37,14 @@ async def _final_target(session_id: str, flat: list[Any]) -> tuple[int, Any, Any
 
 
 
-async def handle(action: str, args: dict[str, Any]) -> str:
+async def handle(action: str, args: dict[str, Any]) -> envelope.Outcome:
     context_id = live_state._runtime_context_id()
     state = context_records._context_state(context_id)
     session_id = str(args.get("session_id") or state.get("current_session_id") or "")
     if not session_id:
-        return envelope._err("Open a capture in this context first", code="replay_session_missing")
+        return envelope.failure("Open a capture in this context first", code="replay_session_missing")
     if session_id != str(state.get("current_session_id") or "") and session_id not in state.get("sessions", {}):
-        return envelope._err("Session does not belong to the selected context", code="replay_session_mismatch")
+        return envelope.failure("Session does not belong to the selected context", code="replay_session_mismatch")
     await replay_access._ensure_live_session(session_id)
     roots, flat, by_event = await replay_access._load_action_index(session_id)
     ancestors = {}
@@ -61,22 +61,22 @@ async def handle(action: str, args: dict[str, Any]) -> str:
     events = sorted({int(a.eventId): event_row(a)
                      for a in flat if int(a.eventId) > 0}.values(), key=lambda item: item["event_id"])
     if action == "get_replay_events":
-        return envelope._ok(context_id=context_id, session_id=session_id, events=events, complete=True)
+        return envelope.success(context_id=context_id, session_id=session_id, events=events, complete=True)
 
     out_path = Path(str(args.get("out_path") or ""))
     if not args.get("out_path") or not out_path.is_absolute() or out_path.suffix.lower() != ".png":
-        return envelope._err("out_path must be an absolute PNG path", code="observation_path_invalid")
+        return envelope.failure("out_path must be an absolute PNG path", code="observation_path_invalid")
     # Refuse reuse: a failed export must never expose a previous image as new.
     if out_path.exists():
-        return envelope._err("out_path already exists; use a new observation path", code="observation_path_exists")
+        return envelope.failure("out_path already exists; use a new observation path", code="observation_path_exists")
     if args.get("final_output") and (args.get("event_id") is not None or args.get("target")):
-        return envelope._err("final_output cannot be combined with event_id or target", code="observation_selection_conflict")
+        return envelope.failure("final_output cannot be combined with event_id or target", code="observation_selection_conflict")
     event_id = args.get("event_id", replay_access._active_event(session_id))
     if isinstance(event_id, bool) or not isinstance(event_id, int) or event_id not in by_event:
-        return envelope._err("Event is not in this capture", code="observation_event_invalid")
+        return envelope.failure("Event is not in this capture", code="observation_event_invalid")
     target = args.get("target") or {}
     if not isinstance(target, dict):
-        return envelope._err("target must be an object", code="observation_target_invalid")
+        return envelope.failure("target must be an object", code="observation_target_invalid")
     texture_id = texture_desc = None
     final_error = None
     is_final = False
@@ -148,7 +148,7 @@ async def handle(action: str, args: dict[str, Any]) -> str:
                 result["image_error"] = {"code": "missing_target" if target else "no_color_output",
                                          "message": "Requested color target is unavailable" if target else "Selected event has no color output"}
                 await present(None, result["image_error"]["code"])
-                return envelope._ok(**result)
+                return envelope.success(**result)
             texture_id, slot = match
             texture_id, texture_desc = await replay_access._get_texture_descriptor(session_id, texture_id, event_id=event_id)
         result["target"] = {"texture_id": str(texture_id), "output_slot": slot,
@@ -170,4 +170,4 @@ async def handle(action: str, args: dict[str, Any]) -> str:
         result["image_error"] = {"code": "export_failure", "message": str(exc)}
         if out_path.is_file():
             out_path.unlink()
-    return envelope._ok(**result)
+    return envelope.success(**result)

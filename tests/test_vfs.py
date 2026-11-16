@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 
 import pytest
 
@@ -11,10 +10,10 @@ from rdc_tool.runtime.operations import vfs as vfs_ops
 
 @pytest.mark.unit
 def test_vfs_ls_root_lists_top_level_domains() -> None:
-    payload = json.loads(asyncio.run(vfs_ops.dispatch("ls", {"path": "/"})))
+    payload = asyncio.run(vfs_ops.dispatch("ls", {"path": "/"}))
 
-    assert payload["success"] is True
-    entries = payload["entries"]
+    assert payload.ok is True
+    entries = payload.data['entries']
     names = {entry["name"] for entry in entries}
     assert {"context", "artifacts", "draws", "passes", "resources", "textures", "buffers", "pipeline", "shaders", "debug"} <= names
 
@@ -36,11 +35,11 @@ def test_vfs_cat_context_uses_context_snapshot(monkeypatch) -> None:
 
     monkeypatch.setattr(dispatch, "dispatch_operation", _fake_dispatch)
 
-    payload = json.loads(asyncio.run(vfs_ops.dispatch("cat", {"path": "/context"})))
+    payload = asyncio.run(vfs_ops.dispatch("cat", {"path": "/context"}))
 
-    assert payload["success"] is True
-    assert payload["node"]["data"]["context_id"] == "ctx-demo"
-    assert payload["node"]["data"]["runtime"]["session_id"] == "sess_demo"
+    assert payload.ok is True
+    assert payload.data['node']["data"]["context_id"] == "ctx-demo"
+    assert payload.data['node']["data"]["runtime"]["session_id"] == "sess_demo"
 
 
 @pytest.mark.unit
@@ -74,17 +73,15 @@ def test_vfs_draw_shader_path_routes_through_pipeline_tools(monkeypatch) -> None
 
     monkeypatch.setattr(dispatch, "dispatch_operation", _fake_dispatch)
 
-    payload = json.loads(
-        asyncio.run(
+    payload = asyncio.run(
             vfs_ops.dispatch(
                 "cat",
                 {"path": "/draws/42/shaders/ps", "session_id": "sess_demo"},
             )
         )
-    )
 
-    assert payload["success"] is True
-    assert payload["node"]["data"]["shader_id"] == "shader-ps"
+    assert payload.ok is True
+    assert payload.data['node']["data"]["shader_id"] == "shader-ps"
     assert calls[0] == ("rd.pipeline.get_state", {"session_id": "sess_demo", "event_id": 42})
     assert calls[1] == ("rd.pipeline.get_shader", {"session_id": "sess_demo", "event_id": 42, "stage": "ps"})
 
@@ -115,17 +112,15 @@ def test_vfs_shader_not_bound_becomes_unavailable_node(monkeypatch) -> None:
 
     monkeypatch.setattr(dispatch, "dispatch_operation", _fake_dispatch)
 
-    payload = json.loads(
-        asyncio.run(
+    payload = asyncio.run(
             vfs_ops.dispatch(
                 "tree",
                 {"path": "/draws/42/shaders", "session_id": "sess_demo", "depth": 1},
             )
         )
-    )
 
-    assert payload["success"] is True
-    child = payload["tree"]["children"][0]
+    assert payload.ok is True
+    child = payload.data['tree']["children"][0]
     assert child["path"] == "/draws/42/shaders/ps"
     assert child["data"]["available"] is False
     assert child["data"]["error"]["code"] == "shader_not_bound"
@@ -133,22 +128,22 @@ def test_vfs_shader_not_bound_becomes_unavailable_node(monkeypatch) -> None:
 
 @pytest.mark.unit
 def test_vfs_resolve_uses_node_key() -> None:
-    payload = json.loads(asyncio.run(vfs_ops.dispatch("resolve", {"path": "/"})))
+    payload = asyncio.run(vfs_ops.dispatch("resolve", {"path": "/"}))
 
-    assert payload["success"] is True
-    assert payload["node"]["path"] == "/"
+    assert payload.ok is True
+    assert payload.data['node']["path"] == "/"
 
 
 @pytest.mark.unit
 def test_vfs_tree_respects_max_nodes_budget() -> None:
-    payload = json.loads(asyncio.run(vfs_ops.dispatch("tree", {"path": "/", "depth": 1, "max_nodes": 2})))
+    payload = asyncio.run(vfs_ops.dispatch("tree", {"path": "/", "depth": 1, "max_nodes": 2}))
 
-    assert payload["success"] is True
-    assert payload["max_nodes"] == 2
-    assert payload["emitted_nodes"] == 2
-    assert payload["truncated"] is True
-    assert payload["truncation_reason"] == "max_nodes_exceeded"
-    assert len(payload["tree"].get("children", [])) == 1
+    assert payload.ok is True
+    assert payload.data['max_nodes'] == 2
+    assert payload.data['emitted_nodes'] == 2
+    assert payload.data['truncated'] is True
+    assert payload.data['truncation_reason'] == "max_nodes_exceeded"
+    assert len(payload.data['tree'].get("children", [])) == 1
 
 @pytest.mark.unit
 def test_vfs_tree_draws_defers_action_details(monkeypatch) -> None:
@@ -175,17 +170,15 @@ def test_vfs_tree_draws_defers_action_details(monkeypatch) -> None:
 
     monkeypatch.setattr(dispatch, "dispatch_operation", _fake_dispatch)
 
-    payload = json.loads(
-        asyncio.run(
+    payload = asyncio.run(
             vfs_ops.dispatch(
                 "tree",
                 {"path": "/draws", "session_id": "sess_demo", "depth": 2, "max_nodes": 8},
             )
         )
-    )
 
-    assert payload["success"] is True
-    child = payload["tree"]["children"][0]
+    assert payload.ok is True
+    child = payload.data['tree']["children"][0]
     assert child["path"] == "/draws/101"
     assert child["data"] == {
         "event_id": 101,

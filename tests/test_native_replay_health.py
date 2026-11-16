@@ -9,7 +9,7 @@ from types import SimpleNamespace as NS
 import pytest
 
 from rdc_tool.core import pipeline_service as pipeline
-from rdc_tool.runtime import context_records, dispatch, live_state, renderdoc_api, replay_access, routing, truth_matrix
+from rdc_tool.runtime import context_records, dispatch, envelope, live_state, renderdoc_api, replay_access, routing, truth_matrix
 from rdc_tool.runtime.operations import shader as shader_ops
 
 
@@ -82,7 +82,7 @@ def test_existing_native_fatal_rejects_before_read(monkeypatch, runtime, operati
     async def handler(action, args, env):
         await replay_access._get_controller(args.get("session_id", "native-session"))
         called.append(action)
-        return {'success': True, 'r': 0}
+        return envelope.success(r=0)
 
     result = execute(monkeypatch, operation, handler)
     assert result['ok'] is False
@@ -100,7 +100,7 @@ def test_native_fatal_during_call_rejects_default_success(monkeypatch, runtime, 
     async def handler(action, args, env):
         await replay_access._get_controller(args.get("session_id", "native-session"))
         controller.status = Status(Code.RemoteServerConnectionLost)
-        return {'success': True, 'r': 0, 'g': 0, 'b': 0, 'a': 0}
+        return envelope.success(r=0, g=0, b=0, a=0)
 
     result = execute(monkeypatch, operation, handler)
     assert result['ok'] is False
@@ -127,7 +127,7 @@ def test_healthy_native_zero_is_valid_readback(monkeypatch, runtime):
 
     async def handler(action, args, env):
         await replay_access._get_controller(args.get("session_id", "native-session"))
-        return {'success': True, 'r': 0, 'g': 0, 'b': 0, 'a': 0}
+        return envelope.success(r=0, g=0, b=0, a=0)
 
     result = execute(monkeypatch, 'rd.texture.get_pixel_value', handler)
     assert result['ok'] is True and result['data']['r'] == 0
@@ -143,7 +143,7 @@ def test_missing_or_unknown_health_is_not_assumed_success(monkeypatch, runtime, 
     async def handler(action, args, env):
         await replay_access._get_controller(args.get("session_id", "native-session"))
         called.append(action)
-        return {'success': True, 'r': 0}
+        return envelope.success(r=0)
 
     result = execute(monkeypatch, 'rd.texture.get_pixel_value', handler)
     assert result['ok'] is False
@@ -168,7 +168,7 @@ def test_global_capture_close_remains_available_after_native_fatal(monkeypatch, 
 
     async def handler(action, args, env):
         called.append(action)
-        return {'success': True, 'released': True}
+        return envelope.success(released=True)
 
     result = execute(monkeypatch, 'rd.capture.close_replay', handler)
     assert result['ok'] is True and called == ['close_replay']
@@ -231,7 +231,7 @@ def test_concurrent_health_scopes_do_not_mix_controllers(monkeypatch):
                 reached.set()
             else:
                 await reached.wait()
-            return {'success': True, 'r': 0}
+            return envelope.success(r=0)
 
         _route_namespace(monkeypatch, 'texture', handler)
         async def query(key):
@@ -244,7 +244,7 @@ def test_concurrent_health_scopes_do_not_mix_controllers(monkeypatch):
     asyncio.run(run())
 
 def test_debug_start_capability_probe_uses_owning_replay_executor(monkeypatch):
-    import json
+    pass
 
     async def run():
         executor = ThreadPoolExecutor(max_workers=1)
@@ -279,8 +279,8 @@ def test_debug_start_capability_probe_uses_owning_replay_executor(monkeypatch):
         monkeypatch.setattr(renderdoc_api, '_get_rd', lambda: NS())
         monkeypatch.setattr(truth_matrix, '_session_remote_capability_matrix', capabilities)
         monkeypatch.setattr(live_state, '_runtime_context_id', lambda: 'native-caps-context')
-        result = json.loads(await shader_ops.dispatch('debug_start', {
-            'session_id': 'native-session', 'event_id': 1716, 'params': {'x': 685, 'y': 70}}))
-        assert result['code'] == 'shader_debug_backend_unsupported'
+        result = await shader_ops.dispatch('debug_start', {
+            'session_id': 'native-session', 'event_id': 1716, 'params': {'x': 685, 'y': 70}})
+        assert result.code == 'shader_debug_backend_unsupported'
 
     asyncio.run(run())

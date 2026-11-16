@@ -18,7 +18,7 @@ from rdc_tool.runtime import (
 )
 
 
-async def dispatch(action: str, args: Dict[str, Any]) -> str:
+async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
     coerce._require(args, "session_id")
     session_id = str(args["session_id"])
     stage = renderdoc_api._parse_stage(args.get("stage"))
@@ -26,7 +26,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
         try:
             renderdoc_api._rd_stage(stage)
         except CoreError as exc:
-            return envelope._err(str(exc), code=exc.code, category=exc.category,
+            return envelope.failure(str(exc), code=exc.code, category=exc.category,
                         details={**exc.details, "effects_attempted": False, "context_preserved": True})
     resolved_event_id = await replay_access._ensure_event(session_id, coerce._as_int(args["event_id"]) if args.get("event_id") is not None else None)
     assert live_state._pipeline_service is not None
@@ -40,7 +40,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
     if action == "get_state":
         if detail not in {"summary", "full"} or (sections is not None and
                 (not isinstance(sections, list) or any(not isinstance(k, str) or k not in fields for k in sections))):
-            return envelope._err("Invalid pipeline detail or sections", code="validation_error", category="validation")
+            return envelope.failure("Invalid pipeline detail or sections", code="validation_error", category="validation")
         selected = sections if sections is not None else (list(fields) if detail == "full" else
             ["shaders", "output_targets", "topology", "viewports_scissors"])
         snapshot = await live_state._pipeline_service.snapshot_pipeline(
@@ -63,13 +63,13 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
         if "output_targets" in selected:
             snapshot_dict.update(selected_visual_target=visual_target_payload,
                                  export_target_available=bool(visual_target_payload.get("texture_id")))
-        return envelope._ok(resolved_event_id=int(resolved_event_id), pipeline_state=snapshot_dict)
+        return envelope.success(resolved_event_id=int(resolved_event_id), pipeline_state=snapshot_dict)
     controller = await replay_access._get_controller(session_id)
     if resolved_event_id > 0:
         await renderdoc_api._offload(controller.SetFrameEvent, resolved_event_id, True)
     pipe = await renderdoc_api._offload(controller.GetPipelineState)
-    def _pipeline_ok(**fields: Any) -> str:
-        return envelope._ok(resolved_event_id=int(resolved_event_id), **fields)
+    def _pipeline_ok(**fields: Any) -> envelope.Outcome:
+        return envelope.success(resolved_event_id=int(resolved_event_id), **fields)
 
     if action == "get_stage_state":
         rd_stage = renderdoc_api._rd_stage(stage)
@@ -131,7 +131,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
                     },
                 )
         except Exception as exc:
-            return envelope._err(f"Vertex buffer read failed: {exc}", code="pipeline_read_failed")
+            return envelope.failure(f"Vertex buffer read failed: {exc}", code="pipeline_read_failed")
         return _pipeline_ok(vertex_buffers=vbs)
     if action == "get_index_buffer":
         index_buffer = {}
@@ -143,7 +143,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
                 "format": str(getattr(ib, "byteStride", "")),
             }
         except Exception as exc:
-            return envelope._err(f"Index buffer read failed: {exc}", code="pipeline_read_failed")
+            return envelope.failure(f"Index buffer read failed: {exc}", code="pipeline_read_failed")
         return _pipeline_ok(index_buffer=index_buffer)
     if action == "get_resource_bindings":
         bindings = await live_state._pipeline_service.get_resource_bindings(
@@ -151,7 +151,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
             stage=ShaderStage(str(args["stage"]).lower()) if args.get("stage") else None)
         binding_type = args.get("type")
         if binding_type is not None and binding_type not in {"SRV", "UAV", "CBV", "Sampler"}:
-            return envelope._err("Invalid binding type", code="validation_error")
+            return envelope.failure("Invalid binding type", code="validation_error")
         return _pipeline_ok(bindings=[b.model_dump(mode="json") for b in bindings if binding_type is None or b.type.upper() == str(binding_type).upper()])
     if action == "get_constant_buffers":
         rd_stage = renderdoc_api._rd_stage(stage)
@@ -174,7 +174,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
         rd_stage = renderdoc_api._rd_stage(stage)
         shader_id = await renderdoc_api._offload(pipe.GetShader, rd_stage)
         if renderdoc_api._is_null_resource_id(shader_id):
-            return envelope._err(
+            return envelope.failure(
                 f"No shader bound at stage {stage.upper()} for event {int(resolved_event_id)}",
                 code="shader_not_bound",
                 category="runtime",
@@ -188,4 +188,4 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
             "encoding": str(getattr(reflection, "encoding", "")) if reflection else "",
         }
         return _pipeline_ok(shader=shader)
-    return envelope._err(f"Unsupported pipeline action: {action}")
+    return envelope.failure(f"Unsupported pipeline action: {action}", code="runtime_error")

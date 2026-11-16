@@ -18,7 +18,7 @@ from rdc_tool.runtime import (
 )
 
 
-async def dispatch(action: str, args: Dict[str, Any]) -> str:
+async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
     coerce._require(args, "session_id", "buffer_id")
     session_id = str(args["session_id"])
     buffer_id = args["buffer_id"]
@@ -26,7 +26,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
     try:
         rid = await replay_access._resolve_resource_id(session_id, buffer_id)
     except replay_access.ResourceLookupMiss as exc:
-        return envelope._err(str(exc), code="resource_not_found", category="validation",
+        return envelope.failure(str(exc), code="resource_not_found", category="validation",
                     details={"session_id": session_id, "failure_stage": "resolve_buffer",
                              "effects_attempted": False, "context_preserved": True})
     offset = coerce._as_int(args.get("offset"), 0)
@@ -38,17 +38,17 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
         descriptions = await renderdoc_api._offload(controller.GetBuffers)
         descriptor = next((item for item in descriptions if item.resourceId == rid), None)
         if descriptor is None:
-            return envelope._err("Buffer not found", code="resource_not_found", category="validation",
+            return envelope.failure("Buffer not found", code="resource_not_found", category="validation",
                         details={"session_id": session_id, "failure_stage": "resolve_buffer",
                                  "effects_attempted": False, "context_preserved": True})
         expected = int(descriptor.length)-offset if size == 0 else size
         if offset < 0 or expected < 0 or offset+expected > int(descriptor.length):
-            return envelope._err("Buffer range exceeds resource", code="validation_error", category="validation",
+            return envelope.failure("Buffer range exceeds resource", code="validation_error", category="validation",
                         details={"session_id": session_id, "failure_stage": "validate_buffer_range",
                                  "effects_attempted": False, "context_preserved": True})
         inline = coerce._as_bool(args.get("as_base64"), False)
         if inline and expected > 1048576:
-            return envelope._err("Inline buffer limit is 1 MiB; request a smaller range or export", code="output_budget_exceeded", category="validation",
+            return envelope.failure("Inline buffer limit is 1 MiB; request a smaller range or export", code="output_budget_exceeded", category="validation",
                         details={"session_id": session_id, "failure_stage": "validate_buffer_read_budget",
                                  "effects_attempted": False, "context_preserved": True})
         async def read_buffer(event):
@@ -69,14 +69,14 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
             assert live_state._artifact_store is not None
             artifact = await live_state._artifact_store.store(data, mime="application/octet-stream", suffix=".bin")
             result["artifact_path"] = artifact_payloads._artifact_path(artifact)
-        return envelope._ok(**result)
+        return envelope.success(**result)
 
     data = await renderdoc_api._offload(controller.GetBufferData, rid, offset, size)
 
     if action == "search_pattern":
         pattern_value = args.get("pattern")
         if pattern_value is None:
-            return envelope._err("Missing required parameter(s): pattern")
+            return envelope.failure("Missing required parameter(s): pattern", code="runtime_error")
         if isinstance(pattern_value, str):
             p = pattern_value.strip().replace(" ", "")
             if p.startswith("0x"):
@@ -85,7 +85,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
         elif isinstance(pattern_value, list):
             pattern = bytes(int(v) & 0xFF for v in pattern_value)
         else:
-            return envelope._err("Unsupported pattern type")
+            return envelope.failure("Unsupported pattern type", code="runtime_error")
         max_results = coerce._as_int(args.get("max_results"), 256)
         matches = []
         start = 0
@@ -97,14 +97,14 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
             if len(matches) >= max_results:
                 break
             start = idx + 1
-        return envelope._ok(matches=matches)
+        return envelope.success(matches=matches)
 
     if action == "get_structured_data":
         layout = coerce._as_dict(args.get("layout"), default={})
         fields = coerce._as_list(layout.get("fields"), default=[])
         stride = coerce._as_int(layout.get("stride"), 0)
         if stride <= 0:
-            return envelope._err("Structured buffer layout requires positive stride", code="validation_error")
+            return envelope.failure("Structured buffer layout requires positive stride", code="validation_error")
         offset_items = 0
         max_elements = coerce._as_int(args.get("max_elements"), 256)
         count = coerce._as_int(args.get("count"), max_elements)
@@ -129,16 +129,16 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
                 name = str(fd.get("name", "field"))
                 ftype = str(fd.get("type", "u32")).lower()
                 if ftype not in type_map:
-                    return envelope._err(f"Unsupported structured field type: {ftype}", code="validation_error")
+                    return envelope.failure(f"Unsupported structured field type: {ftype}", code="validation_error")
                 fmt, size_bytes = type_map[ftype]
                 field_offset = coerce._as_int(fd.get("offset"), 0)
                 field_count = coerce._as_int(fd.get("count"), 1)
                 if field_offset < 0 or field_count < 1 or field_offset + size_bytes * field_count > stride:
-                    return envelope._err("Structured field exceeds stride", code="validation_error")
+                    return envelope.failure("Structured field exceeds stride", code="validation_error")
                 start = base + field_offset
                 values = [struct.unpack_from(fmt, data, start + j * size_bytes)[0] for j in range(field_count)]
                 item[name] = values[0] if field_count == 1 else values
             elements.append(item)
-        return envelope._ok(elements=elements)
+        return envelope.success(elements=elements)
 
-    return envelope._err(f"Unsupported buffer action: {action}")
+    return envelope.failure(f"Unsupported buffer action: {action}", code="runtime_error")

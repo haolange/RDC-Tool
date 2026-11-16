@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from types import SimpleNamespace
 
 from rdc_tool.context_snapshot import clear_context_snapshot
@@ -49,9 +48,9 @@ def test_dispatch_capture_open_file_does_not_open_replay(monkeypatch, tmp_path) 
     live_state._runtime.hydrated_contexts.clear()
     live_state._runtime.captures.clear()
     try:
-        payload = json.loads(asyncio.run(capture_ops.dispatch("open_file", {"file_path": str(sample)})))
-        assert payload["success"] is True
-        assert payload["driver"] == "D3D12"
+        payload = asyncio.run(capture_ops.dispatch("open_file", {"file_path": str(sample)}))
+        assert payload.ok is True
+        assert payload.data['driver'] == "D3D12"
         assert fake_capture.calls == [f"OpenFile:{sample}", "DriverName", "CloseFile"]
     finally:
         clear_context_snapshot()
@@ -125,16 +124,14 @@ def test_dispatch_capture_open_replay_returns_after_ready_state_without_preview_
     )
     live_state._session_manager = _FakeSessionManager()
     try:
-        payload = json.loads(
-            asyncio.run(capture_ops.dispatch("open_replay", {"capture_file_id": "capf_demo", "options": {}}))
-        )
+        payload = asyncio.run(capture_ops.dispatch("open_replay", {"capture_file_id": "capf_demo", "options": {}}))
 
-        assert payload["success"] is True
-        assert payload["session_id"] == "sess_demo"
-        assert payload["capture_file_id"] == "capf_demo"
-        assert payload["active_event_id"] == 147
-        assert payload["recovery_status"] == "ready"
-        assert payload["api_properties"] == {}
+        assert payload.ok is True
+        assert payload.data['session_id'] == "sess_demo"
+        assert payload.data['capture_file_id'] == "capf_demo"
+        assert payload.data['active_event_id'] == 147
+        assert payload.data['recovery_status'] == "ready"
+        assert payload.data['api_properties'] == {}
     finally:
         clear_context_snapshot()
         clear_context_state()
@@ -182,15 +179,13 @@ def test_dispatch_capture_open_replay_reuses_live_session_for_same_capture(monke
     )
     live_state._session_manager = _UnexpectedSessionManager()
     try:
-        payload = json.loads(
-            asyncio.run(capture_ops.dispatch("open_replay", {"capture_file_id": "capf_demo", "options": {}}))
-        )
+        payload = asyncio.run(capture_ops.dispatch("open_replay", {"capture_file_id": "capf_demo", "options": {}}))
 
-        assert payload["success"] is True
-        assert payload["session_id"] == "sess_live"
-        assert payload["capture_file_id"] == "capf_demo"
-        assert payload["active_event_id"] == 7010
-        assert payload["reused_session"] is True
+        assert payload.ok is True
+        assert payload.data['session_id'] == "sess_live"
+        assert payload.data['capture_file_id'] == "capf_demo"
+        assert payload.data['active_event_id'] == 7010
+        assert payload.data['reused_session'] is True
     finally:
         clear_context_snapshot()
         clear_context_state()

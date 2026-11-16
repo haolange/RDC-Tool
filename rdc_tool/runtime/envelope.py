@@ -1,13 +1,46 @@
-"""Operation results and their tabular projections."""
+"""Operation outcomes and their tabular projections.
+
+Every operation returns a ``Success`` or a ``Failure``; ``dispatch`` turns it
+into the canonical envelope. Values are made JSON-safe once, when the outcome
+is built, so nothing downstream re-parses operation results.
+"""
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Sequence
+from dataclasses import dataclass, field
+from typing import Any, ClassVar, Dict, List, Sequence, Union
 
 from rdc_tool.core.contracts import TSV_FORMAT_VERSION
 from rdc_tool.core.tsv_projection import project_rows, to_tsv_string
-from rdc_tool.io_utils import safe_json_text
+from rdc_tool.io_utils import json_safe
 from rdc_tool.runtime import coerce
+
+# Envelope-level names; operation data never uses them as field names.
+_ENVELOPE_FIELDS = frozenset({"ok", "success", "data", "error", "error_message", "schema_version", "tool_version", "result_kind"})
+
+
+@dataclass(frozen=True)
+class Success:
+    """A completed operation; ``data`` becomes the envelope's ``data``."""
+
+    data: Dict[str, Any]
+    meta: Dict[str, Any] = field(default_factory=dict)
+    projections: Dict[str, Any] = field(default_factory=dict)
+    ok: ClassVar[bool] = True
+
+
+@dataclass(frozen=True)
+class Failure:
+    """A failed operation; becomes the envelope's ``error``."""
+
+    message: str
+    code: str
+    category: str = "runtime"
+    details: Dict[str, Any] = field(default_factory=dict)
+    ok: ClassVar[bool] = False
+
+
+Outcome = Union[Success, Failure]
 
 
 def _json_default(value: Any) -> Any:
@@ -18,16 +51,24 @@ def _json_default(value: Any) -> Any:
     return str(value)
 
 
-def _ok(**fields: Any) -> str:
-    payload: Dict[str, Any] = {"success": True}
-    payload.update(fields)
-    return safe_json_text(payload, default=_json_default)
+def success(*, meta: Dict[str, Any] | None = None, projections: Dict[str, Any] | None = None, **data: Any) -> Success:
+    reserved = _ENVELOPE_FIELDS.intersection(data)
+    if reserved:
+        raise TypeError(f"operation data must not use envelope field names: {sorted(reserved)}")
+    return Success(
+        data=json_safe(data, _json_default),
+        meta=json_safe(dict(meta or {}), _json_default),
+        projections=json_safe(dict(projections or {}), _json_default),
+    )
 
 
-def _err(message: str, **fields: Any) -> str:
-    payload: Dict[str, Any] = {"success": False, "error_message": str(message)}
-    payload.update(fields)
-    return safe_json_text(payload, default=_json_default)
+def failure(message: str, *, code: str, category: str = "runtime", details: Dict[str, Any] | None = None) -> Failure:
+    return Failure(
+        message=str(message),
+        code=str(code),
+        category=str(category),
+        details=json_safe(dict(details or {}), _json_default),
+    )
 
 
 def _projection_request(args: Dict[str, Any], tool_name: str) -> Dict[str, Any]:
@@ -206,7 +247,7 @@ def _capability_entry(
     return payload
 
 
-def _capability_error(
+def capability_failure(
     code: str,
     message: str,
     *,
@@ -215,8 +256,8 @@ def _capability_error(
     source: str,
     optional: bool = True,
     **details: Any,
-) -> str:
-    return _err(
+) -> Failure:
+    return failure(
         message,
         code=code,
         category="capability",

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import json
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -343,9 +342,9 @@ def test_disconnect_failure_keeps_handle_and_context_ownership(monkeypatch):
     monkeypatch.setattr(remote_records, "_remote_active_session_ids", lambda remote: [])
     monkeypatch.setattr(remote_session, "_clear_context_remote_live", lambda remote_id: pytest.fail("ownership cleared"))
     monkeypatch.setattr(remote_target, "_disconnect_remote_handle_sync", lambda remote: ["owned forward removal failed"])
-    result = json.loads(asyncio.run(remote_ops.dispatch("disconnect", {"remote_id": remote.remote_id})))
-    assert not result["success"]
-    assert result["code"] == "remote_disconnect_failed"
+    result = asyncio.run(remote_ops.dispatch("disconnect", {"remote_id": remote.remote_id}))
+    assert not result.ok
+    assert result.code == "remote_disconnect_failed"
     assert live_state._runtime.remotes[remote.remote_id] is remote
 
 
@@ -450,11 +449,11 @@ def test_set_capture_options_uses_current_binding_without_target(capture_options
     monkeypatch.setattr(live_state._runtime, "remotes", {remote.remote_id: remote})
     monkeypatch.setattr(remote_session, "_remote_consumed_payload", lambda remote_id: None)
     monkeypatch.setattr(remote_session, "_assert_remote_handle_context", lambda remote: None)
-    result = json.loads(asyncio.run(remote_ops.dispatch("set_capture_options", {
+    result = asyncio.run(remote_ops.dispatch("set_capture_options", {
         "remote_id": remote.remote_id, "options": {"api_validation": True, "delay_for_debugger": 3},
-    })))
-    assert result["success"] is True
-    assert result["applied"] == {"api_validation": True, "delay_for_debugger": 3}
+    }))
+    assert result.ok is True
+    assert result.data['applied'] == {"api_validation": True, "delay_for_debugger": 3}
     assert remote.default_capture_options == {
         "allow_fullscreen": False, "api_validation": True, "delay_for_debugger": 3,
     }

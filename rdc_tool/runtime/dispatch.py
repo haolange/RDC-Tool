@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import time
 from typing import Any, Dict, Optional
 
@@ -14,6 +13,7 @@ from rdc_tool.core.errors import InternalToolError, map_exception
 from rdc_tool.progress import ProgressReporter, ProgressSink
 from rdc_tool.runtime import (
     context_records,
+    envelope,
     live_state,
     oplog,
     preview_sync,
@@ -36,6 +36,8 @@ _PREVIEW_MANAGED_OPERATIONS = frozenset({
     "rd.session.resume",
 })
 _publisher = ArtifactPublisher()
+# Set by the envelope itself; an operation's meta cannot override them.
+_ENVELOPE_META = frozenset({"trace_id", "transport", "duration_ms"})
 
 
 async def dispatch_operation(
@@ -101,130 +103,25 @@ async def _execute(operation: str, args: Dict[str, Any], ctx: live_state.Executi
     return normalized
 
 
-async def _normalize(operation: str, raw: Any, ctx: live_state.ExecutionContext) -> Dict[str, Any]:
-    if isinstance(raw, str):
-        text = raw.strip()
-        if text.startswith("{") and text.endswith("}"):
-            try:
-                raw = json.loads(text)
-            except json.JSONDecodeError as exc:
-                raise InternalToolError(
-                    f"Operation returned non-JSON string for {operation}",
-                    {"preview": text[:160]},
-                ) from exc
-        else:
-            raw = {"raw": raw}
-
-    if isinstance(raw, dict) and all(
-        key in raw for key in ("schema_version", "tool_version", "result_kind", "ok", "data", "artifacts", "error", "meta")
-    ):
-        raw.setdefault("projections", {})
-        return raw
-
-    if not isinstance(raw, dict):
-        raw = {"value": raw}
-
-    if "success" in raw or "error_message" in raw:
-        success = bool(raw.get("success", True))
-        if success:
-            data = {
-                k: v
-                for k, v in raw.items()
-                if k not in {"success", "error_message", "ok", "error", "schema_version", "tool_version", "result_kind", "data", "artifacts", "meta", "projections"}
-            }
-            artifacts = await _publisher.publish_candidates(
-                collect_artifact_candidates(raw),
-            )
-            source_meta = raw.get("meta")
-            if not isinstance(source_meta, dict):
-                source_meta = {}
-            return canonical_success(
-                result_kind=str(operation),
-                data=data,
-                artifacts=artifacts,
-                projections=dict(raw.get("projections") or {}),
-                meta={
-                    key: value
-                    for key, value in source_meta.items()
-                    if key not in {"trace_id", "transport", "duration_ms"}
-                },
-                trace_id=ctx.trace_id,
-                transport=ctx.transport,
-            )
-        error_message = str(raw.get("error_message") or "Operation failed")
-        details = {
-            k: v
-            for k, v in raw.items()
-            if k
-            not in {
-                "success",
-                "error_message",
-                "ok",
-                "error",
-                "schema_version",
-                "tool_version",
-                "result_kind",
-                "data",
-                "artifacts",
-                "meta",
-                "code",
-                "error_code",
-                "category",
-                "details",
-                "projections",
-            }
-        }
-        explicit_details = raw.get("details")
-        if isinstance(explicit_details, dict):
-            details = {**explicit_details, **details}
-        return canonical_error(
-            result_kind=str(operation),
-            code=str(raw.get("code") or raw.get("error_code") or "runtime_error"),
-            category=str(raw.get("category") or "runtime"),
-            message=error_message,
-            details=details,
-            meta=dict(raw.get("meta") or {}),
+async def _normalize(operation: str, outcome: Any, ctx: live_state.ExecutionContext) -> Dict[str, Any]:
+    if isinstance(outcome, envelope.Success):
+        return canonical_success(
+            result_kind=operation,
+            data=outcome.data,
+            artifacts=await _publisher.publish_candidates(collect_artifact_candidates(outcome.data)),
+            projections=outcome.projections,
+            meta={key: value for key, value in outcome.meta.items() if key not in _ENVELOPE_META},
             trace_id=ctx.trace_id,
             transport=ctx.transport,
         )
-
-    if "ok" in raw and isinstance(raw.get("data"), dict):
-        success = bool(raw.get("ok"))
-        if success:
-            artifacts = list(raw.get("artifacts") or [])
-            if not artifacts:
-                artifacts = await _publisher.publish_candidates(
-                    collect_artifact_candidates(raw.get("data") or {}),
-                )
-            return canonical_success(
-                result_kind=str(raw.get("result_kind") or operation),
-                data=dict(raw.get("data") or {}),
-                artifacts=artifacts,
-                projections=dict(raw.get("projections") or {}),
-                meta=dict(raw.get("meta") or {}),
-                trace_id=ctx.trace_id,
-                transport=ctx.transport,
-            )
-        err = raw.get("error") if isinstance(raw.get("error"), dict) else {}
+    if isinstance(outcome, envelope.Failure):
         return canonical_error(
-            result_kind=str(raw.get("result_kind") or operation),
-            code=str(err.get("code") or "runtime_error"),
-            category=str(err.get("category") or "runtime"),
-            message=str(err.get("message") or "Operation failed"),
-            details=dict(err.get("details") or {}),
-            artifacts=list(raw.get("artifacts") or []),
-            meta=dict(raw.get("meta") or {}),
+            result_kind=operation,
+            code=outcome.code,
+            category=outcome.category,
+            message=outcome.message,
+            details=outcome.details,
             trace_id=ctx.trace_id,
             transport=ctx.transport,
         )
-
-    artifacts = await _publisher.publish_candidates(
-        collect_artifact_candidates(raw),
-    )
-    return canonical_success(
-        result_kind=str(operation),
-        data=raw,
-        artifacts=artifacts,
-        trace_id=ctx.trace_id,
-        transport=ctx.transport,
-    )
+    raise InternalToolError(f"{operation} returned {type(outcome).__name__} instead of an operation outcome")

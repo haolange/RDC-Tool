@@ -45,6 +45,15 @@ rdc-tool（CLI 进程，短命）
 - 唯一允许的循环是 replay 服务组之间的互相恢复与探测；服务层不导入操作层与执行层（VFS 读取重新进入完整执行流程时在函数内显式导入 `dispatch`）。
 - `rdc_tool/runtime` 之外的代码不导入它。`tests/test_runtime_layering.py` 守住以上规则与路由覆盖。
 
+### 操作结果
+
+每个操作返回 `envelope.Success` 或 `envelope.Failure`，两者在构造时就把值转成 JSON 安全的数据（`envelope.success(**data, meta=, projections=)`、`envelope.failure(message, code=, category=, details=)`，`capability_failure` 是 `category=capability` 的便捷形式）。`dispatch` 只做一次类型分派，生成 canonical envelope（`schema_version`、`ok`、`data`、`artifacts`、`error`、`meta`、`projections`）：
+
+- `Success.data` 原样成为 `data`；`artifacts` 由 data 中的路径字段经 artifact publisher 发布；`meta` 不能覆盖 envelope 自己的 `trace_id`、`transport`、`duration_ms`。
+- `Failure` 成为 `error`，`code` 必填，不存在默认错误码之外的猜测。
+- 其他任何返回值都是 `internal_error`，不会被当作成功；envelope 字段名（`ok`、`data`、`error` 等）不能作为 data 字段。
+- 操作之间组合时直接读取对方的 `Success.data` 或原样返回对方的 `Failure`，不解析字符串。
+
 ## 平台层
 
 `rdc_tool/platform/` 是业务代码与操作系统之间唯一的接缝：每个契约只有一套共享逻辑，操作系统原语分别实现在 `_windows.py` 与 `_posix.py`（Win32 preview 宿主在 `_windows_preview.py`）。`tests/test_platform_boundary.py` 保证平台包之外不出现 `os.name`、`sys.platform`、`msvcrt`、`fcntl`、`ctypes`、`creationflags` 等主机判断。

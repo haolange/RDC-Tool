@@ -24,7 +24,7 @@ from rdc_tool.runtime.operations import shader as shader_ops
 from rdc_tool.runtime.operations import texture as texture_ops
 
 
-async def dispatch(action: str, args: Dict[str, Any]) -> str:
+async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
     coerce._require(args, "session_id")
     session_id = str(args["session_id"])
 
@@ -60,7 +60,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
                     if restored_event != original_event or replay_access._active_event(session_id) != original_event:
                         raise RuntimeError("Replay event did not match the original event after restoration")
                 except Exception as exc:
-                    return envelope._err(
+                    return envelope.failure(
                         f"Failed to restore replay after screenshot target resolution failed: {exc}",
                         code="screenshot_target_recovery_failed",
                         category="runtime",
@@ -80,7 +80,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
                     "restored_event_id": original_event,
                     "artifact_write_attempted": False,
                 })
-            return envelope._err(failure_message, code=failure_code, category=failure_category, details=details)
+            return envelope.failure(failure_message, code=failure_code, category=failure_category, details=details)
         chosen_output_slot = visual_target_payload.get("output_slot") if isinstance(visual_target_payload, dict) else None
         target_source = str(visual_target_payload.get("target_source") or "") if isinstance(visual_target_payload, dict) else ""
         resolved_event_id = coerce._as_int(
@@ -116,8 +116,8 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
         if not valid_formats:
             allowed_text = ", ".join(sorted(allowed_formats))
             requested_text = ", ".join(selected_formats) or ", ".join(requested_formats)
-            return envelope._err(
-                f"rd.export.screenshot only supports {allowed_text}; got '{requested_text}'",
+            return envelope.failure(
+                f"rd.export.screenshot only supports {allowed_text}; got '{requested_text}'", code="runtime_error",
             )
         base_output_path = args.get("output_path")
         if chosen_output_slot is not None and not explicit_target:
@@ -135,7 +135,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
                 file_format=export_format,
                 multi=multi_export,
             )
-            response = await texture_ops.dispatch(
+            rendered = await texture_ops.dispatch(
                 "render_overlay",
                 {
                     "session_id": session_id,
@@ -147,9 +147,8 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
                     "include_alpha": include_alpha,
                 },
             )
-            payload = json.loads(response)
-            if not payload.get("success"):
-                details = coerce._as_dict(payload.get("details"), default={})
+            if not rendered.ok:
+                details = dict(rendered.details)
                 details.setdefault("session_id", session_id)
                 details.setdefault("event_id", int(resolved_event_id))
                 details.setdefault("requested_event_id", int(event_id))
@@ -161,17 +160,13 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
                 if isinstance(visual_target_payload, dict) and visual_target_payload.get("swapchain_error"):
                     details.setdefault("swapchain_error", visual_target_payload.get("swapchain_error"))
                 details.setdefault("failure_stage", "save_texture")
-                return envelope._err(
-                    str(payload.get("error_message") or "rd.export.screenshot failed while saving the selected texture"),
-                    code=str(payload.get("code") or "screenshot_save_texture_failed"),
-                    category=str(payload.get("category") or "runtime"),
-                    details=details,
-                )
-            export_meta = coerce._as_dict(payload.get("meta"), default={})
+                return envelope.failure(rendered.message, code=rendered.code, category=rendered.category, details=details)
+            payload = rendered.data
+            export_meta = dict(rendered.meta)
             image_width = coerce._as_int(export_meta.get("width"), 0)
             image_height = coerce._as_int(export_meta.get("height"), 0)
             if image_width <= 0 or image_height <= 0:
-                return envelope._err(
+                return envelope.failure(
                     "Screenshot renderer did not report the exported image dimensions",
                     code="screenshot_dimensions_unavailable",
                     category="runtime",
@@ -200,7 +195,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
         if not multi_export:
             single = exports[0]
             degraded_reasons = list(truth_meta.get("summary_degraded_reasons") or [])
-            return envelope._ok(
+            return envelope.success(
                 artifact_path=single["artifact_path"],
                 saved_path=single["saved_path"],
                 image_path=single["image_path"],
@@ -232,7 +227,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
                 summary_degraded_reasons=degraded_reasons,
             )
         degraded_reasons = list(truth_meta.get("summary_degraded_reasons") or [])
-        return envelope._ok(
+        return envelope.success(
             exports=exports,
             saved_paths=[item["saved_path"] for item in exports],
             image_paths=[item["image_path"] for item in exports],
@@ -280,12 +275,12 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
         stage_payloads = []
         failures = []
         for stage in renderdoc_api._stage_candidates():
-            shader_resp = await pipeline_ops.dispatch(
+            shader_result = await pipeline_ops.dispatch(
                 "get_shader",
                 {"session_id": session_id, "stage": stage, "event_id": resolved_event_id},
             )
-            shader_payload = json.loads(shader_resp)
-            if shader_payload.get("success") and shader_payload.get("shader", {}).get("shader_id"):
+            shader_payload = shader_result.data if shader_result.ok else {}
+            if shader_payload.get("shader", {}).get("shader_id"):
                 shader = dict(shader_payload["shader"])
                 shader_id = str(shader["shader_id"])
                 stage_name = str(shader.get("stage") or stage).lower()
@@ -311,17 +306,13 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
                         call_args["output_path"] = str(output_dir / f"{stage_name}-shader")
                     elif kind == "disassembly":
                         call_args["target"] = disassembly_target
-                    result = json.loads(await shader_ops.dispatch(shader_action, call_args))
-                    if not result.get("success"):
-                        failure = {
-                            "stage": stage_name,
-                            "kind": kind,
-                            "code": result.get("code") or "shader_export_unavailable",
-                            "message": result.get("error_message") or result.get("message") or "Shader export unavailable",
-                        }
+                    exported = await shader_ops.dispatch(shader_action, call_args)
+                    if not exported.ok:
+                        failure = {"stage": stage_name, "kind": kind, "code": exported.code, "message": exported.message}
                         failures.append(failure)
                         entry["exports"][kind] = {"available": False, "error": failure}
                         continue
+                    result = exported.data
                     if kind == "disassembly" and disassembly_target != "auto" and result.get("target") != disassembly_target:
                         failure = {"stage": stage_name, "kind": kind, "code": "shader_disassembly_target_mismatch",
                                    "message": "Disassembly export did not return the explicitly requested target",
@@ -361,7 +352,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
                     }
                 stage_payloads.append(entry)
         if not stage_payloads:
-            return envelope._err(
+            return envelope.failure(
                 f"No bound shaders available for event {int(resolved_event_id)}",
                 code="shader_bundle_empty",
                 category="runtime",
@@ -383,7 +374,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
             ),
             encoding="utf-8",
         )
-        return envelope._ok(output_dir=str(output_dir), bundle_path=str(bundle_json), resolved_event_id=int(resolved_event_id), complete=not failures, failures=failures, disassembly_target=disassembly_target)
+        return envelope.success(output_dir=str(output_dir), bundle_path=str(bundle_json), resolved_event_id=int(resolved_event_id), complete=not failures, failures=failures, disassembly_target=disassembly_target)
     if action == "cbuffer_dump":
         coerce._require(args, "output_dir")
         output_dir = Path(str(args["output_dir"]))
@@ -402,12 +393,11 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
                 "max_bytes": coerce._as_int(args.get("max_bytes"), 1048576),
                 "flatten": True,
             }
-            resp = await pipeline_ops.dispatch("get_constant_buffers", call_args)
-            payload = json.loads(resp)
-            if not payload.get("success"):
-                failures.append({"stage": stage, "error": payload.get("error_message") or payload.get("message"), "code": payload.get("code")})
+            constant_buffers = await pipeline_ops.dispatch("get_constant_buffers", call_args)
+            if not constant_buffers.ok:
+                failures.append({"stage": stage, "error": constant_buffers.message, "code": constant_buffers.code})
                 continue
-            buffers = list(payload.get("constant_buffers", []) or [])
+            buffers = list(constant_buffers.data.get("constant_buffers", []) or [])
             if slots:
                 buffers = [item for item in buffers if coerce._as_int((item or {}).get("slot"), -1) in slots]
             if coerce._as_bool(args.get("include_decoded"), True):
@@ -427,7 +417,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
                     item["raw_export_coverage"] = {"block_bytes": window["required_bytes"], "requested_bytes": raw_length,
                                                    "truncated": raw_length < window["required_bytes"]}
                     try:
-                        raw_resp = await texture_export._export_buffer_file(
+                        raw_export = await texture_export._export_buffer_file(
                             {
                                 "session_id": session_id,
                                 "buffer_id": resource_id,
@@ -436,17 +426,16 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
                                 "output_path": str(output_dir / f"cbuffer_{stage}_slot{coerce._as_int((item or {}).get('slot'), 0)}.bin"),
                             }
                         )
-                        raw_payload = json.loads(raw_resp)
-                        if raw_payload.get("success"):
-                            item["raw_path"] = raw_payload.get("saved_path")
+                        if raw_export.ok:
+                            item["raw_path"] = raw_export.data.get("saved_path")
                         else:
-                            failures.append({"stage": stage, "slot": (item or {}).get("slot"), "code": raw_payload.get("code"), "error": raw_payload.get("error_message")})
+                            failures.append({"stage": stage, "slot": (item or {}).get("slot"), "code": raw_export.code, "error": raw_export.message})
                     except Exception as exc:
                         failures.append({"stage": stage, "slot": (item or {}).get("slot"), "error": str(exc), "code": "raw_export_failed"})
             file_path = output_dir / f"cbuffer_{stage}.json"
             file_path.write_text(json.dumps(buffers, ensure_ascii=False, indent=2), encoding="utf-8")
             dumped.append(str(file_path))
         if failures and not dumped:
-            return envelope._err("All constant buffer exports failed", code="cbuffer_export_failed", details={"failures": failures})
-        return envelope._ok(dumped_paths=dumped, saved_files=dumped, failures=failures, partial=bool(failures) or limited_raw_export, stages=stages, slots=slots)
-    return envelope._err(f"Unsupported export action: {action}")
+            return envelope.failure("All constant buffer exports failed", code="cbuffer_export_failed", details={"failures": failures})
+        return envelope.success(dumped_paths=dumped, saved_files=dumped, failures=failures, partial=bool(failures) or limited_raw_export, stages=stages, slots=slots)
+    return envelope.failure(f"Unsupported export action: {action}", code="runtime_error")

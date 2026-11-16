@@ -2,21 +2,19 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any, Dict, List
 
 from rdc_tool.runtime import coerce, envelope
 from rdc_tool.runtime.operations import pipeline as pipeline_ops
 
 
-async def dispatch(action: str, args: Dict[str, Any]) -> str:
+async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
     coerce._require(args, "session_id")
     session_id = str(args["session_id"])
-    state_resp = await pipeline_ops.dispatch("get_state", {"session_id": session_id})
-    state_payload = json.loads(state_resp)
-    if not state_payload.get("success"):
-        return state_resp
-    summary = state_payload.get("pipeline_state", {})
+    state_result = await pipeline_ops.dispatch("get_state", {"session_id": session_id})
+    if not state_result.ok:
+        return state_result
+    summary = state_result.data.get("pipeline_state", {})
     issues: List[Dict[str, Any]] = []
 
     if action == "scan_common_issues":
@@ -30,9 +28,9 @@ async def dispatch(action: str, args: Dict[str, Any]) -> str:
         severity = str(args.get("severity_min", "info"))
         levels = {"info": 0, "warn": 1, "warning": 1, "error": 2}
         if severity not in levels:
-            return envelope._err("Unknown severity_min", code="validation_error")
+            return envelope.failure("Unknown severity_min", code="validation_error")
         issues = [issue for issue in issues if levels[issue["severity"]] >= levels[severity]]
-        return envelope._ok(issues=issues, suggestions=["Check active event", "Verify drawcall context"] if coerce._as_bool(args.get("include_suggestions"), True) else [])
+        return envelope.success(issues=issues, suggestions=["Check active event", "Verify drawcall context"] if coerce._as_bool(args.get("include_suggestions"), True) else [])
 
 
-    return envelope._err(f"Unsupported diag action: {action}")
+    return envelope.failure(f"Unsupported diag action: {action}", code="runtime_error")

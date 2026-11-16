@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import io
-import json
 from types import SimpleNamespace
 
 import numpy as np
@@ -55,29 +54,29 @@ def _setup(monkeypatch, tmp_path, view_name, *, shader_resource=False):
 @pytest.mark.parametrize("shader_resource", [False, True])
 def test_typeless_region_uses_bound_view_format(monkeypatch, tmp_path, shader_resource):
     _, _, _, calls, saved = _setup(monkeypatch, tmp_path, "B8G8R8A8_UNORM", shader_resource=shader_resource)
-    result = json.loads(asyncio.run(texture_ops.dispatch("get_region_values", {
+    result = asyncio.run(texture_ops.dispatch("get_region_values", {
         "session_id": "session", "event_id": 42, "texture_id": "texture",
-        "rect": {"x": 0, "y": 0, "w": 1, "h": 1}})))
-    assert result["success"] is True and calls == [42]
-    np.testing.assert_allclose(result["values"], [[[153 / 255, 102 / 255, 51 / 255, 1]]])
-    assert result["stats"]["source_format"] == "B8G8R8A8_TYPELESS"
-    assert result["stats"]["view_format"] == "B8G8R8A8_UNORM"
+        "rect": {"x": 0, "y": 0, "w": 1, "h": 1}}))
+    assert result.ok is True and calls == [42]
+    np.testing.assert_allclose(result.data['values'], [[[153 / 255, 102 / 255, 51 / 255, 1]]])
+    assert result.data['stats']["source_format"] == "B8G8R8A8_TYPELESS"
+    assert result.data['stats']["view_format"] == "B8G8R8A8_UNORM"
     with np.load(io.BytesIO(saved[0])) as data:
-        np.testing.assert_allclose(data["pixels"], result["values"])
+        np.testing.assert_allclose(data["pixels"], result.data['values'])
 
 
 def test_typeless_region_without_bound_view_preserves_raw_unsigned_values(monkeypatch, tmp_path):
     _, _, _, _, saved = _setup(monkeypatch, tmp_path, None)
-    result = json.loads(asyncio.run(texture_ops.dispatch("get_region_values", {
+    result = asyncio.run(texture_ops.dispatch("get_region_values", {
         "session_id": "session", "event_id": 42, "texture_id": "texture",
-        "rect": {"x": 0, "y": 0, "w": 1, "h": 1}})))
-    assert result["values"] == [[[153, 102, 51, 255]]]
-    assert result["stats"]["view_format"] is None
-    assert result["stats"]["value_interpretation"] == "raw_unsigned_integer"
-    assert result["stats"]["interpretation_note"] == "无类型格式，视图格式未知，数值为原始整数"
+        "rect": {"x": 0, "y": 0, "w": 1, "h": 1}}))
+    assert result.data['values'] == [[[153, 102, 51, 255]]]
+    assert result.data['stats']["view_format"] is None
+    assert result.data['stats']["value_interpretation"] == "raw_unsigned_integer"
+    assert result.data['stats']["interpretation_note"] == "无类型格式，视图格式未知，数值为原始整数"
     with np.load(io.BytesIO(saved[0])) as data:
         assert data["pixels"].dtype == np.uint8
-        np.testing.assert_array_equal(data["pixels"], result["values"])
+        np.testing.assert_array_equal(data["pixels"], result.data['values'])
 
 
 @pytest.mark.parametrize("view_name", ["B8G8R8A8_UNORM", None])
@@ -95,13 +94,13 @@ def test_typeless_pixel_history_uses_view_or_explicit_raw_uint(monkeypatch, tmp_
     monkeypatch.setattr(replay_access, "_get_controller", get_controller)
     monkeypatch.setattr(replay_access, "_get_texture_descriptor", get_descriptor)
     monkeypatch.setattr(replay_facts, "pixel_history_input_attachment_conflict", lambda *args: None)
-    result = json.loads(asyncio.run(texture_ops.dispatch("get_pixel_history", {
+    result = asyncio.run(texture_ops.dispatch("get_pixel_history", {
         "session_id": "session", "event_id": 42, "texture_id": "texture",
-        "x": 0, "y": 0, "include_shaders": False})))
+        "x": 0, "y": 0, "include_shaders": False}))
     assert calls == [rd.CompType.UNorm if view_name else rd.CompType.UInt]
-    assert result["history"][0]["pre_mod"]["color_rgba"] == (
+    assert result.data['history'][0]["pre_mod"]["color_rgba"] == (
         [0.25, 0.5, 0.75, 1.0] if view_name else [1, 2, 3, 4])
-    assert result["value_interpretation"] == ("view_format" if view_name else "raw_unsigned_integer")
+    assert result.data['value_interpretation'] == ("view_format" if view_name else "raw_unsigned_integer")
 
 
 @pytest.mark.parametrize("action,extra", [
@@ -133,9 +132,9 @@ def test_texture_decode_failure_restores_event_and_returns_qualified_error(monke
     monkeypatch.setattr(replay_access, "_active_event", lambda session: active["event"])
     monkeypatch.setattr(live_state, "_runtime_context_id", lambda: "context")
     monkeypatch.setattr(live_state, "_render_service", SimpleNamespace(read_texture_array=fail))
-    result = json.loads(asyncio.run(texture_ops.dispatch(action, {
-        "session_id": "session", "event_id": 42, **extra})))
-    assert result["code"] == "texture_readback_decode_failed"
-    assert result["details"] == {"context_id": "context", "session_id": "session",
+    result = asyncio.run(texture_ops.dispatch(action, {
+        "session_id": "session", "event_id": 42, **extra}))
+    assert result.code == "texture_readback_decode_failed"
+    assert result.details == {"context_id": "context", "session_id": "session",
         "failure_stage": "decode_texture_readback", "replay_state_restored": True, "restored_event_id": 11}
     assert active["event"] == 11

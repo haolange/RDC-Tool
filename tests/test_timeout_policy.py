@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 
 from rdc_tool import cli
 from rdc_tool.remote_bootstrap import AndroidBootstrapResult
@@ -141,8 +140,8 @@ def test_dispatch_remote_connect_uses_default_timeout_when_missing(monkeypatch) 
     live_state._runtime.remotes.clear()
     live_state._runtime.enable_remote = True
     try:
-        payload = json.loads(asyncio.run(remote_ops.dispatch("connect", {"host": "127.0.0.1", "port": 38920})))
-        assert payload["success"] is True
+        payload = asyncio.run(remote_ops.dispatch("connect", {"host": "127.0.0.1", "port": 38920}))
+        assert payload.ok is True
         assert captured["url"] == "127.0.0.1:38920"
         assert captured["timeout_ms"] == REMOTE_CONNECT_DEFAULT_TIMEOUT_MS
     finally:
