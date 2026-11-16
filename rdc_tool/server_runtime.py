@@ -53,7 +53,8 @@ from rdc_tool.context_snapshot import (
     save_context_snapshot,
     update_user_context,
 )
-from rdc_tool.preview_window import PreviewWindowHost
+from rdc_tool.platform import host as platform_host
+from rdc_tool.platform import preview as platform_preview
 from rdc_tool.core.artifact_publisher import ArtifactPublisher
 from rdc_tool.core.contracts import TSV_FORMAT_VERSION, canonical_error, env_bool
 from rdc_tool.core.errors import CoreError, RuntimeToolError
@@ -93,7 +94,7 @@ from rdc_tool.remote_bootstrap import (
     forward_android_target,
 )
 from rdc_tool.runtime_bootstrap import bootstrap_renderdoc_runtime
-from rdc_tool.runtime_paths import artifacts_dir, ensure_runtime_dirs, runtime_root
+from rdc_tool.runtime_paths import artifacts_dir, binding_module_name, ensure_runtime_dirs, runtime_root
 from rdc_tool.runtime_state import (
     append_runtime_log,
     clear_context_state,
@@ -231,7 +232,7 @@ class RuntimeState:
 @dataclass
 class PreviewBinding:
     context_id: str
-    host: PreviewWindowHost
+    host: platform_preview.PreviewWindow
     output: Any | None = None
     bound_session_id: str = ""
     bound_capture_file_id: str = ""
@@ -1439,10 +1440,20 @@ async def _create_preview_binding(
     *,
     title: str,
 ) -> PreviewBinding:
-    host = PreviewWindowHost(
-        title=title,
-        on_closed=lambda by_user, ctx=context_id: _preview_window_closed(ctx, by_user),
-    )
+    try:
+        host = platform_preview.create_preview_window(
+            title=title,
+            on_closed=lambda by_user, ctx=context_id: _preview_window_closed(ctx, by_user),
+        )
+    except platform_preview.PreviewWindowUnsupported as exc:
+        raise CoreError(
+            code="preview_unsupported_platform",
+            message=str(exc),
+            category="capability",
+            details={"capability": "preview_window", "reason": "host_has_no_native_preview_window",
+                     "source": "platform", "optional": True, "host_target": exc.host_target,
+                     "context_id": context_id, "alternative": "rd.session.observe"},
+        ) from exc
     try:
         host.start()
     except Exception as exc:  # noqa: BLE001
@@ -6211,9 +6222,10 @@ async def runtime_startup() -> None:
     ensure_runtime_dirs()
     bootstrap = bootstrap_renderdoc_runtime(probe_import=False)
     renderdoc_dir = bootstrap.pymodules_dir
-    if not (renderdoc_dir / "renderdoc.pyd").is_file():
-        _record_log("warning", f"renderdoc runtime missing: {renderdoc_dir / 'renderdoc.pyd'}")
-    for item in bootstrap.dll_dir_errors:
+    binding_path = renderdoc_dir / binding_module_name()
+    if not binding_path.is_file():
+        _record_log("warning", f"renderdoc runtime missing: {binding_path}")
+    for item in bootstrap.loader_errors:
         _record_log("warning", f"renderdoc bootstrap warning: {item}")
 
     _config = RdcToolConfig.from_env()
@@ -6580,6 +6592,15 @@ async def _core_capabilities(*, detail: str) -> Dict[str, Any]:
             reason="Requires a replay session and a capture/backend that exposes counters.",
             optional=True,
             source="renderdoc_runtime",
+        ),
+        "preview_window": _capability_entry(
+            platform_preview.preview_window_supported(),
+            reason=("Native preview windows are available on this host."
+                    if platform_preview.preview_window_supported()
+                    else "This host has no native preview window; rd.session.observe exports headless images."),
+            optional=True,
+            source="platform",
+            host_target=platform_host.host_target(),
         ),
         "artifact_dir": _runtime.config.get("artifact_dir"),
         "context_id": context_id,

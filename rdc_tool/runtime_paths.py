@@ -6,6 +6,8 @@ import os
 import sys
 from pathlib import Path
 
+from rdc_tool.platform.host import host_target
+
 
 _RDC_TOOL_ROOT_ENV = "RDC_TOOL_ROOT"
 _WARNED_ROOT_OVERRIDE = False
@@ -78,6 +80,17 @@ def android_binaries_root() -> Path:
 
 def pymodules_dir() -> Path:
     return binaries_root() / "pymodules"
+
+
+_NATIVE_FILE_NAMES = {"windows": ("renderdoc.dll", "renderdoc.pyd"), "linux": ("librenderdoc.so", "renderdoc.so")}
+
+
+def native_library_name() -> str:
+    return _NATIVE_FILE_NAMES[host_target().partition("-")[0]][0]
+
+
+def binding_module_name() -> str:
+    return _NATIVE_FILE_NAMES[host_target().partition("-")[0]][1]
 
 
 def intermediate_root() -> Path:

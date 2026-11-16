@@ -291,7 +291,7 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'parameter_raw': "detail_level (string, optional): detail_level (str, 可选, 默认 'summary'): "
                    "'summary' | 'full'",
   'returns_raw': 'ok (bool)<br>data (dict): {capabilities}; `capabilities` 至少包含 replay / remote / '
-                 'shader_debug / shader_replace / shader_compile / counters / artifact_dir / '
+                 'shader_debug / shader_replace / shader_compile / counters / preview_window（本主机是否提供原生 preview 窗口及 host_target）/ artifact_dir / '
                  'context_id / current_session_id / current_backend，并在 remote 相关场景下附带 '
                  '`remote_capability_matrix`。current_session_probe 记录当前会话探测状态及失败原因；full 的 sessions / capture_files / remote_connections 是当前进程已加载数量，不是持久登记总数。<br>artifacts (list)<br>error (dict|null)<br>meta '
                  '(dict)<br>projections (dict, 可选)',
@@ -2770,7 +2770,9 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'path_inputs': [{'name': 'out_path', 'access': 'write'}]},
  {'name': 'rd.session.open_preview',
   'group': '3.17，上下文快照工具 (Context Snapshot Tools)',
-  'description': 'Open or rebind the preview window for the selected context session.',
+  'description': 'Open or rebind the native preview window for the selected context session. Hosts without a '
+                 'native preview window (see `rd.core.get_capabilities` `preview_window`) return the capability '
+                 'error `preview_unsupported_platform`; headless `rd.session.observe` remains available.',
   'parameter_raw': 'session_id (string, optional): session_id (str, optional): must match the '
                    'current context session; otherwise select it first via '
                    '`rd.session.select_session`<br>context_id (string, optional): context_id (str, '

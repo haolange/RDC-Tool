@@ -5,10 +5,8 @@ are separate observations; an embedded commit alone never certifies a source tre
 """
 from __future__ import annotations
 
-import ctypes
 import hashlib
 import json
-import os
 from pathlib import Path
 import struct
 import sys
@@ -16,6 +14,8 @@ from typing import Any
 import zipfile
 
 from rdc_tool.android_apk_identity import read_apk_identity
+from rdc_tool.platform import native as platform_native
+from rdc_tool.runtime_paths import binding_module_name, native_library_name
 
 
 NATIVE_OUTPUTS = {
@@ -230,23 +230,6 @@ def native_manifest_status(root: Path) -> dict[str, Any]:
         return {"status": "invalid", "reason": str(exc)}
 
 
-def _loaded_renderdoc_dll() -> Path | None:
-    if os.name != "nt":
-        raise OSError("native_loader_query_unsupported")
-    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel.GetModuleHandleW.argtypes = [ctypes.c_wchar_p]
-    kernel.GetModuleHandleW.restype = ctypes.c_void_p
-    kernel.GetModuleFileNameW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_uint]
-    kernel.GetModuleFileNameW.restype = ctypes.c_uint
-    handle = kernel.GetModuleHandleW("renderdoc.dll")
-    if not handle:
-        return None
-    buffer = ctypes.create_unicode_buffer(32768)
-    if not kernel.GetModuleFileNameW(handle, buffer, len(buffer)):
-        raise OSError("loaded renderdoc.dll path is unavailable")
-    return Path(buffer.value).resolve()
-
-
 def loaded_runtime_identity(bin_dir: Path, pymod_dir: Path) -> dict[str, Any]:
     """Observe this process only; do not import RenderDoc or start a worker."""
     try:
@@ -255,7 +238,7 @@ def loaded_runtime_identity(bin_dir: Path, pymod_dir: Path) -> dict[str, Any]:
     except OSError as exc:
         return {"status": "unavailable", "reason": str(exc)}
     try:
-        dll = _loaded_renderdoc_dll()
+        dll = platform_native.loaded_library_path(native_library_name())
         module = sys.modules.get("renderdoc")
         if dll is not None:
             result["native"] = {"path": str(dll), "on_disk": _observed_file(dll)}
@@ -269,9 +252,9 @@ def loaded_runtime_identity(bin_dir: Path, pymod_dir: Path) -> dict[str, Any]:
         if dll is None:
             return {**result, "status": "not_loaded" if module is None else "unavailable",
                     "reason": "native_dll_not_loaded"}
-        matches = dll == (bin_dir / "renderdoc.dll").resolve()
+        matches = dll == (bin_dir / native_library_name()).resolve()
         if module is not None:
-            matches = matches and pyd == (pymod_dir / "renderdoc.pyd").resolve()
+            matches = matches and pyd == (pymod_dir / binding_module_name()).resolve()
         return {**result, "status": ("observed" if module is not None else "partial") if matches else "mismatch",
                 "configured_paths_match": matches, "hash_scope": "on_disk_files_at_observation"}
     except (OSError, AttributeError, TypeError) as exc:

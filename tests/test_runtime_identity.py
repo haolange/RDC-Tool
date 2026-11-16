@@ -187,7 +187,7 @@ def test_loader_diagnostic_does_not_import_renderdoc(tmp_path, monkeypatch):
     python.write_bytes(b"python")
     monkeypatch.setattr(sys, "executable", str(python))
     monkeypatch.delitem(sys.modules, "renderdoc", raising=False)
-    monkeypatch.setattr(identity, "_loaded_renderdoc_dll", lambda: None)
+    monkeypatch.setattr(identity.platform_native, "loaded_library_path", lambda name: None)
     result = identity.loaded_runtime_identity(tmp_path, tmp_path / "pymodules")
     assert result["status"] == "not_loaded"
     assert "renderdoc" not in sys.modules
@@ -199,10 +199,10 @@ def test_native_dll_is_observed_even_without_a_python_binding(tmp_path, monkeypa
     configured = tmp_path / "configured"
     actual = tmp_path / "foreign" if foreign else configured
     actual.mkdir()
-    dll = actual / "renderdoc.dll"
+    dll = actual / identity.native_library_name()
     dll.write_bytes(b"loaded native library")
     monkeypatch.delitem(sys.modules, "renderdoc", raising=False)
-    monkeypatch.setattr(identity, "_loaded_renderdoc_dll", lambda: dll.resolve())
+    monkeypatch.setattr(identity.platform_native, "loaded_library_path", lambda name: dll.resolve())
     result = identity.loaded_runtime_identity(configured, configured / "pymodules")
     assert result["status"] == ("mismatch" if foreign else "partial")
     assert result["configured_paths_match"] is (not foreign)

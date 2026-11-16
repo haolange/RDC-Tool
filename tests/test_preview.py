@@ -9,7 +9,7 @@ import pytest
 
 from rdc_tool import server
 from rdc_tool.context_snapshot import clear_context_snapshot, load_context_snapshot
-from rdc_tool.preview_window import fit_content_rect, fit_size_within_bounds
+from rdc_tool.preview_geometry import fit_size_within_bounds
 from rdc_tool.runtime_state import clear_context_state, load_context_state, save_context_state
 
 
@@ -575,15 +575,9 @@ def test_choose_visual_output_target_scores_available_slot_when_rt0_is_missing(
     assert target_source == "event_output_slot"
 
 
-def test_preview_window_fit_helpers_cover_screen_cap_and_centering() -> None:
+def test_preview_window_fit_respects_screen_cap() -> None:
     assert fit_size_within_bounds(2048, 2048, 960, 540) == (540, 540)
     assert fit_size_within_bounds(1280, 720, 960, 540) == (960, 540)
-    assert fit_content_rect(960, 540, 2048, 2048) == {
-        "x": 210,
-        "y": 0,
-        "width": 540,
-        "height": 540,
-    }
 
 
 def test_preview_region_rects_clip_and_intersect() -> None:
