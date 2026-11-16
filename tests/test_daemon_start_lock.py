@@ -231,6 +231,42 @@ def _line(process, timeout=20):
     return text.strip()
 
 
+def _stop_forensics(context):
+    """What the OS reports about a daemon whose stop could not be confirmed."""
+    from rdc_tool.daemon import state as daemon_state
+    from rdc_tool.platform import process
+    try:
+        state = daemon_state.load_state(context)
+    except Exception as exc:  # noqa: BLE001 - reported, not handled
+        return {'state': repr(exc)}
+    if not state:
+        return {'state': 'missing'}
+    pid = state['pid']
+    report = {'pid': pid, 'probe': process.probe(daemon_state.daemon_process(state)).value,
+              'endpoint_exists': Path(state['endpoint']).exists()}
+    proc = Path('/proc') / str(pid)
+    try:
+        status = (proc / 'status').read_text(errors='replace').splitlines()
+        report['status'] = [line for line in status if line.split(':')[0] in {'State', 'PPid', 'Threads', 'SigPnd', 'ShdPnd'}]
+        report['threads'] = {task.name: (task / 'stat').read_text().rsplit(') ', 1)[1].split()[0] + ' ' + (task / 'wchan').read_text()
+                             for task in (proc / 'task').iterdir()}
+    except OSError as exc:
+        report['proc'] = repr(exc)
+    try:
+        report['status_request'] = client.daemon_request('status', params={}, state=state, context=context, timeout=2).get('ok')
+    except Exception as exc:  # noqa: BLE001 - reported, not handled
+        report['status_request'] = repr(exc)
+    return report
+
+
+def _clear_and_stop(context):
+    cleared = client.clear_context(context)
+    assert cleared[0], cleared
+    started = time.monotonic()
+    stopped, message = client.stop_daemon(context)
+    assert stopped, {'message': message, 'elapsed_s': round(time.monotonic() - started, 2), **_stop_forensics(context)}
+
+
 def _close(*processes):
     for process in processes:
         if process:
@@ -300,10 +336,7 @@ def test_slow_real_daemon_is_reused_across_processes(monkeypatch, tmp_path):
         waiter.wait(timeout=5)
     finally:
         _close(waiter, owner)
-        cleared = client.clear_context('shared')
-        assert cleared[0], cleared
-        stopped, stopped_message = client.stop_daemon('shared')
-        assert stopped, stopped_message
+        _clear_and_stop('shared')
 
 
 def test_process_default_deadline_preserves_slow_live_owner(monkeypatch, tmp_path):
@@ -343,10 +376,7 @@ def test_process_default_deadline_preserves_slow_live_owner(monkeypatch, tmp_pat
         waiter.wait(timeout=5)
     finally:
         _close(waiter, owner)
-        cleared = client.clear_context('shared')
-        assert cleared[0], cleared
-        stopped, stopped_message = client.stop_daemon('shared')
-        assert stopped, stopped_message
+        _clear_and_stop('shared')
 
 
 def test_mutex_registry_wait_also_uses_acquisition_deadline(monkeypatch):
