@@ -81,6 +81,7 @@ def test_worker_uses_source_runtime_directly(tmp_path: Path, monkeypatch) -> Non
         assert env["RDC_TOOL_RENDERDOC_PATH"] == str((source_root / "pymodules").resolve())
         assert env["RDC_TOOL_WORKER_SOURCE_MANIFEST"] == str((source_root / "manifest.runtime.json").resolve())
         assert env["RDC_TOOL_DAEMON_PID"] == str(os.getpid())
+        assert env["RDC_TOOL_DAEMON_BIRTH"] == daemon_worker.process.self_identity().birth
         if os.name == "nt":
             options = captured["kwargs"]
             assert options["creationflags"] == (daemon_worker.subprocess.CREATE_NEW_CONSOLE | daemon_worker.subprocess.CREATE_NEW_PROCESS_GROUP)

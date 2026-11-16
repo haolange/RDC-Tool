@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import ctypes
 import json
 import logging
 import os
@@ -13,6 +12,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from rdc_tool.platform import process
 from rdc_tool.core.assert_service import AssertService
 from rdc_tool import __version__ as TOOL_VERSION
 from rdc_tool.core.contracts import SCHEMA_VERSION, canonical_error, canonical_success
@@ -127,17 +127,6 @@ def _parse_json_object(raw: str, *, source: str) -> Dict[str, Any]:
     return parsed
 
 
-def _windows_command_line() -> str:
-    if os.name != "nt":
-        return ""
-    try:
-        get_command_line = ctypes.windll.kernel32.GetCommandLineW
-        get_command_line.restype = ctypes.c_wchar_p
-        return str(get_command_line() or "")
-    except Exception:
-        return ""
-
-
 def _extract_raw_args_json_from_command_line(command_line: str) -> str:
     raw = str(command_line or "")
     if not raw:
@@ -184,7 +173,7 @@ def _extract_raw_args_json_from_command_line(command_line: str) -> str:
 
 
 def _recover_args_json_from_command_line() -> str:
-    return _extract_raw_args_json_from_command_line(_windows_command_line())
+    return _extract_raw_args_json_from_command_line(process.raw_command_line() or "")
 
 
 def _load_call_args(*, args_json: Optional[str] = None, args_file: Optional[str] = None) -> Dict[str, Any]:

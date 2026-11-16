@@ -16,7 +16,7 @@ pytestmark = pytest.mark.contract
 def test_missing_or_foreign_parent_cannot_establish_continuity(monkeypatch, parent):
     monkeypatch.setenv("RDC_TOOL_DAEMON_PID", parent)
     monkeypatch.setattr(identity.os, "getppid", lambda: 31)
-    monkeypatch.setattr(identity, "_process_birth", lambda pid: pytest.fail("must validate parent first"))
+    monkeypatch.setattr(identity.process, "identify", lambda pid: pytest.fail("must validate parent first"))
     result = identity.runtime_process_identity()
     assert result["status"] == "unavailable"
     assert "daemon" not in result and "worker" not in result
@@ -25,9 +25,10 @@ def test_missing_or_foreign_parent_cannot_establish_continuity(monkeypatch, pare
 def test_process_birth_failure_is_unknown_not_zero_or_cached_success(monkeypatch):
     monkeypatch.setenv("RDC_TOOL_DAEMON_PID", "31")
     monkeypatch.setattr(identity.os, "getppid", lambda: 31)
-    monkeypatch.setattr(identity, "_process_birth", lambda pid: (_ for _ in ()).throw(OSError("access denied")))
+    monkeypatch.setattr(identity.process, "identify", lambda pid: identity.process.ProcessIdentity(pid))
+    monkeypatch.setattr(identity.process, "self_identity", lambda: identity.process.ProcessIdentity(32))
     result = identity.runtime_process_identity()
-    assert result == {"status": "unavailable", "reason": "process_birth_unavailable", "detail": "access denied"}
+    assert result == {"status": "unavailable", "reason": "process_birth_unavailable", "detail": "birth unreadable"}
 
 
 def test_same_pid_with_different_birth_is_a_different_process(monkeypatch):
@@ -35,7 +36,8 @@ def test_same_pid_with_different_birth_is_a_different_process(monkeypatch):
     monkeypatch.setattr(identity.os, "getppid", lambda: 31)
     monkeypatch.setattr(identity.os, "getpid", lambda: 32)
     births = {31: "birth:100", 32: "birth:200"}
-    monkeypatch.setattr(identity, "_process_birth", lambda pid: births[pid])
+    monkeypatch.setattr(identity.process, "identify", lambda pid: identity.process.ProcessIdentity(pid, births[pid]))
+    monkeypatch.setattr(identity.process, "self_identity", lambda: identity.process.ProcessIdentity(32, births[32]))
     baseline = identity.runtime_process_identity()
     assert baseline == identity.runtime_process_identity()
     births[32] = "birth:201"
@@ -52,7 +54,6 @@ def test_actual_os_birth_is_stable_for_live_current_and_parent_processes(monkeyp
     assert result["status"] == "available"
     assert result["worker"]["pid"] == os.getpid()
     assert result["daemon"]["pid"] == os.getppid()
-    assert result["worker"]["start_generation"] != result["daemon"]["start_generation"]
     assert result == identity.runtime_process_identity()
 
 

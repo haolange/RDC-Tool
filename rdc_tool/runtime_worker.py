@@ -9,12 +9,12 @@ import asyncio
 import json
 import os
 import sys
-import threading
-import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict
 
 from rdc_tool.io_utils import safe_json_text, safe_stream_write
+from rdc_tool.platform import process
+from rdc_tool.platform.process import ProcessIdentity
 from rdc_tool.progress import ProgressEvent, ProgressSink
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -45,36 +45,10 @@ def _context_id() -> str:
     return str(os.environ.get("RDC_TOOL_CONTEXT_ID") or "default").strip() or "default"
 
 
-def _is_pid_running(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    if os.name == "nt":
-        import ctypes
-        process_query_limited_information = 0x1000
-        handle = ctypes.windll.kernel32.OpenProcess(process_query_limited_information, False, int(pid))
-        if not handle:
-            return False
-        try:
-            code = ctypes.c_ulong()
-            if not ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
-                return True
-            return bool(code.value == 259)
-        finally:
-            ctypes.windll.kernel32.CloseHandle(handle)
-    try:
-        os.kill(pid, 0)
-    except OSError:
-        return False
-    return True
-
-
 def _watch_parent_daemon() -> None:
-    parent_pid = int(os.environ.get("RDC_TOOL_DAEMON_PID") or 0)
-    if parent_pid <= 0:
-        return
-    while _is_pid_running(parent_pid):
-        time.sleep(1.0)
-    os._exit(0)
+    parent = ProcessIdentity(int(os.environ.get("RDC_TOOL_DAEMON_PID") or 0), os.environ.get("RDC_TOOL_DAEMON_BIRTH", ""))
+    if parent.pid > 0:
+        process.watch_parent(parent, lambda: os._exit(0))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -90,8 +64,7 @@ def main(argv: list[str] | None = None) -> int:
         _emit({"kind": "startup_error", "message": f"{exc.__class__.__name__}: {exc}"})
         return 1
 
-    watcher = threading.Thread(target=_watch_parent_daemon, name="rdc-tool-worker-parent-watch", daemon=True)
-    watcher.start()
+    _watch_parent_daemon()
     from rdc_tool.runtime_identity import loaded_runtime_identity
     from rdc_tool.runtime_paths import binaries_root, pymodules_dir
 

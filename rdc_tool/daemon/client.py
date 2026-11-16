@@ -20,6 +20,8 @@ from rdc_tool.daemon.ownership import (
 )
 from rdc_tool.platform.locks import LockTimeout, path_lock
 from rdc_tool.io_utils import atomic_write_json
+from rdc_tool.platform import process
+from rdc_tool.platform.process import ProcessIdentity, SpawnProfile
 from rdc_tool.runtime_state import clear_context_state, context_log_path, context_state_path, list_context_ids
 from rdc_tool.runtime_paths import cli_runtime_dir
 from rdc_tool.runtime_worker_state import clear_worker_state, worker_state_path
@@ -225,6 +227,7 @@ def _normalize_attached_clients(value: Any) -> list[Dict[str, Any]]:
                 "client_id": str(item.get("client_id") or "").strip(),
                 "client_type": str(item.get("client_type") or "unknown").strip() or "unknown",
                 "pid": int(item.get("pid") or 0),
+                "birth": str(item.get("birth") or ""),
                 "attached_at": attached_at,
                 "last_heartbeat_at": heartbeat_at,
                 "lease_timeout_seconds": _normalize_timeout(
@@ -247,9 +250,11 @@ def _normalize_daemon_state_payload(payload: Dict[str, Any], context: Optional[s
     state["pipe_name"] = str(payload.get("pipe_name") or "").strip()
     state["token"] = str(payload.get("token") or "").strip()
     state["pid"] = int(payload.get("pid") or 0)
+    state["birth"] = str(payload.get("birth") or "")
     state["started_at"] = started_at
     state["last_activity_at"] = last_activity_at
     state["owner_pid"] = int(payload.get("owner_pid") or 0)
+    state["owner_birth"] = str(payload.get("owner_birth") or "")
     state["lease_timeout_seconds"] = _normalize_timeout(
         payload.get("lease_timeout_seconds"),
         default=DEFAULT_LEASE_TIMEOUT_S,
@@ -275,6 +280,7 @@ def _normalize_daemon_state_payload(payload: Dict[str, Any], context: Optional[s
     state["worker"] = {
         "running": False,
         "pid": 0,
+        "birth": "",
         "binaries_dir": "",
         "pymodules_dir": "",
         "source_manifest": "",
@@ -283,6 +289,7 @@ def _normalize_daemon_state_payload(payload: Dict[str, Any], context: Optional[s
         {
             "running": bool(worker.get("running")),
             "pid": int(worker.get("pid") or 0),
+            "birth": str(worker.get("birth") or ""),
             "binaries_dir": str(worker.get("binaries_dir") or ""),
             "pymodules_dir": str(worker.get("pymodules_dir") or ""),
             "source_manifest": str(worker.get("source_manifest") or ""),
@@ -328,15 +335,8 @@ def context_occupies_capacity(context: Optional[str] = None) -> bool:
     state = load_daemon_state(context=context)
     if not state:
         return False
-    worker = state.get("worker") if isinstance(state.get("worker"), dict) else {}
-    for pid in (
-        int(state.get("pid") or 0),
-        int(state.get("owner_pid") or 0),
-        int(worker.get("pid") or 0),
-    ):
-        if pid > 0 and _is_process_running(pid):
-            return True
-    return False
+    return any(identity.pid > 0 and process.is_alive(identity)
+               for identity in (_daemon_process(state), _owner_process(state), _worker_process(state)))
 
 
 def list_occupying_context_ids() -> list[str]:
@@ -468,50 +468,21 @@ def _context_has_unreleased_resources(context: str) -> bool:
     return False
 
 
-def _is_windows_process_running(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    try:
-        import ctypes
-
-        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-        kernel.OpenProcess.argtypes = [ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong]
-        kernel.OpenProcess.restype = ctypes.c_void_p
-        kernel.GetExitCodeProcess.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong)]
-        kernel.CloseHandle.argtypes = [ctypes.c_void_p]
-        handle = kernel.OpenProcess(0x1000, False, int(pid))
-        if not handle:
-            # Access denied or an unqueryable process is not proof of exit.
-            return ctypes.get_last_error() != 87  # ERROR_INVALID_PARAMETER: no such PID
-        code = ctypes.c_ulong()
-        ok = kernel.GetExitCodeProcess(handle, ctypes.byref(code))
-        kernel.CloseHandle(handle)
-        if not ok:
-            return True
-        return bool(code.value == 259)
-    except Exception:
-        return True
+def _process_identity(pid: Any, birth: Any) -> ProcessIdentity:
+    return ProcessIdentity(int(pid or 0), str(birth or ""))
 
 
-def _kill_process(pid: int) -> bool:
-    try:
-        proc = subprocess.run(
-            ["taskkill", "/PID", str(int(pid)), "/F", "/T"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
-            timeout=3,
-            creationflags=0x08000000 if os.name == "nt" else 0,
-        )
-        return proc.returncode == 0
-    except Exception:
-        return False
+def _daemon_process(state: Dict[str, Any]) -> ProcessIdentity:
+    return _process_identity(state.get("pid"), state.get("birth"))
 
 
-def _is_process_running(pid: int) -> bool:
-    if os.name == "nt":
-        return _is_windows_process_running(pid)
-    return False
+def _owner_process(state: Dict[str, Any]) -> ProcessIdentity:
+    return _process_identity(state.get("owner_pid"), state.get("owner_birth"))
+
+
+def _worker_process(state: Dict[str, Any]) -> ProcessIdentity:
+    worker = state.get("worker") if isinstance(state.get("worker"), dict) else {}
+    return _process_identity(worker.get("pid"), worker.get("birth"))
 
 
 def owner_lost_should_stop(
@@ -530,8 +501,8 @@ def owner_lost_should_stop(
 
 
 def _is_client_live(client: Dict[str, Any], now_ms: int) -> bool:
-    pid = int(client.get("pid") or 0)
-    if pid > 0 and not _is_process_running(pid):
+    identity = _process_identity(client.get("pid"), client.get("birth"))
+    if identity.pid > 0 and not process.is_alive(identity):
         return False
     heartbeat_ms = _iso_to_ms(client.get("last_heartbeat_at"))
     lease_ms = _normalize_timeout(
@@ -547,8 +518,8 @@ def _state_should_reap(state: Dict[str, Any], now_ms: Optional[int] = None) -> b
     if not state:
         return True
     current_ms = _now_ms() if now_ms is None else int(now_ms)
-    pid = int(state.get("pid") or 0)
-    if pid <= 0 or not _is_process_running(pid):
+    daemon = _daemon_process(state)
+    if daemon.pid <= 0 or not process.is_alive(daemon):
         return True
 
     clients = _normalize_attached_clients(state.get("attached_clients"))
@@ -559,10 +530,10 @@ def _state_should_reap(state: Dict[str, Any], now_ms: Optional[int] = None) -> b
     last_activity_ms = _iso_to_ms(state.get("last_activity_at"))
     if last_activity_ms <= 0:
         last_activity_ms = _iso_to_ms(state.get("started_at"))
-    owner_pid = int(state.get("owner_pid") or 0)
+    owner = _owner_process(state)
     if owner_lost_should_stop(
-        owner_pid=owner_pid,
-        owner_running=_is_process_running(owner_pid) if owner_pid > 0 else True,
+        owner_pid=owner.pid,
+        owner_running=process.is_alive(owner) if owner.pid > 0 else True,
         has_live_clients=False,
         last_activity_ms=last_activity_ms,
         now_ms=current_ms,
@@ -640,30 +611,19 @@ def _wait_for_daemon_ready(state: Dict[str, Any]) -> bool:
     return False
 
 
-def _wait_for_pid_exit(pid: int, timeout_s: float) -> bool:
-    if pid <= 0:
-        return True
-    deadline = time.time() + max(0.0, timeout_s)
-    while time.time() < deadline:
-        if not _is_process_running(pid):
-            return True
-        time.sleep(0.2)
-    return not _is_process_running(pid)
-
-
-def _shutdown_stateful_daemon(pid: int | None, state: Dict[str, Any], context: str) -> bool:
-    if pid and _is_process_running(pid):
+def _shutdown_stateful_daemon(daemon: ProcessIdentity, state: Dict[str, Any], context: str) -> bool:
+    if daemon.pid > 0 and process.is_alive(daemon):
         for _ in range(4):
             try:
                 daemon_request("shutdown", params={}, state=state, context=context)
             except Exception:
                 pass
-            if _wait_for_pid_exit(pid, 2.0):
+            if process.wait_exit(daemon, 2.0):
                 return True
             time.sleep(0.5)
 
-        _kill_process(pid)
-        return _wait_for_pid_exit(pid, 3.0)
+        process.kill_tree(daemon)
+        return process.wait_exit(daemon, 3.0)
     return True
 
 
@@ -696,25 +656,24 @@ def cleanup_stale_daemon_states(context: Optional[str] = None) -> Dict[str, list
         if not valid:
             live_contexts.add(ctx)
             continue
-        pid = int(state.get("pid") or 0)
-        worker = state.get("worker") if isinstance(state.get("worker"), dict) else {}
-        worker_pid = int(worker.get("pid") or 0)
+        daemon = _daemon_process(state)
+        worker = _worker_process(state)
 
         if _state_should_reap(state):
-            if pid > 0 and _is_process_running(pid):
+            if daemon.pid > 0 and process.is_alive(daemon):
                 try:
                     daemon_request("shutdown", params={}, state=state, context=ctx)
                 except Exception:
                     pass
-                if not _wait_for_pid_exit(pid, MAX_STOP_TIMEOUT_S):
-                    if _kill_process(pid):
-                        cleaned["killed_pids"].append(str(pid))
-                        _wait_for_pid_exit(pid, 3.0)
-            if worker_pid > 0 and _is_process_running(worker_pid):
-                if _kill_process(worker_pid):
-                    cleaned["killed_pids"].append(str(worker_pid))
-                    _wait_for_pid_exit(worker_pid, 3.0)
-            if (pid > 0 and _is_process_running(pid)) or (worker_pid > 0 and _is_process_running(worker_pid)):
+                if not process.wait_exit(daemon, MAX_STOP_TIMEOUT_S):
+                    if process.kill_tree(daemon):
+                        cleaned["killed_pids"].append(str(daemon.pid))
+                        process.wait_exit(daemon, 3.0)
+            if worker.pid > 0 and process.is_alive(worker):
+                if process.kill_tree(worker):
+                    cleaned["killed_pids"].append(str(worker.pid))
+                    process.wait_exit(worker, 3.0)
+            if (daemon.pid > 0 and process.is_alive(daemon)) or (worker.pid > 0 and process.is_alive(worker)):
                 live_contexts.add(ctx)
                 continue
             if owner_is_busy(path, ctx):
@@ -788,8 +747,8 @@ def _ensure_daemon_locked(
     if not existing and (status == "invalid" or owner_is_busy(state_path, chosen_ctx)):
         raise DaemonOwnerUnavailable(chosen_ctx, state_path, "invalid_state" if status == "invalid" else "owner_state_missing")
     if existing:
-        pid = int(existing.get("pid") or 0)
-        if pid > 0 and _is_process_running(pid):
+        daemon = _daemon_process(existing)
+        if daemon.pid > 0 and process.is_alive(daemon):
             if owner_pid is not None and int(existing.get("owner_pid") or 0) == 0:
                 try:
                     claimed = daemon_request(
@@ -814,9 +773,8 @@ def _ensure_daemon_locked(
             if owner_is_busy(state_path, chosen_ctx):
                 raise DaemonOwnerUnavailable(chosen_ctx, state_path, "owner_exit_unconfirmed")
             cleanup_stale_daemon_states(context=chosen_ctx)
-            worker = existing.get("worker") if isinstance(existing.get("worker"), dict) else {}
-            worker_pid = int(worker.get("pid") or 0)
-            if worker_pid > 0 and _is_process_running(worker_pid):
+            worker = _worker_process(existing)
+            if worker.pid > 0 and process.is_alive(worker):
                 raise DaemonOwnerUnavailable(chosen_ctx, state_path, "worker_exit_unconfirmed")
             remaining_status, _ = _load_json_with_status(state_path)
             if remaining_status != "missing":
@@ -851,6 +809,7 @@ def _ensure_daemon_locked(
         "stdin": subprocess.DEVNULL,
         "stdout": subprocess.DEVNULL,
         "stderr": subprocess.DEVNULL,
+        **process.popen_options(SpawnProfile.DAEMON),
     }
     env = dict(os.environ)
     tools_root = str(env.get("RDC_TOOL_ROOT", "")).strip()
@@ -859,15 +818,18 @@ def _ensure_daemon_locked(
         root_path = str(Path(tools_root).resolve())
         env["PYTHONPATH"] = root_path + os.pathsep + py_path if py_path else root_path
     popen_kwargs["env"] = env
-    if os.name == "nt":
-        popen_kwargs["creationflags"] = 0x08000000 | 0x00000200  # CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
 
     proc = subprocess.Popen(cmd, **popen_kwargs)
+    try:
+        daemon = process.identify(proc.pid)
+    except ProcessLookupError:
+        daemon = ProcessIdentity(int(proc.pid))
     state = _normalize_daemon_state_payload(
         {
             "pipe_name": chosen_pipe,
             "token": chosen_token,
-            "pid": int(proc.pid),
+            "pid": daemon.pid,
+            "birth": daemon.birth,
             "started_at": _utc_now_iso(),
             "last_activity_at": _utc_now_iso(),
             "daemon_context": chosen_ctx,
@@ -881,9 +843,8 @@ def _ensure_daemon_locked(
     )
 
     if not _wait_for_daemon_ready(state):
-        if proc and proc.pid:
-            _kill_process(int(proc.pid))
-        if not _wait_for_pid_exit(int(proc.pid), 3.0) or owner_is_busy(state_path, chosen_ctx):
+        process.kill_tree(daemon)
+        if not process.wait_exit(daemon, 3.0) or owner_is_busy(state_path, chosen_ctx):
             raise DaemonOwnerUnavailable(chosen_ctx, state_path, "startup_exit_unconfirmed")
         clear_daemon_state(context=chosen_ctx, expected=state)
         clear_session_state(context=chosen_ctx)
@@ -1021,7 +982,7 @@ def clear_context(context: Optional[str] = "default") -> Tuple[bool, str, Dict[s
     try:
         response = daemon_request("clear_context", params={}, context=chosen_ctx, state=state)
     except Exception:
-        if _is_process_running(int(state.get("pid") or 0)) or owner_is_busy(_daemon_state_path(chosen_ctx), chosen_ctx):
+        if process.is_alive(_daemon_process(state)) or owner_is_busy(_daemon_state_path(chosen_ctx), chosen_ctx):
             return False, "context clear failed; owner termination is unconfirmed", {"state": state}
         cleanup_stale_daemon_states(context=chosen_ctx)
         refreshed = load_daemon_state(context=chosen_ctx)
@@ -1068,16 +1029,15 @@ def _stop_daemon_locked(context: Optional[str]) -> Tuple[bool, str]:
         clear_worker_state(context=chosen_ctx)
         return False, "no active daemon"
 
-    pid = int(st.get("pid") or 0)
-    worker = st.get("worker") if isinstance(st.get("worker"), dict) else {}
-    worker_pid = int(worker.get("pid") or 0)
-    stopped = _shutdown_stateful_daemon(pid, st, chosen_ctx)
+    daemon = _daemon_process(st)
+    worker = _worker_process(st)
+    stopped = _shutdown_stateful_daemon(daemon, st, chosen_ctx)
 
-    if not stopped or (pid and _is_process_running(pid)):
+    if not stopped or (daemon.pid > 0 and process.is_alive(daemon)):
         return False, "daemon stop timed out"
 
-    if worker_pid > 0 and _is_process_running(worker_pid):
-        if not _kill_process(worker_pid) or not _wait_for_pid_exit(worker_pid, 3.0):
+    if worker.pid > 0 and process.is_alive(worker):
+        if not process.kill_tree(worker) or not process.wait_exit(worker, 3.0):
             return False, "worker stop timed out"
 
     if not wait_for_owner_exit(_daemon_state_path(chosen_ctx), chosen_ctx):

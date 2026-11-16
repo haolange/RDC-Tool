@@ -14,7 +14,8 @@ if str(SCRIPT_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPT_ROOT))
 
 from scripts._shared import tools_root
-from rdc_tool.daemon.client import _is_process_running
+from rdc_tool.platform import process
+from rdc_tool.platform.process import ProcessIdentity
 from rdc_tool.runtime_paths import worker_state_dir
 
 
@@ -64,8 +65,8 @@ def _collect_worker_targets(root: Path) -> list[Path]:
                 payload = json.loads(path.read_text(encoding="utf-8"))
             except Exception:
                 payload = {}
-            pid = int((payload or {}).get("pid") or 0)
-            running = bool((payload or {}).get("running")) and _is_process_running(pid)
+            worker = ProcessIdentity(int((payload or {}).get("pid") or 0), str((payload or {}).get("birth") or ""))
+            running = bool((payload or {}).get("running")) and worker.pid > 0 and process.is_alive(worker)
             if running:
                 continue
             out.append(path.resolve())

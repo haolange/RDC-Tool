@@ -55,6 +55,7 @@ from rdc_tool.context_snapshot import (
 )
 from rdc_tool.platform import host as platform_host
 from rdc_tool.platform import preview as platform_preview
+from rdc_tool.platform import process as platform_process
 from rdc_tool.core.artifact_publisher import ArtifactPublisher
 from rdc_tool.core.contracts import TSV_FORMAT_VERSION, canonical_error, env_bool
 from rdc_tool.core.errors import CoreError, RuntimeToolError
@@ -6958,37 +6959,15 @@ def _tool_graph_payload(*, query: str = "", namespace: str = "", intent: str = "
     return {"tools": tools, "edges": edges}
 
 
-def _process_memory_bytes() -> int:
-    if os.name != "nt":
-        return 0
-    class _ProcessMemoryCounters(ctypes.Structure):
-        _fields_ = [
-            ("cb", ctypes.c_ulong),
-            ("PageFaultCount", ctypes.c_ulong),
-            ("PeakWorkingSetSize", ctypes.c_size_t),
-            ("WorkingSetSize", ctypes.c_size_t),
-            ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
-            ("QuotaPagedPoolUsage", ctypes.c_size_t),
-            ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
-            ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
-            ("PagefileUsage", ctypes.c_size_t),
-            ("PeakPagefileUsage", ctypes.c_size_t),
-        ]
-    counters = _ProcessMemoryCounters()
-    counters.cb = ctypes.sizeof(_ProcessMemoryCounters)
-    handle = ctypes.windll.kernel32.GetCurrentProcess()
-    ok = ctypes.windll.psapi.GetProcessMemoryInfo(handle, ctypes.byref(counters), counters.cb)
-    if not ok:
-        return 0
-    return int(counters.WorkingSetSize)
-
-
 def _runtime_metrics_payload(context_id: Optional[str] = None) -> Dict[str, Any]:
     ctx = normalize_context_id(context_id or _runtime_context_id())
     state = _sync_context_metrics(ctx)
     metrics = dict(state.get("metrics") or {})
     metrics["operation_duration_summary"] = summarize_operation_durations(metrics.get("recent_operation_duration_ms") or [])
-    metrics["process_memory_bytes"] = _process_memory_bytes()
+    memory = platform_process.memory_bytes()
+    metrics["process_memory_bytes"] = memory
+    if memory is None:
+        metrics["process_memory_unavailable_reason"] = f"host {platform_host.host_target()} does not report process memory"
     metrics["live_runtime_session_count"] = len(_runtime.replays)
     metrics["live_runtime_capture_count"] = len(_runtime.captures)
     metrics["live_remote_count"] = len(_runtime.remotes)

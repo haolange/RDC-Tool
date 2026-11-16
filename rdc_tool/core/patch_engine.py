@@ -26,9 +26,9 @@ import subprocess
 import time
 import uuid
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from rdc_tool.platform import process
 from rdc_tool.core.session_manager import SessionManager
 from rdc_tool.runtime_paths import cli_runtime_dir
 from rdc_tool.models import (
@@ -1806,7 +1806,7 @@ class PatchEngine:
         output_path = runtime_dir / f"{stem}.spvasm"
         try:
             source_path.write_bytes(payload)
-            proc = subprocess.run(
+            proc = process.run_tool(
                 [tool, str(source_path), "--raw-id", "-o", str(output_path)],
                 capture_output=True,
                 text=True,
@@ -1956,7 +1956,7 @@ class PatchEngine:
         output_path = runtime_dir / f"{stem}.spv"
         try:
             source_path.write_text(str(source or ""), encoding="utf-8")
-            proc = subprocess.run(
+            proc = process.run_tool(
                 [tool, str(source_path), "-o", str(output_path)],
                 capture_output=True,
                 text=True,

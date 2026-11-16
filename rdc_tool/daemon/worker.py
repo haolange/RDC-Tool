@@ -15,6 +15,8 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from rdc_tool.io_utils import safe_json_text
+from rdc_tool.platform import process
+from rdc_tool.platform.process import SpawnProfile
 from rdc_tool.progress import ProgressEvent, ProgressSink
 from rdc_tool.runtime_paths import binaries_root, pymodules_dir
 from rdc_tool.runtime_worker_state import clear_worker_state, save_worker_state
@@ -50,6 +52,7 @@ class RuntimeWorkerProcess:
         self._io_lock = threading.Lock()
         self._request_seq = 0
         self._runtime: Optional[Dict[str, Any]] = None
+        self._birth = ""
 
     def is_running(self) -> bool:
         return self._proc is not None and self._proc.poll() is None
@@ -59,6 +62,7 @@ class RuntimeWorkerProcess:
         return {
             "running": self.is_running(),
             "pid": int(self._proc.pid) if self._proc and self.is_running() else 0,
+            "birth": self._birth if self.is_running() else "",
             "binaries_dir": runtime.get("binaries_dir", "") if runtime else "",
             "pymodules_dir": runtime.get("pymodules_dir", "") if runtime else "",
             "source_manifest": runtime.get("source_manifest", "") if runtime else "",
@@ -101,7 +105,9 @@ class RuntimeWorkerProcess:
         }
         env = dict(os.environ)
         env["RDC_TOOL_CONTEXT_ID"] = self.context_id
-        env["RDC_TOOL_DAEMON_PID"] = str(os.getpid())
+        daemon = process.self_identity()
+        env["RDC_TOOL_DAEMON_PID"] = str(daemon.pid)
+        env["RDC_TOOL_DAEMON_BIRTH"] = daemon.birth
         env["RDC_TOOL_RUNTIME_DLL_DIR"] = runtime["binaries_dir"]
         env["RDC_TOOL_RENDERDOC_PATH"] = runtime["pymodules_dir"]
         env["RDC_TOOL_WORKER_SOURCE_MANIFEST"] = runtime["source_manifest"]
@@ -120,15 +126,8 @@ class RuntimeWorkerProcess:
             "encoding": "utf-8",
             "bufsize": 1,
             "env": env,
+            **process.popen_options(SpawnProfile.WORKER),
         }
-        if os.name == "nt":
-            # ADB children need a real console for reliable captured output.
-            # Own it in the worker and hide it at creation; children inherit it.
-            startup = subprocess.STARTUPINFO()
-            startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-            startup.wShowWindow = subprocess.SW_HIDE
-            popen_kwargs["startupinfo"] = startup
-            popen_kwargs["creationflags"] = subprocess.CREATE_NEW_CONSOLE | subprocess.CREATE_NEW_PROCESS_GROUP
 
         proc = subprocess.Popen(
             [sys.executable, "-m", "rdc_tool.runtime_worker", "--context-id", self.context_id],
@@ -136,6 +135,10 @@ class RuntimeWorkerProcess:
         )
         assert proc.stdout is not None
         self._proc = proc
+        try:
+            self._birth = process.identify(proc.pid).birth
+        except ProcessLookupError:
+            self._birth = ""
         self._runtime = runtime
         self._queue = queue.Queue()
         self._reader_thread = threading.Thread(

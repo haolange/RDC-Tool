@@ -5,6 +5,9 @@ from __future__ import annotations
 import ctypes
 import errno
 import fcntl
+import os
+import signal
+from functools import cache
 from pathlib import Path
 from typing import Any
 
@@ -55,3 +58,57 @@ def loaded_library_path(file_name: str) -> Path | None:
     if len(paths) > 1:
         raise OSError(f"multiple {file_name} libraries are loaded: {sorted(map(str, paths))}")
     return next(iter(paths), None)
+
+
+_PROC = Path("/proc")
+
+
+@cache
+def _boot_id() -> str:
+    return (_PROC / "sys/kernel/random/boot_id").read_text(encoding="ascii").strip()
+
+
+def process_birth(pid: int) -> str | None:
+    if not (_PROC / "self/stat").is_file():
+        raise OSError("process birth requires /proc")
+    try:
+        stat = (_PROC / str(pid) / "stat").read_text(encoding="utf-8", errors="replace")
+    except FileNotFoundError:
+        return None
+    fields = stat[stat.rindex(")") + 2:].split()
+    if fields[0] in {"Z", "X"}:
+        return None
+    return f"linux-start-ticks:{_boot_id()}:{fields[19]}"
+
+
+def kill_tree(pid: int) -> bool:
+    try:
+        group = os.getpgid(pid)
+        if group == pid and group != os.getpgrp():
+            os.killpg(group, signal.SIGKILL)
+        else:
+            os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def popen_options(profile: str) -> dict[str, Any]:
+    # A detached daemon leads its own group; its worker stays in that group so
+    # one killpg reaps both, matching taskkill /T on Windows.
+    return {"start_new_session": True} if profile == "daemon" else {}
+
+
+def memory_bytes() -> int | None:
+    try:
+        status = (_PROC / "self/status").read_text(encoding="ascii", errors="replace")
+    except OSError:
+        return None
+    for line in status.splitlines():
+        if line.startswith("VmRSS:"):
+            return int(line.split()[1]) * 1024
+    return None
+
+
+def raw_command_line() -> str | None:
+    return None

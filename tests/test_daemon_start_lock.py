@@ -177,7 +177,7 @@ import json,os,sys,time
 from pathlib import Path
 sys.path.insert(0,sys.argv[1])
 from rdc_tool.daemon import client
-from rdc_tool.runtime_process_identity import _process_birth
+from rdc_tool.platform import process
 client.STATE_DIR=Path(sys.argv[2])
 mode=sys.argv[3]
 if mode=='hold':
@@ -205,7 +205,7 @@ else:
   if mode!='bounded':raise
   print(json.dumps({'code':exc.code,'elapsed':time.monotonic()-started}),flush=True)
   sys.exit(0)
- print(json.dumps({'ok':ok,'pid':state.get('pid'),'birth':_process_birth(state['pid']),'elapsed':time.monotonic()-started}),flush=True)
+ print(json.dumps({'ok':ok,'pid':state.get('pid'),'birth':process.identify(state['pid']).birth,'elapsed':time.monotonic()-started}),flush=True)
 '''
 
 
@@ -308,7 +308,7 @@ def test_slow_real_daemon_is_reused_across_processes(monkeypatch, tmp_path):
 
 
 def test_process_default_deadline_preserves_slow_live_owner(monkeypatch, tmp_path):
-    from rdc_tool.runtime_process_identity import _process_birth
+    from rdc_tool.platform import process
     monkeypatch.setenv('RDC_TOOL_INTERMEDIATE_ROOT', str(tmp_path))
     monkeypatch.setattr(client, 'STATE_DIR', tmp_path / 'runtime' / 'rdc_tool_cli')
     owner = _spawn(tmp_path, 'slow')
@@ -323,7 +323,7 @@ def test_process_default_deadline_preserves_slow_live_owner(monkeypatch, tmp_pat
             state = client.load_daemon_state('shared')
             time.sleep(.05)
         assert state
-        birth = _process_birth(state['pid'])
+        birth = process.identify(state['pid']).birth
         waiter = _spawn(tmp_path, 'bounded')
         assert _line(waiter) == 'starting'
         result = json.loads(_line(waiter, timeout=40))
@@ -336,7 +336,7 @@ def test_process_default_deadline_preserves_slow_live_owner(monkeypatch, tmp_pat
         assert response['ok']
         current = response['result']['state']
         assert (current['pid'], current['pipe_name']) == (state['pid'], state['pipe_name'])
-        assert _process_birth(current['pid']) == birth
+        assert process.identify(current['pid']).birth == birth
         owner.stdin.write('release\n')
         owner.stdin.flush()
         published = json.loads(_line(owner))

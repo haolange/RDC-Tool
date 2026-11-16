@@ -6,13 +6,13 @@ import hashlib
 import logging
 import re
 import shlex
-import subprocess
 import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from rdc_tool.platform import process
 from rdc_tool.core.renderdoc_status import build_renderdoc_error_details, status_ok as _rd_status_ok, status_text as _rd_status_text
 from rdc_tool.models import (
     BackendType,
@@ -482,7 +482,7 @@ class SessionManager:
             return base_cmd + ["shell", "run-as", package_name, *args]
 
         def run(command: list[str]) -> Any:
-            return subprocess.run(command, check=False, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30)
+            return process.run_tool(command, check=False, capture_output=True, text=True, timeout=30)
 
         private_root = run(app_command("pwd"))
         remote_root = str(private_root.stdout or "").strip()
@@ -532,8 +532,8 @@ class SessionManager:
         # ADB sync transfers file bytes without sending them through shell stdin,
         # whose Windows transport can normalize CRLF even without a PTY.
         try:
-            pushed = subprocess.run(base_cmd + ["push", str(rdc_path), shell_source], check=False,
-                                    stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=240)
+            pushed = process.run_tool(base_cmd + ["push", str(rdc_path), shell_source], check=False,
+                                      capture_output=True, text=True, timeout=240)
         except BaseException as error:
             raise RuntimeError(f"Android capture sync outcome unconfirmed; retain {shell_dir}: {error}") from error
         if pushed.returncode:
@@ -554,8 +554,7 @@ class SessionManager:
         command = base_cmd + ["shell", f"cat {shlex.quote(shell_source)} | "
                               f"run-as {package_name} sh -c {shlex.quote(script)}"]
         try:
-            transferred = subprocess.run(command, check=False, stdin=subprocess.DEVNULL,
-                                         capture_output=True, text=True, timeout=60)
+            transferred = process.run_tool(command, check=False, capture_output=True, text=True, timeout=60)
         except BaseException as error:
             # Killing/joining an ADB client is not a device-writer exit receipt.
             # Retain the exact recovery asset rather than unlinking a live file.

@@ -13,17 +13,19 @@ from multiprocessing.connection import Listener
 from pathlib import Path
 from typing import Any, Dict
 
-from rdc_tool.context_snapshot import clear_context_snapshot, load_context_snapshot
+from rdc_tool.context_snapshot import clear_context_snapshot
 from rdc_tool.daemon.client import (
     DEFAULT_IDLE_TIMEOUT_S,
     DEFAULT_LEASE_TIMEOUT_S,
     _context_has_unreleased_resources,
-    _is_process_running,
+    _owner_process,
+    _process_identity,
     owner_lost_should_stop,
     save_daemon_state,
 )
 from rdc_tool.daemon.ownership import OwnerLease
 from rdc_tool.daemon.worker import RuntimeWorkerProcess
+from rdc_tool.platform import process
 from rdc_tool.progress import ProgressEvent, ProgressSink
 from rdc_tool.runtime_paths import cli_runtime_dir
 from rdc_tool.runtime_state import clear_context_state, load_context_state, save_context_state
@@ -78,6 +80,16 @@ def _normalize_context(context: str) -> str:
     return ctx if ctx and ctx.lower() != "default" else "default"
 
 
+def _resolved_birth(pid: int) -> str:
+    """Birth of a process named by a caller; empty when it is absent or unreadable."""
+    if pid <= 0:
+        return ""
+    try:
+        return process.identify(pid).birth
+    except ProcessLookupError:
+        return ""
+
+
 def _daemon_state_path(context: str) -> Path:
     ctx = _normalize_context(context)
     state_dir = cli_runtime_dir()
@@ -103,6 +115,7 @@ class DaemonRuntime(ProgressSink):
         self.address = rf"\\.\pipe\{pipe_name}"
         self.daemon_context = _normalize_context(daemon_context)
         self.owner_pid = int(owner_pid) if owner_pid else 0
+        self.owner_birth = _resolved_birth(self.owner_pid)
         self.lease_timeout_seconds = _normalize_timeout(
             lease_timeout_seconds,
             default=DEFAULT_LEASE_TIMEOUT_S,
@@ -120,9 +133,11 @@ class DaemonRuntime(ProgressSink):
             "pipe_name": pipe_name,
             "token": token,
             "pid": int(os.getpid()),
+            "birth": process.self_identity().birth,
             "started_at": now_iso,
             "last_activity_at": now_iso,
             "owner_pid": self.owner_pid,
+            "owner_birth": self.owner_birth,
             "lease_timeout_seconds": self.lease_timeout_seconds,
             "idle_timeout_seconds": self.idle_timeout_seconds,
             "attached_clients": [],
@@ -140,6 +155,7 @@ class DaemonRuntime(ProgressSink):
             "worker": {
                 "running": False,
                 "pid": 0,
+                "birth": "",
                 "binaries_dir": "",
                 "pymodules_dir": "",
                 "source_manifest": "",
@@ -176,8 +192,8 @@ class DaemonRuntime(ProgressSink):
         for item in items:
             if not isinstance(item, dict):
                 continue
-            pid = int(item.get("pid") or 0)
-            if pid > 0 and not _is_process_running(pid):
+            client = _process_identity(item.get("pid"), item.get("birth"))
+            if client.pid > 0 and not process.is_alive(client):
                 continue
             lease_ms = _normalize_timeout(
                 item.get("lease_timeout_seconds"),
@@ -190,7 +206,8 @@ class DaemonRuntime(ProgressSink):
                 {
                     "client_id": str(item.get("client_id") or "").strip(),
                     "client_type": str(item.get("client_type") or "unknown").strip() or "unknown",
-                    "pid": pid,
+                    "pid": client.pid,
+                    "birth": client.birth,
                     "attached_at": str(item.get("attached_at") or _utc_now_iso()),
                     "last_heartbeat_at": str(item.get("last_heartbeat_at") or _utc_now_iso()),
                     "lease_timeout_seconds": _normalize_timeout(
@@ -309,13 +326,15 @@ class DaemonRuntime(ProgressSink):
             worker = dict(self._worker.snapshot())
         else:
             worker = dict(load_worker_state(self.daemon_context) or {})
-            pid = int(worker.get("pid") or 0)
-            worker["running"] = bool(worker.get("running")) and _is_process_running(pid)
+            identity = _process_identity(worker.get("pid"), worker.get("birth"))
+            worker["running"] = bool(worker.get("running")) and identity.pid > 0 and process.is_alive(identity)
             if not worker["running"]:
                 worker["pid"] = 0
+                worker["birth"] = ""
         return {
             "running": bool(worker.get("running")),
             "pid": int(worker.get("pid") or 0),
+            "birth": str(worker.get("birth") or ""),
             "binaries_dir": str(worker.get("binaries_dir") or ""),
             "pymodules_dir": str(worker.get("pymodules_dir") or ""),
             "source_manifest": str(worker.get("source_manifest") or ""),
@@ -397,6 +416,7 @@ class DaemonRuntime(ProgressSink):
             "client_id": client_id,
             "client_type": str(params.get("client_type") or "unknown").strip() or "unknown",
             "pid": int(params.get("pid") or 0),
+            "birth": _resolved_birth(int(params.get("pid") or 0)),
             "attached_at": now_iso,
             "last_heartbeat_at": now_iso,
             "lease_timeout_seconds": _normalize_timeout(
@@ -422,7 +442,9 @@ class DaemonRuntime(ProgressSink):
             if current > 0 and current != owner_pid:
                 return {"ok": False, "error": {"code": "conflict", "message": "owner_pid already set"}}
             self.owner_pid = owner_pid
+            self.owner_birth = _resolved_birth(owner_pid)
             self.state["owner_pid"] = owner_pid
+            self.state["owner_birth"] = self.owner_birth
             self.state["last_activity_at"] = _utc_now_iso()
         self._persist_state()
         return self._status_payload()
@@ -441,6 +463,7 @@ class DaemonRuntime(ProgressSink):
                     updated = dict(item)
                     if int(params.get("pid") or 0):
                         updated["pid"] = int(params.get("pid") or 0)
+                        updated["birth"] = _resolved_birth(updated["pid"])
                     updated["last_heartbeat_at"] = now_iso
                     clients.append(updated)
                     found = True
@@ -558,10 +581,10 @@ class DaemonRuntime(ProgressSink):
                     attached = list(self.state.get("attached_clients", []))
                     active_request_count = int(self.state.get("active_request_count") or 0)
                     last_activity_ms = _iso_to_ms(self.state.get("last_activity_at"))
-                    owner_pid = int(self.state.get("owner_pid") or 0)
-                    owner_running = _is_process_running(owner_pid) if owner_pid > 0 else True
+                    owner = _owner_process(self.state)
+                    owner_running = process.is_alive(owner) if owner.pid > 0 else True
                     if owner_lost_should_stop(
-                        owner_pid=owner_pid,
+                        owner_pid=owner.pid,
                         owner_running=owner_running,
                         has_live_clients=bool(attached),
                         last_activity_ms=last_activity_ms,
@@ -569,7 +592,7 @@ class DaemonRuntime(ProgressSink):
                         lease_timeout_seconds=self.lease_timeout_seconds,
                     ):
                         should_stop = True
-                        reason = f"owner pid {owner_pid} lost and lease expired"
+                        reason = f"owner pid {owner.pid} lost and lease expired"
                     if not should_stop and not attached and active_request_count == 0:
                         idle_ms = self.idle_timeout_seconds * 1000
                         if last_activity_ms > 0 and (now_ms - last_activity_ms) >= idle_ms \

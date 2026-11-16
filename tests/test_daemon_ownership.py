@@ -222,8 +222,8 @@ def test_failed_startup_never_clears_an_unconfirmed_live_child(monkeypatch, isol
     monkeypatch.setattr(client.subprocess, 'Popen', spawn)
     monkeypatch.setattr(client, '_wait_for_daemon_ready', lambda state: failure != 'ready_timeout')
     monkeypatch.setattr(client, 'daemon_request', lambda *a, **kw: (_ for _ in ()).throw(TimeoutError('startup status failed')))
-    monkeypatch.setattr(client, '_kill_process', lambda pid: False)
-    monkeypatch.setattr(client, '_wait_for_pid_exit', lambda *a: False)
+    monkeypatch.setattr(client.process, 'kill_tree', lambda identity: False)
+    monkeypatch.setattr(client.process, 'wait_exit', lambda *a, **kwargs: False)
     try:
         expected = 'started_owner_status_failed' if failure == 'status' else 'startup_exit_unconfirmed'
         with pytest.raises(DaemonOwnerUnavailable, match=expected):

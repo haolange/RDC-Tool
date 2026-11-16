@@ -1236,7 +1236,7 @@ class _AndroidCaptureDevice:
             remote_device_serial="device", remote_bootstrap={"adb_path": "adb", "package_name": self.package,
                 "config_remote_path": "/sdcard/Android/media/other/files/renderdoc.conf"})
         monkeypatch.setattr(module.uuid, "uuid4", lambda: SimpleNamespace(hex=self.nonce))
-        monkeypatch.setattr(module.subprocess, "run", self.run)
+        monkeypatch.setattr(module.process.subprocess, "run", self.run)
 
     def transfer(self):
         return SessionManager()._copy_android_capture_with_adb(self.state, str(self.capture))
@@ -1340,7 +1340,7 @@ def test_android_transfer_refuses_unverifiable_existing_path(monkeypatch, tmp_pa
         if argv[-1] == "pwd":
             return SimpleNamespace(returncode=0, stdout="/data/user/0/org.renderdoc.renderdoccmd.arm64\n", stderr="")
         return SimpleNamespace(returncode=1, stdout="", stderr=error)
-    monkeypatch.setattr(module.subprocess, "run", run)
+    monkeypatch.setattr(module.process.subprocess, "run", run)
     state = SessionState(session_id="copy", backend_type=BackendType.REMOTE,
         remote_server=SimpleNamespace(TakeOwnershipCapture=lambda p: pytest.fail("unverified ownership")),
         remote_device_serial="device", remote_bootstrap={"adb_path": "adb", "package_name": "org.renderdoc.renderdoccmd.arm64"})

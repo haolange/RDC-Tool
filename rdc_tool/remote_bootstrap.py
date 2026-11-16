@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import hashlib
-import json
 import struct
 import zipfile
 import contextvars
@@ -18,6 +17,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
+from rdc_tool.platform import process
+from rdc_tool.platform.process import SpawnProfile
 from rdc_tool.runtime_paths import android_binaries_root, runtime_root
 from rdc_tool.android_apk_identity import read_apk_identity
 from rdc_tool.android_install_state import parse_active_install_sessions
@@ -69,18 +70,12 @@ def _remaining(maximum: float) -> float:
 
 
 def _run_process(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
-    kwargs.setdefault("stdin", subprocess.DEVNULL)
-    if os.name == "nt":
-        # ADB needs normal redirected stdio, not CREATE_NO_WINDOW or an
-        # explicitly allocated console. Hide any console Windows creates.
-        startup = subprocess.STARTUPINFO()
-        startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-        startup.wShowWindow = subprocess.SW_HIDE
-        kwargs.setdefault("startupinfo", startup)
-        kwargs.setdefault("creationflags", subprocess.CREATE_NEW_PROCESS_GROUP)
     budget = _connection_budget.get()
     if budget is None:
-        return subprocess.run(cmd, **kwargs)
+        return process.run_tool(cmd, **kwargs)
+    kwargs.setdefault("stdin", subprocess.DEVNULL)
+    for key, value in process.popen_options(SpawnProfile.TOOL).items():
+        kwargs.setdefault(key, value)
     deadline = time.monotonic() + budget.remaining(float(kwargs.pop("timeout", 10)))
     kwargs.pop("check", None)
     kwargs.pop("capture_output", None)
@@ -942,7 +937,7 @@ def _start_android_helper(result: AndroidBootstrapResult, activity_component: st
 
 
 def _prepare_android_service_steps(result: AndroidBootstrapResult, opts: AndroidBootstrapOptions, borrowed: bool, activity_component: str) -> AndroidBootstrapResult:
-    adb_path, package_name = result.adb_path, result.package_name
+    adb_path = result.adb_path
     device = AdbDevice(serial=result.device_serial, state="device", detail="")
     remote_port, forward_spec = result.remote_port, result.forward_spec
     existing_socket_ports = _list_renderdoc_socket_ports(adb_path, device.serial)
