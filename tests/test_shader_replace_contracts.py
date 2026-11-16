@@ -8,9 +8,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from rdc_tool import server
 from rdc_tool.core import patch_engine as patch_engine_mod
 from rdc_tool.models import PatchOp, PatchResult, PatchSpec, ShaderStage
+from rdc_tool.runtime import artifact_payloads, context_records, dispatch, live_state, remote_records, remote_session, renderdoc_api, replay_access, session_recovery, shader_patches
+from rdc_tool.runtime.operations import shader as shader_ops
 
 pytestmark = pytest.mark.usefixtures("fake_renderdoc")
 
@@ -134,16 +135,16 @@ class _FakeSessionManager:
 
 @pytest.fixture(autouse=True)
 def _reset_shader_replace_runtime() -> None:
-    original_patch_engine = server.server_runtime._patch_engine
-    original_session_manager = server.server_runtime._session_manager
-    original_replacements = dict(server._runtime.shader_replacements)
+    original_patch_engine = live_state._patch_engine
+    original_session_manager = live_state._session_manager
+    original_replacements = dict(live_state._runtime.shader_replacements)
     try:
-        server._runtime.shader_replacements.clear()
+        live_state._runtime.shader_replacements.clear()
         yield
     finally:
-        server.server_runtime._patch_engine = original_patch_engine
-        server.server_runtime._session_manager = original_session_manager
-        server._runtime.shader_replacements = original_replacements
+        live_state._patch_engine = original_patch_engine
+        live_state._session_manager = original_session_manager
+        live_state._runtime.shader_replacements = original_replacements
 
 
 def _install_shader_replace_env(monkeypatch: pytest.MonkeyPatch, controller: object) -> None:
@@ -156,23 +157,23 @@ def _install_shader_replace_env(monkeypatch: pytest.MonkeyPatch, controller: obj
     async def _fake_ensure_event(session_id: str, event_id: int | None) -> int:
         return int(event_id or 101)
 
-    monkeypatch.setattr(server.server_runtime, "_offload", _inline_offload)
-    monkeypatch.setattr(server.server_runtime, "_get_controller", _fake_get_controller)
-    monkeypatch.setattr(server.server_runtime, "_ensure_event", _fake_ensure_event)
-    monkeypatch.setattr(server.server_runtime, "_rd_stage", lambda stage: stage)
-    monkeypatch.setattr(server.server_runtime, "_is_null_resource_id", lambda rid: str(rid) in {"", "ResourceId::0", "0"})
+    monkeypatch.setattr(renderdoc_api, "_offload", _inline_offload)
+    monkeypatch.setattr(replay_access, "_get_controller", _fake_get_controller)
+    monkeypatch.setattr(replay_access, "_ensure_event", _fake_ensure_event)
+    monkeypatch.setattr(renderdoc_api, "_rd_stage", lambda stage: stage)
+    monkeypatch.setattr(renderdoc_api, "_is_null_resource_id", lambda rid: str(rid) in {"", "ResourceId::0", "0"})
 
 
 def test_edit_and_replace_records_real_applied_replacement(monkeypatch: pytest.MonkeyPatch) -> None:
     patch_engine = _FakePatchEngine(success=True)
     session_manager = _FakeSessionManager()
     _install_shader_replace_env(monkeypatch, _SupportedController())
-    server.server_runtime._patch_engine = patch_engine
-    server.server_runtime._session_manager = session_manager
+    live_state._patch_engine = patch_engine
+    live_state._session_manager = session_manager
 
     payload = json.loads(
         asyncio.run(
-            server._dispatch_shader(
+            shader_ops.dispatch(
                 "edit_and_replace",
                 {
                     "session_id": "sess_demo",
@@ -199,8 +200,8 @@ def test_edit_and_replace_records_real_applied_replacement(monkeypatch: pytest.M
     patch_spec = patch_engine.calls[0]["patch_spec"]
     assert getattr(patch_spec, "target_event_id") == 101
     assert str(getattr(patch_spec, "target_shader_id")) == "ResourceId::77"
-    assert server._runtime.shader_replacements["sess_demo"][0]["status"] == "applied"
-    persisted_spec = server._runtime.shader_replacements["sess_demo"][0]["patch_spec"]
+    assert live_state._runtime.shader_replacements["sess_demo"][0]["status"] == "applied"
+    persisted_spec = live_state._runtime.shader_replacements["sess_demo"][0]["patch_spec"]
     assert persisted_spec["patch_id"] == payload["replacement_id"]
     assert persisted_spec["target_event_id"] == 101
     assert persisted_spec["target_stage"] == "ps"
@@ -216,8 +217,8 @@ def test_edit_and_replace_noop_patch_is_not_recorded_as_active_replacement(monke
     )
     session_manager = _FakeSessionManager()
     _install_shader_replace_env(monkeypatch, _SupportedController())
-    server.server_runtime._patch_engine = patch_engine
-    server.server_runtime._session_manager = session_manager
+    live_state._patch_engine = patch_engine
+    live_state._session_manager = session_manager
 
     async def _noop_apply_patch(**kwargs) -> PatchResult:  # type: ignore[no-untyped-def]
         patch_engine.calls.append(dict(kwargs))
@@ -233,7 +234,7 @@ def test_edit_and_replace_noop_patch_is_not_recorded_as_active_replacement(monke
 
     payload = json.loads(
         asyncio.run(
-            server._dispatch_shader(
+            shader_ops.dispatch(
                 "edit_and_replace",
                 {
                     "session_id": "sess_demo",
@@ -253,15 +254,15 @@ def test_edit_and_replace_noop_patch_is_not_recorded_as_active_replacement(monke
     assert payload["success"] is True
     assert payload["status"] == "noop"
     assert payload["replacement"]["status"] == "noop"
-    assert server._runtime.shader_replacements.get("sess_demo", []) == []
+    assert live_state._runtime.shader_replacements.get("sess_demo", []) == []
 
 
 def test_edit_and_replace_can_emit_patch_artifacts(monkeypatch: pytest.MonkeyPatch) -> None:
     patch_engine = _FakePatchEngine(success=True)
     session_manager = _FakeSessionManager()
     _install_shader_replace_env(monkeypatch, _SupportedController())
-    server.server_runtime._patch_engine = patch_engine
-    server.server_runtime._session_manager = session_manager
+    live_state._patch_engine = patch_engine
+    live_state._session_manager = session_manager
 
     async def _fake_store_text_artifact_payload(text: str, **kwargs) -> dict[str, object]:
         stem = str(kwargs.get("stem") or "")
@@ -272,14 +273,14 @@ def test_edit_and_replace_can_emit_patch_artifacts(monkeypatch: pytest.MonkeyPat
         }
 
     monkeypatch.setattr(
-        server.server_runtime,
+        artifact_payloads,
         "_store_text_artifact_payload",
         _fake_store_text_artifact_payload,
     )
 
     payload = json.loads(
         asyncio.run(
-            server._dispatch_shader(
+            shader_ops.dispatch(
                 "edit_and_replace",
                 {
                     "session_id": "sess_demo",
@@ -311,12 +312,12 @@ def test_edit_and_replace_accepts_source_text_workflow_inputs(monkeypatch: pytes
     patch_engine = _FakePatchEngine(success=True)
     session_manager = _FakeSessionManager()
     _install_shader_replace_env(monkeypatch, _SupportedController())
-    server.server_runtime._patch_engine = patch_engine
-    server.server_runtime._session_manager = session_manager
+    live_state._patch_engine = patch_engine
+    live_state._session_manager = session_manager
 
     payload = json.loads(
         asyncio.run(
-            server._dispatch_shader(
+            shader_ops.dispatch(
                 "edit_and_replace",
                 {
                     "session_id": "sess_demo",
@@ -342,12 +343,12 @@ def test_edit_and_replace_accepts_source_text_workflow_inputs(monkeypatch: pytes
 
 def test_edit_and_replace_rejects_multiple_edit_inputs(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_shader_replace_env(monkeypatch, _SupportedController())
-    server.server_runtime._patch_engine = _FakePatchEngine(success=True)
-    server.server_runtime._session_manager = _FakeSessionManager()
+    live_state._patch_engine = _FakePatchEngine(success=True)
+    live_state._session_manager = _FakeSessionManager()
 
     payload = json.loads(
         asyncio.run(
-            server._dispatch_shader(
+            shader_ops.dispatch(
                 "edit_and_replace",
                 {
                     "session_id": "sess_demo",
@@ -366,12 +367,12 @@ def test_edit_and_replace_rejects_multiple_edit_inputs(monkeypatch: pytest.Monke
 
 def test_edit_and_replace_rejects_replace_expr_patch_op(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_shader_replace_env(monkeypatch, _SupportedController())
-    server.server_runtime._patch_engine = _FakePatchEngine(success=True)
-    server.server_runtime._session_manager = _FakeSessionManager()
+    live_state._patch_engine = _FakePatchEngine(success=True)
+    live_state._session_manager = _FakeSessionManager()
 
     payload = json.loads(
         asyncio.run(
-            server._dispatch_shader(
+            shader_ops.dispatch(
                 "edit_and_replace",
                 {
                     "session_id": "sess_demo",
@@ -405,30 +406,30 @@ def test_revert_replacement_preserves_live_remote_replay(monkeypatch: pytest.Mon
         lifecycle_calls.append(("recover", session_id))
     manager = _FakeSessionManager()
     manager.close_session = close_session
-    monkeypatch.setattr(server.server_runtime, "_patch_engine", Engine())
-    monkeypatch.setattr(server.server_runtime, "_session_manager", manager)
-    monkeypatch.setattr(server.server_runtime, "_context_state", lambda *args: {
+    monkeypatch.setattr(live_state, "_patch_engine", Engine())
+    monkeypatch.setattr(live_state, "_session_manager", manager)
+    monkeypatch.setattr(context_records, "_context_state", lambda *args: {
         "sessions": {"sess_demo": {"backend_type": "remote"}}})
-    monkeypatch.setattr(server.server_runtime, "_recover_single_session_from_state", recover)
-    monkeypatch.setattr(server.server_runtime, "_release_remote_session_lease", lambda *args, **kwargs: None)
-    monkeypatch.setattr(server.server_runtime, "_sync_context_session_replacements",
+    monkeypatch.setattr(session_recovery, "_recover_single_session_from_state", recover)
+    monkeypatch.setattr(remote_session, "_release_remote_session_lease", lambda *args, **kwargs: None)
+    monkeypatch.setattr(shader_patches, "_sync_context_session_replacements",
         lambda session_id, remaining: updates.append((session_id, list(remaining))))
-    monkeypatch.setitem(server._runtime.replays, "sess_demo", live_replay)
+    monkeypatch.setitem(live_state._runtime.replays, "sess_demo", live_replay)
     original = {"replacement_id": "repl_demo", "stage": "PS", "resolved_event_id": 314,
         "original_shader_id": "ResourceId::77", "status": "applied"}
-    server._runtime.shader_replacements["sess_demo"] = [original]
-    payload = json.loads(asyncio.run(server._dispatch_shader("revert_replacement", {
+    live_state._runtime.shader_replacements["sess_demo"] = [original]
+    payload = json.loads(asyncio.run(shader_ops.dispatch("revert_replacement", {
         "session_id": "sess_demo", "replacement_id": "repl_demo"})))
     assert payload["success"] is revert_ok
     assert lifecycle_calls == []
-    assert server._runtime.replays["sess_demo"] is live_replay
+    assert live_state._runtime.replays["sess_demo"] is live_replay
     if revert_ok:
         assert payload["reverted"] is True
-        assert server._runtime.shader_replacements["sess_demo"] == []
+        assert live_state._runtime.shader_replacements["sess_demo"] == []
         assert updates == [("sess_demo", [])]
     else:
         assert payload["code"] == "replacement_not_found"
-        assert server._runtime.shader_replacements["sess_demo"] == [original]
+        assert live_state._runtime.shader_replacements["sess_demo"] == [original]
         assert updates == []
 
 
@@ -451,12 +452,12 @@ def test_edit_and_replace_returns_capability_failure_without_mock_success(
     patch_engine = _FakePatchEngine(success=True)
     session_manager = _FakeSessionManager()
     _install_shader_replace_env(monkeypatch, _UnsupportedController())
-    server.server_runtime._patch_engine = patch_engine
-    server.server_runtime._session_manager = session_manager
+    live_state._patch_engine = patch_engine
+    live_state._session_manager = session_manager
 
     payload = json.loads(
         asyncio.run(
-            server._dispatch_shader(
+            shader_ops.dispatch(
                 "edit_and_replace",
                 {
                     "session_id": "sess_demo",
@@ -495,12 +496,12 @@ def test_edit_and_replace_preserves_patch_engine_error_details(monkeypatch: pyte
     )
     session_manager = _FakeSessionManager()
     _install_shader_replace_env(monkeypatch, _SupportedController())
-    server.server_runtime._patch_engine = patch_engine
-    server.server_runtime._session_manager = session_manager
+    live_state._patch_engine = patch_engine
+    live_state._session_manager = session_manager
 
     payload = json.loads(
         asyncio.run(
-            server._dispatch_shader(
+            shader_ops.dispatch(
                 "edit_and_replace",
                 {
                     "session_id": "sess_demo",
@@ -526,11 +527,11 @@ def test_edit_and_replace_preserves_patch_engine_error_details(monkeypatch: pyte
 
 def test_get_source_reports_ir_fallback_when_debug_source_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_shader_replace_env(monkeypatch, _EncodingController("SPIRV"))
-    server.server_runtime._session_manager = _FakeSessionManager()
+    live_state._session_manager = _FakeSessionManager()
 
     payload = json.loads(
         asyncio.run(
-            server._dispatch_shader(
+            shader_ops.dispatch(
                 "get_source",
                 {
                     "session_id": "sess_demo",
@@ -581,10 +582,10 @@ def test_get_source_unbound_event_proves_restoration_or_reports_failure(
         current_event["value"] = requested
         return requested
 
-    monkeypatch.setattr(server.server_runtime, "_ensure_event", set_event)
-    monkeypatch.setattr(server.server_runtime, "_active_event", lambda _session_id: current_event["value"])
-    monkeypatch.setattr(server.server_runtime, "_runtime_context_id", lambda: "owned-context")
-    payload = json.loads(asyncio.run(server._dispatch_shader(
+    monkeypatch.setattr(replay_access, "_ensure_event", set_event)
+    monkeypatch.setattr(replay_access, "_active_event", lambda _session_id: current_event["value"])
+    monkeypatch.setattr(live_state, "_runtime_context_id", lambda: "owned-context")
+    payload = json.loads(asyncio.run(shader_ops.dispatch(
         "get_source", {"session_id": "sess_demo", "event_id": 3029, "stage": "ps"},
     )))
 
@@ -605,11 +606,11 @@ def test_get_source_unbound_event_proves_restoration_or_reports_failure(
 
 def test_get_source_reports_dxil_readonly_fallback_when_debug_source_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_shader_replace_env(monkeypatch, _EncodingController("DXIL"))
-    server.server_runtime._session_manager = _FakeSessionManager()
+    live_state._session_manager = _FakeSessionManager()
 
     payload = json.loads(
         asyncio.run(
-            server._dispatch_shader(
+            shader_ops.dispatch(
                 "get_source",
                 {
                     "session_id": "sess_demo",
@@ -641,16 +642,16 @@ def test_remote_replacement_validation_uses_live_outputs_without_recovery(monkey
             self.set_frame_event_calls.append((event_id, force))
 
     controller = _Controller()
-    previous_replays = dict(server._runtime.replays)
+    previous_replays = dict(live_state._runtime.replays)
     try:
-        server._runtime.replays["sess_remote"] = server.ReplayHandle(
+        live_state._runtime.replays["sess_remote"] = live_state.ReplayHandle(
             session_id="sess_remote",
             capture_file_id="capf_remote",
             frame_index=0,
             active_event_id=1248,
         )
         monkeypatch.setattr(
-            server.server_runtime,
+            context_records,
             "_context_state",
             lambda ctx: {
                 "sessions": {
@@ -662,7 +663,7 @@ def test_remote_replacement_validation_uses_live_outputs_without_recovery(monkey
             },
         )
         monkeypatch.setattr(
-            server.server_runtime,
+            remote_records,
             "_session_record_remote_metadata",
             lambda record: {"endpoint": "127.0.0.1:38920"},
         )
@@ -679,13 +680,13 @@ def test_remote_replacement_validation_uses_live_outputs_without_recovery(monkey
         async def _inline_offload(fn, *args, **kwargs):  # type: ignore[no-untyped-def]
             return fn(*args, **kwargs)
 
-        monkeypatch.setattr(server.server_runtime, "_get_controller", _fake_get_controller)
-        monkeypatch.setattr(server.server_runtime, "_output_target_resource_ids", _fake_output_target_resource_ids)
-        monkeypatch.setattr(server.server_runtime, "_recover_single_session_from_state", _fail_recovery)
-        monkeypatch.setattr(server.server_runtime, "_offload", _inline_offload)
+        monkeypatch.setattr(replay_access, "_get_controller", _fake_get_controller)
+        monkeypatch.setattr(replay_access, "_output_target_resource_ids", _fake_output_target_resource_ids)
+        monkeypatch.setattr(session_recovery, "_recover_single_session_from_state", _fail_recovery)
+        monkeypatch.setattr(renderdoc_api, "_offload", _inline_offload)
 
         asyncio.run(
-            server.server_runtime._validate_remote_replacement_persistence(
+            shader_patches._validate_remote_replacement_persistence(
                 "sess_remote",
                 {
                     "replacement_id": "repl_demo",
@@ -700,7 +701,7 @@ def test_remote_replacement_validation_uses_live_outputs_without_recovery(monkey
 
         assert controller.set_frame_event_calls == [(1248, True)]
     finally:
-        server._runtime.replays = previous_replays
+        live_state._runtime.replays = previous_replays
 
 
 class _FakeShaderCompileFlag:
@@ -809,9 +810,9 @@ def test_list_replacements_filters_stale_metadata_when_patch_engine_has_no_live_
             return []
 
     _install_shader_replace_env(monkeypatch, _SupportedController())
-    server.server_runtime._patch_engine = _ListingPatchEngine()
-    server.server_runtime._session_manager = _FakeSessionManager()
-    server._runtime.shader_replacements["sess_demo"] = [
+    live_state._patch_engine = _ListingPatchEngine()
+    live_state._session_manager = _FakeSessionManager()
+    live_state._runtime.shader_replacements["sess_demo"] = [
         {
             "replacement_id": "repl_stale",
             "stage": "PS",
@@ -821,11 +822,11 @@ def test_list_replacements_filters_stale_metadata_when_patch_engine_has_no_live_
         }
     ]
 
-    payload = json.loads(asyncio.run(server._dispatch_shader("list_replacements", {"session_id": "sess_demo"})))
+    payload = json.loads(asyncio.run(shader_ops.dispatch("list_replacements", {"session_id": "sess_demo"})))
 
     assert payload["success"] is True
     assert payload["replacements"] == []
-    assert server._runtime.shader_replacements["sess_demo"] == []
+    assert live_state._runtime.shader_replacements["sess_demo"] == []
 
 
 def test_patch_engine_rebinds_target_event_after_success(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1631,8 +1632,8 @@ def test_get_disassembly_rejects_unknown_target_before_replay_effects(monkeypatc
     async def _unexpected_ensure_event(session_id: str, event_id: int | None) -> int:
         raise AssertionError("validation must not set a replay event")
 
-    monkeypatch.setattr(server.server_runtime, "_ensure_event", _unexpected_ensure_event)
-    payload = json.loads(asyncio.run(server._dispatch_shader(
+    monkeypatch.setattr(replay_access, "_ensure_event", _unexpected_ensure_event)
+    payload = json.loads(asyncio.run(shader_ops.dispatch(
         "get_disassembly", {"session_id": "sess_demo", "event_id": 101, "stage": "ps", "target": "unknown"},
     )))
 
@@ -1654,9 +1655,9 @@ def test_shader_operations_reject_noncanonical_stage_before_replay_effects(
     async def _unexpected_ensure_event(session_id: str, event_id: int | None) -> int:
         raise AssertionError("stage validation must not set a replay event")
 
-    monkeypatch.setattr(server.server_runtime, "_get_controller", _unexpected_get_controller)
-    monkeypatch.setattr(server.server_runtime, "_ensure_event", _unexpected_ensure_event)
-    payload = json.loads(asyncio.run(server._dispatch_shader(
+    monkeypatch.setattr(replay_access, "_get_controller", _unexpected_get_controller)
+    monkeypatch.setattr(replay_access, "_ensure_event", _unexpected_ensure_event)
+    payload = json.loads(asyncio.run(shader_ops.dispatch(
         action, {"session_id": "sess_demo", "event_id": 101, "stage": "pixel"},
     )))
 
@@ -1671,7 +1672,7 @@ def test_shader_operations_reject_noncanonical_stage_before_replay_effects(
 
 def test_get_disassembly_reports_raw_spirv_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_shader_replace_env(monkeypatch, _SupportedController())
-    server.server_runtime._session_manager = _FakeSessionManager()
+    live_state._session_manager = _FakeSessionManager()
 
     monkeypatch.setattr(
         patch_engine_mod.PatchEngine,
@@ -1681,7 +1682,7 @@ def test_get_disassembly_reports_raw_spirv_metadata(monkeypatch: pytest.MonkeyPa
 
     payload = json.loads(
         asyncio.run(
-            server._dispatch_shader(
+            shader_ops.dispatch(
                 "get_disassembly",
                 {
                     "session_id": "sess_demo",
@@ -1714,7 +1715,7 @@ def test_renderdoc_spirv_view_points_to_raw_asm_without_claiming_editability() -
 
 def test_get_disassembly_reports_dxil_readonly_edit_plan(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_shader_replace_env(monkeypatch, _EncodingController("DXIL"))
-    server.server_runtime._session_manager = _FakeSessionManager()
+    live_state._session_manager = _FakeSessionManager()
 
     monkeypatch.setattr(
         patch_engine_mod.PatchEngine,
@@ -1724,7 +1725,7 @@ def test_get_disassembly_reports_dxil_readonly_edit_plan(monkeypatch: pytest.Mon
 
     payload = json.loads(
         asyncio.run(
-            server._dispatch_shader(
+            shader_ops.dispatch(
                 "get_disassembly",
                 {
                     "session_id": "sess_demo",
@@ -1813,8 +1814,6 @@ def test_patch_engine_hlsl_full_replacement_builds_and_replaces_without_editing_
 def test_catalog_full_source_replacement_keeps_source_provenance_and_runtime_plan(
     monkeypatch: pytest.MonkeyPatch, entry_source: str | None, expected_hash: str, accepted: bool,
 ) -> None:
-    from rdc_tool.core.engine import CoreEngine
-    from rdc_tool.tool_router import build_operation_registry
 
     original_source = "float4 main() : SV_Target { return 0; }"
     replacement_source = "float4 main() : SV_Target { return 1; }"
@@ -1850,15 +1849,14 @@ def test_catalog_full_source_replacement_keeps_source_provenance_and_runtime_pla
     controller = Controller()
     engine = patch_engine_mod.PatchEngine()
     _install_shader_replace_env(monkeypatch, controller)
-    server.server_runtime._patch_engine = engine
-    server.server_runtime._session_manager = _PatchEngineSessionManager(controller)
+    live_state._patch_engine = engine
+    live_state._session_manager = _PatchEngineSessionManager(controller)
     args = {"session_id": "sess_demo", "event_id": 314, "stage": "ps", "shader_id": "ResourceId::77",
             "source_text": replacement_source, "source_encoding": "hlsl", "entry": "main", "target": "ps_6_6"}
     if expected_hash:
         args["expected_source_hash"] = {"original": original_hash, "replacement": replacement_hash,
                                         "mismatch": "f" * 64}[expected_hash]
-    router = CoreEngine(registry=build_operation_registry())
-    result = asyncio.run(router.execute("rd.shader.edit_and_replace", args))
+    result = asyncio.run(dispatch._execute("rd.shader.edit_and_replace", args, live_state.ExecutionContext()))
     assert result["ok"] is accepted
     if not accepted:
         assert result["error"]["code"] == "shader_source_mismatch"
@@ -1881,10 +1879,10 @@ def test_catalog_full_source_replacement_keeps_source_provenance_and_runtime_pla
     assert data["edit_plan"]["input_kind"] == "user_full_source"
     assert data["edit_plan"]["can_build"] is data["edit_plan"]["can_replace"] is True
     assert data["edit_plan"]["runtime_full_replace_supported"] is True
-    assert server._runtime.shader_replacements["sess_demo"][0]["edit_plan"] == data["edit_plan"]
+    assert live_state._runtime.shader_replacements["sess_demo"][0]["edit_plan"] == data["edit_plan"]
     assert controller.build_calls[0][2] == replacement_source.encode()
-    restored = asyncio.run(router.execute("rd.shader.revert_replacement", {
-        "session_id": "sess_demo", "event_id": 314, "replacement_id": data["replacement_id"]}))
+    restored = asyncio.run(dispatch._execute("rd.shader.revert_replacement", {
+        "session_id": "sess_demo", "event_id": 314, "replacement_id": data["replacement_id"]}, live_state.ExecutionContext()))
     assert restored["ok"] is True
     assert restored["data"]["reverted"] is True
     assert controller.remove_calls == ["ResourceId::77"]
@@ -1947,10 +1945,10 @@ def test_disassembly_success_discovers_native_targets_truthfully(monkeypatch, mo
     if mode == "missing":
         controller.GetDisassemblyTargets = None
     _install_shader_replace_env(monkeypatch, controller)
-    server.server_runtime._session_manager = _FakeSessionManager()
+    live_state._session_manager = _FakeSessionManager()
     monkeypatch.setattr(patch_engine_mod.PatchEngine, "_resolve_source", classmethod(
         lambda cls, *args, **kwargs: ("OpCapability Shader\n", "SPIRVAsm", "SPIR-V ASM", True)))
-    payload = json.loads(asyncio.run(server._dispatch_shader("get_disassembly", {
+    payload = json.loads(asyncio.run(shader_ops.dispatch("get_disassembly", {
         "session_id": "sess_demo", "event_id": 101, "stage": "ps", "target": "SPIR-V ASM",
     })))
     assert payload["success"] is True
@@ -1972,8 +1970,8 @@ def test_disassembly_target_probe_failure_precedes_event_effects(monkeypatch, mo
     _install_shader_replace_env(monkeypatch, controller)
     async def unexpected(*args):
         raise AssertionError("target query failure must not set event")
-    monkeypatch.setattr(server.server_runtime, "_ensure_event", unexpected)
-    result = json.loads(asyncio.run(server._dispatch_shader("get_disassembly", {
+    monkeypatch.setattr(replay_access, "_ensure_event", unexpected)
+    result = json.loads(asyncio.run(shader_ops.dispatch("get_disassembly", {
         "session_id": "sess_demo", "event_id": 101, "stage": "ps", "target": "GPU ISA",
     })))
     assert result["success"] is False
@@ -2019,8 +2017,8 @@ def test_disassembly_diagnostic_is_observed_text_without_raw_edit_authority(monk
     monkeypatch.setattr(patch_engine_mod, "_get_rd", lambda: SimpleNamespace(ResourceId=lambda: "ResourceId::0"))
     monkeypatch.setattr(patch_engine_mod.PatchEngine, "_get_best_encoding", staticmethod(lambda *_: ("SPIRV", "external ISA")))
     _install_shader_replace_env(monkeypatch, Controller())
-    server.server_runtime._session_manager = _FakeSessionManager()
-    result = json.loads(asyncio.run(server._dispatch_shader("get_disassembly", {
+    live_state._session_manager = _FakeSessionManager()
+    result = json.loads(asyncio.run(shader_ops.dispatch("get_disassembly", {
         "session_id": "sess_demo", "event_id": 101, "stage": "ps", "target": "external ISA",
     })))
     assert result["success"] is True  # Native text is preserved, not asserted to be executable ISA.
@@ -2201,10 +2199,10 @@ def test_emitted_build_input_preserves_exact_bytes_and_registry_binding(monkeypa
 
     engine.apply_patch = apply
     _install_shader_replace_env(monkeypatch, _SupportedController())
-    monkeypatch.setattr(server.server_runtime, '_patch_engine', engine)
-    monkeypatch.setattr(server.server_runtime, '_session_manager', _FakeSessionManager())
-    monkeypatch.setattr(server.server_runtime, '_artifact_store', None)
-    payload = json.loads(asyncio.run(server._dispatch_shader('edit_and_replace', {
+    monkeypatch.setattr(live_state, '_patch_engine', engine)
+    monkeypatch.setattr(live_state, '_session_manager', _FakeSessionManager())
+    monkeypatch.setattr(live_state, '_artifact_store', None)
+    payload = json.loads(asyncio.run(shader_ops.dispatch('edit_and_replace', {
         'session_id': 'sess_demo', 'event_id': 101, 'stage': 'ps', 'source_text': 'changed',
         'emit_patch_artifacts': True, 'output_dir': str(tmp_path)})))
     assert payload['success'] is True
@@ -2215,7 +2213,7 @@ def test_emitted_build_input_preserves_exact_bytes_and_registry_binding(monkeypa
     assert actual == module
     assert hashlib.sha256(actual).hexdigest() == proof['sha256']
     assert len(payload['artifacts']) == 4
-    assert server._runtime.shader_replacements['sess_demo'][0]['compile']['build_input'] == proof
+    assert live_state._runtime.shader_replacements['sess_demo'][0]['compile']['build_input'] == proof
 
 
 
@@ -2252,10 +2250,10 @@ def test_build_input_without_artifact_request_does_not_write(monkeypatch):
 
     engine.apply_patch = apply
     _install_shader_replace_env(monkeypatch, _SupportedController())
-    monkeypatch.setattr(server.server_runtime, '_patch_engine', engine)
-    monkeypatch.setattr(server.server_runtime, '_session_manager', _FakeSessionManager())
-    monkeypatch.setattr(server.server_runtime, '_store_bytes_artifact_payload', unexpected_store)
-    payload = json.loads(asyncio.run(server._dispatch_shader('edit_and_replace', {
+    monkeypatch.setattr(live_state, '_patch_engine', engine)
+    monkeypatch.setattr(live_state, '_session_manager', _FakeSessionManager())
+    monkeypatch.setattr(artifact_payloads, '_store_bytes_artifact_payload', unexpected_store)
+    payload = json.loads(asyncio.run(shader_ops.dispatch('edit_and_replace', {
         'session_id': 'sess_demo', 'event_id': 101, 'stage': 'ps', 'source_text': 'changed'})))
     assert payload['success'] is True
     assert payload['artifacts'] == []
@@ -2277,11 +2275,11 @@ def test_build_input_artifact_write_failure_never_becomes_success(monkeypatch):
 
     engine.apply_patch = apply
     _install_shader_replace_env(monkeypatch, _SupportedController())
-    monkeypatch.setattr(server.server_runtime, '_patch_engine', engine)
-    monkeypatch.setattr(server.server_runtime, '_session_manager', _FakeSessionManager())
-    monkeypatch.setattr(server.server_runtime, '_store_bytes_artifact_payload', store)
+    monkeypatch.setattr(live_state, '_patch_engine', engine)
+    monkeypatch.setattr(live_state, '_session_manager', _FakeSessionManager())
+    monkeypatch.setattr(artifact_payloads, '_store_bytes_artifact_payload', store)
     with pytest.raises(OSError, match='artifact storage unavailable'):
-        asyncio.run(server._dispatch_shader('edit_and_replace', {
+        asyncio.run(shader_ops.dispatch('edit_and_replace', {
             'session_id': 'sess_demo', 'event_id': 101, 'stage': 'ps', 'source_text': 'changed',
             'emit_patch_artifacts': True}))
     assert len(engine.calls) == 1
@@ -2290,10 +2288,10 @@ def test_build_input_artifact_write_failure_never_becomes_success(monkeypatch):
 def test_text_artifact_newlines_remain_distinct_from_exact_build_bytes(monkeypatch, tmp_path):
     import os
     from pathlib import Path
-    monkeypatch.setattr(server.server_runtime, '_artifact_store', None)
-    text = asyncio.run(server.server_runtime._store_text_artifact_payload(
+    monkeypatch.setattr(live_state, '_artifact_store', None)
+    text = asyncio.run(artifact_payloads._store_text_artifact_payload(
         'first\nsecond\n', stem='source', suffix='.txt', output_dir=str(tmp_path)))
-    binary = asyncio.run(server.server_runtime._store_bytes_artifact_payload(
+    binary = asyncio.run(artifact_payloads._store_bytes_artifact_payload(
         b'first\nsecond\n', stem='build', suffix='.spv', output_dir=str(tmp_path)))
     assert Path(text['saved_path']).read_bytes() == ('first' + os.linesep + 'second' + os.linesep).encode()
     assert Path(binary['saved_path']).read_bytes() == b'first\nsecond\n'
@@ -2316,8 +2314,8 @@ class _EmbeddedSourceController(_EncodingController):
 
 def _embedded_source_result(monkeypatch: pytest.MonkeyPatch, info: object, encoding: str = "SPIRV") -> dict[str, object]:
     _install_shader_replace_env(monkeypatch, _EmbeddedSourceController(info, encoding))
-    server.server_runtime._session_manager = _FakeSessionManager()
-    return json.loads(asyncio.run(server._dispatch_shader(
+    live_state._session_manager = _FakeSessionManager()
+    return json.loads(asyncio.run(shader_ops.dispatch(
         "get_source", {"session_id": "sess_demo", "event_id": 101, "stage": "ps", "shader_id": "ResourceId::77"},
     )))
 
@@ -2393,7 +2391,7 @@ def test_get_source_native_read_failure_restores_prior_event(monkeypatch: pytest
             raise RuntimeError("native source read failed")
 
     _install_shader_replace_env(monkeypatch, _EmbeddedSourceController(_UnreadableDebugInfo()))
-    server.server_runtime._session_manager = _FakeSessionManager()
+    live_state._session_manager = _FakeSessionManager()
     current_event = {"value": 3029}
     transitions: list[int] = []
 
@@ -2405,10 +2403,10 @@ def test_get_source_native_read_failure_restores_prior_event(monkeypatch: pytest
         current_event["value"] = requested
         return requested
 
-    monkeypatch.setattr(server.server_runtime, "_ensure_event", set_event)
-    monkeypatch.setattr(server.server_runtime, "_active_event", lambda _session_id: current_event["value"])
-    monkeypatch.setattr(server.server_runtime, "_runtime_context_id", lambda: "owned-source-context")
-    payload = json.loads(asyncio.run(server._dispatch_shader(
+    monkeypatch.setattr(replay_access, "_ensure_event", set_event)
+    monkeypatch.setattr(replay_access, "_active_event", lambda _session_id: current_event["value"])
+    monkeypatch.setattr(live_state, "_runtime_context_id", lambda: "owned-source-context")
+    payload = json.loads(asyncio.run(shader_ops.dispatch(
         "get_source", {"session_id": "sess_demo", "event_id": 1248, "stage": "ps"},
     )))
     assert payload["success"] is False

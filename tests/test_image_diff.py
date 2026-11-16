@@ -8,7 +8,7 @@ import numpy as np
 from PIL import Image
 import pytest
 
-from rdc_tool import server_runtime
+from rdc_tool.runtime.operations import util as util_ops
 
 
 def compare(tmp_path: Path, a: np.ndarray, b: np.ndarray, metrics=None) -> dict:
@@ -19,7 +19,7 @@ def compare(tmp_path: Path, a: np.ndarray, b: np.ndarray, metrics=None) -> dict:
             'output_path': str(tmp_path / 'diff.png')}
     if metrics is not None:
         args['metrics'] = metrics
-    return json.loads(asyncio.run(server_runtime._dispatch_util('diff_images', args)))
+    return json.loads(asyncio.run(util_ops.dispatch('diff_images', args)))
 
 
 def test_diff_is_visible_for_opaque_inputs_and_alpha_only_changes(tmp_path: Path) -> None:
@@ -96,7 +96,7 @@ def test_ssim_constant_images_have_known_score(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize('metrics', [[], ['unknown'], 'psnr', [True]])
 def test_invalid_metrics_fail_before_file_access(tmp_path: Path, metrics) -> None:
-    result = json.loads(asyncio.run(server_runtime._dispatch_util('diff_images', {
+    result = json.loads(asyncio.run(util_ops.dispatch('diff_images', {
         'image_a_path': str(tmp_path / 'missing-a.png'),
         'image_b_path': str(tmp_path / 'missing-b.png'), 'metrics': metrics,
         'output_path': str(tmp_path / 'diff.png'),
@@ -124,14 +124,14 @@ def test_region_separates_target_from_unchanged_control_without_resizing(tmp_pat
     args = {'image_a_path': str(tmp_path / 'left.png'), 'image_b_path': str(tmp_path / 'right.png'),
             'metrics': ['mse', 'max_abs'], 'output_path': str(tmp_path / 'region.png'),
             'region': {'x': 0, 'y': 0, 'width': 4, 'height': 4}}
-    target = json.loads(asyncio.run(server_runtime._dispatch_util('diff_images', args)))['metrics']
+    target = json.loads(asyncio.run(util_ops.dispatch('diff_images', args)))['metrics']
     assert target['mse'] == 1 / (4 * 4 * 4) and target['max_abs'] == 1
     assert target['region'] == args['region']
     assert target['source_size'] == {'width': 16, 'height': 16}
     with Image.open(tmp_path / 'region.png') as image:
         assert image.size == (4, 4) and image.mode == 'RGB'
     args['region'] = {'x': 8, 'y': 8, 'width': 8, 'height': 8}
-    control = json.loads(asyncio.run(server_runtime._dispatch_util('diff_images', args)))['metrics']
+    control = json.loads(asyncio.run(util_ops.dispatch('diff_images', args)))['metrics']
     assert control['identical'] is True and control['mse'] == control['max_abs'] == 0
     with Image.open(tmp_path / 'region.png') as image:
         assert image.size == (8, 8)
@@ -147,7 +147,7 @@ def test_region_separates_target_from_unchanged_control_without_resizing(tmp_pat
 def test_invalid_region_does_not_write_or_silently_clamp(tmp_path: Path, region) -> None:
     a = np.zeros((16, 16, 4), dtype=np.uint8)
     Image.fromarray(a).save(tmp_path / 'input.png')
-    result = json.loads(asyncio.run(server_runtime._dispatch_util('diff_images', {
+    result = json.loads(asyncio.run(util_ops.dispatch('diff_images', {
         'image_a_path': str(tmp_path / 'input.png'), 'image_b_path': str(tmp_path / 'input.png'),
         'region': region, 'output_path': str(tmp_path / 'invalid.png'),
     })))

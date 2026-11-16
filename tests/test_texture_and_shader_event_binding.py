@@ -9,7 +9,12 @@ from types import SimpleNamespace
 import pytest
 import numpy as np
 
-from rdc_tool import server
+from rdc_tool.core import replay_facts
+from rdc_tool.core.errors import CoreError
+from rdc_tool.core.patch_engine import PatchEngine
+from rdc_tool.runtime import artifact_payloads, context_records, live_state, pixel_trace, renderdoc_api, replay_access, shader_values, texture_export, truth_matrix, visual_target
+from rdc_tool.runtime.operations import shader as shader_ops
+from rdc_tool.runtime.operations import texture as texture_ops
 
 pytestmark = pytest.mark.usefixtures("fake_renderdoc")
 
@@ -53,13 +58,13 @@ class _FakeShaderController:
 
 @pytest.fixture(autouse=True)
 def _restore_runtime_services() -> None:
-    original_render_service = server.server_runtime._render_service
-    original_session_manager = server.server_runtime._session_manager
+    original_render_service = live_state._render_service
+    original_session_manager = live_state._session_manager
     try:
         yield
     finally:
-        server.server_runtime._render_service = original_render_service
-        server.server_runtime._session_manager = original_session_manager
+        live_state._render_service = original_render_service
+        live_state._session_manager = original_session_manager
 
 
 @pytest.mark.parametrize("texture_size", [(800, 600), (0, 0)])
@@ -79,14 +84,14 @@ def test_render_overlay_reports_native_to_image_mapping(
         assert kwargs["view_config"]["flip_y"] is True
         return SimpleNamespace(), {"width": 1920, "height": 1080, "scale": 0}
 
-    monkeypatch.setattr(server.server_runtime, "_get_texture_descriptor", descriptor)
-    monkeypatch.setattr(server.server_runtime, "_binding_name_index_for_event", bindings)
-    monkeypatch.setattr(server.server_runtime, "_event_truth_metadata", truth)
-    monkeypatch.setattr(server.server_runtime, "_artifact_path", lambda artifact: "overlay.png")
-    server.server_runtime._session_manager = SimpleNamespace()
-    server.server_runtime._render_service = SimpleNamespace(render_event=render_event)
+    monkeypatch.setattr(replay_access, "_get_texture_descriptor", descriptor)
+    monkeypatch.setattr(replay_access, "_binding_name_index_for_event", bindings)
+    monkeypatch.setattr(truth_matrix, "_event_truth_metadata", truth)
+    monkeypatch.setattr(artifact_payloads, "_artifact_path", lambda artifact: "overlay.png")
+    live_state._session_manager = SimpleNamespace()
+    live_state._render_service = SimpleNamespace(render_event=render_event)
 
-    payload = json.loads(asyncio.run(server._dispatch_texture("render_overlay", {
+    payload = json.loads(asyncio.run(texture_ops.dispatch("render_overlay", {
         "session_id": "sess_demo", "texture_id": "ResourceId::24",
         "event_id": 42, "overlay": "Drawcall", "flip_y": True,
     })))
@@ -147,17 +152,17 @@ def test_texture_event_bound_tools_respect_explicit_event_id(monkeypatch: pytest
             "shape": [1, 1, 4],
         }
 
-    monkeypatch.setattr(server.server_runtime, "_ensure_event", _fake_ensure_event)
-    monkeypatch.setattr(server.server_runtime, "_resolve_texture_id", _fake_resolve_texture_id)
-    server.server_runtime._session_manager = SimpleNamespace()
-    server.server_runtime._render_service = SimpleNamespace(
+    monkeypatch.setattr(replay_access, "_ensure_event", _fake_ensure_event)
+    monkeypatch.setattr(replay_access, "_resolve_texture_id", _fake_resolve_texture_id)
+    live_state._session_manager = SimpleNamespace()
+    live_state._render_service = SimpleNamespace(
         pick_pixel=_fake_pick_pixel,
         read_texture_array=_fake_read_texture_array,
     )
 
     pixel_payload = json.loads(
         asyncio.run(
-            server._dispatch_texture(
+            texture_ops.dispatch(
                 "get_pixel_value",
                 {
                     "session_id": "sess_demo",
@@ -171,7 +176,7 @@ def test_texture_event_bound_tools_respect_explicit_event_id(monkeypatch: pytest
     )
     stats_payload = json.loads(
         asyncio.run(
-            server._dispatch_texture(
+            texture_ops.dispatch(
                 "compute_stats",
                 {
                     "session_id": "sess_demo",
@@ -230,14 +235,14 @@ def test_region_values_stats_describe_exported_stride_samples(monkeypatch: pytes
     async def _fake_event_truth_metadata(session_id: str, event_id: int) -> dict[str, object]:
         return {"binding_truth_level": "binding_degraded", "evidence_truth_level": "structured_readback"}
 
-    monkeypatch.setattr(server.server_runtime, "_ensure_event", _fake_ensure_event)
-    monkeypatch.setattr(server.server_runtime, "_resolve_texture_id", _fake_resolve_texture_id)
-    monkeypatch.setattr(server.server_runtime, "_event_truth_metadata", _fake_event_truth_metadata)
-    monkeypatch.setattr(server.server_runtime, "_artifact_store", SimpleNamespace(store=_fake_store, get_path=lambda sha: artifact_path))
-    server.server_runtime._session_manager = SimpleNamespace()
-    server.server_runtime._render_service = SimpleNamespace(read_texture_array=_fake_read_texture_array)
+    monkeypatch.setattr(replay_access, "_ensure_event", _fake_ensure_event)
+    monkeypatch.setattr(replay_access, "_resolve_texture_id", _fake_resolve_texture_id)
+    monkeypatch.setattr(truth_matrix, "_event_truth_metadata", _fake_event_truth_metadata)
+    monkeypatch.setattr(live_state, "_artifact_store", SimpleNamespace(store=_fake_store, get_path=lambda sha: artifact_path))
+    live_state._session_manager = SimpleNamespace()
+    live_state._render_service = SimpleNamespace(read_texture_array=_fake_read_texture_array)
 
-    payload = json.loads(asyncio.run(server._dispatch_texture("get_region_values", {
+    payload = json.loads(asyncio.run(texture_ops.dispatch("get_region_values", {
         "session_id": "sess_demo",
         "event_id": 314,
         "texture_id": "tex-a",
@@ -278,14 +283,14 @@ def test_texture_histogram_and_diff_reuse_memory_readback_without_artifacts(monk
             values = values + 0.25
         return values, {"shape": list(values.shape)}
 
-    monkeypatch.setattr(server.server_runtime, "_ensure_event", _fake_ensure_event)
-    monkeypatch.setattr(server.server_runtime, "_resolve_texture_id", _fake_resolve_texture_id)
-    server.server_runtime._session_manager = SimpleNamespace()
-    server.server_runtime._render_service = SimpleNamespace(read_texture_array=_fake_read_texture_array)
+    monkeypatch.setattr(replay_access, "_ensure_event", _fake_ensure_event)
+    monkeypatch.setattr(replay_access, "_resolve_texture_id", _fake_resolve_texture_id)
+    live_state._session_manager = SimpleNamespace()
+    live_state._render_service = SimpleNamespace(read_texture_array=_fake_read_texture_array)
 
     histogram = json.loads(
         asyncio.run(
-            server._dispatch_texture(
+            texture_ops.dispatch(
                 "get_histogram",
                 {"session_id": "sess_demo", "event_id": 41, "texture_id": "tex-a", "channels": "rg", "bins": 2},
             )
@@ -293,7 +298,7 @@ def test_texture_histogram_and_diff_reuse_memory_readback_without_artifacts(monk
     )
     difference = json.loads(
         asyncio.run(
-            server._dispatch_texture(
+            texture_ops.dispatch(
                 "diff",
                 {
                     "session_id": "sess_demo",
@@ -336,14 +341,14 @@ def test_texture_histogram_and_diff_fail_closed_and_serialize_identical_psnr(mon
         values = arrays[texture_id]
         return values, {"shape": list(values.shape)}
 
-    monkeypatch.setattr(server.server_runtime, "_ensure_event", _fake_ensure_event)
-    monkeypatch.setattr(server.server_runtime, "_resolve_texture_id", _fake_resolve_texture_id)
-    server.server_runtime._session_manager = SimpleNamespace()
-    server.server_runtime._render_service = SimpleNamespace(read_texture_array=_fake_read_texture_array)
+    monkeypatch.setattr(replay_access, "_ensure_event", _fake_ensure_event)
+    monkeypatch.setattr(replay_access, "_resolve_texture_id", _fake_resolve_texture_id)
+    live_state._session_manager = SimpleNamespace()
+    live_state._render_service = SimpleNamespace(read_texture_array=_fake_read_texture_array)
 
     invalid_bins = json.loads(
         asyncio.run(
-            server._dispatch_texture(
+            texture_ops.dispatch(
                 "get_histogram",
                 {"session_id": "sess_demo", "texture_id": "same", "bins": 0},
             )
@@ -351,18 +356,18 @@ def test_texture_histogram_and_diff_fail_closed_and_serialize_identical_psnr(mon
     )
     invalid_range = json.loads(
         asyncio.run(
-            server._dispatch_texture(
+            texture_ops.dispatch(
                 "get_histogram",
                 {"session_id": "sess_demo", "texture_id": "same", "range": {"min": 2.0, "max": 1.0}},
             )
         )
     )
     nonfinite = json.loads(
-        asyncio.run(server._dispatch_texture("get_histogram", {"session_id": "sess_demo", "texture_id": "nan"}))
+        asyncio.run(texture_ops.dispatch("get_histogram", {"session_id": "sess_demo", "texture_id": "nan"}))
     )
     identical = json.loads(
         asyncio.run(
-            server._dispatch_texture(
+            texture_ops.dispatch(
                 "diff",
                 {"session_id": "sess_demo", "tex_a": {"texture_id": "same"}, "tex_b": {"texture_id": "same"}},
             )
@@ -370,7 +375,7 @@ def test_texture_histogram_and_diff_fail_closed_and_serialize_identical_psnr(mon
     )
     shape_mismatch = json.loads(
         asyncio.run(
-            server._dispatch_texture(
+            texture_ops.dispatch(
                 "diff",
                 {"session_id": "sess_demo", "tex_a": {"texture_id": "same"}, "tex_b": {"texture_id": "wide"}},
             )
@@ -378,7 +383,7 @@ def test_texture_histogram_and_diff_fail_closed_and_serialize_identical_psnr(mon
     )
     diff_nonfinite = json.loads(
         asyncio.run(
-            server._dispatch_texture(
+            texture_ops.dispatch(
                 "diff",
                 {"session_id": "sess_demo", "tex_a": {"texture_id": "same"}, "tex_b": {"texture_id": "nan"}},
             )
@@ -438,32 +443,32 @@ def test_pixel_history_resolves_explicit_output_target(monkeypatch: pytest.Monke
         binding_calls.append(event_id)
         return [{"event_id": history[0]["event_id"], "binding_truth_level": "binding_verified"}]
 
-    monkeypatch.setattr(server.server_runtime, "_pixel_history_writer_bindings", _fake_bindings)
-    monkeypatch.setattr(server.server_runtime, "_get_controller", _fake_get_controller)
-    monkeypatch.setattr(server.server_runtime, "_ensure_event", _fake_ensure_event)
-    monkeypatch.setattr(server.server_runtime, "_resolve_visual_target_for_event", _fake_resolve_visual_target_for_event)
-    monkeypatch.setattr(server.server_runtime, "_pixel_history_raw_with_timeout", _fake_history)
-    monkeypatch.setattr(server.server_runtime, "pixel_history_input_attachment_conflict", lambda *args: None)
-    monkeypatch.setattr(server.server_runtime, "_event_truth_metadata", _fake_truth)
-    monkeypatch.setattr(server.server_runtime, "_get_rd", lambda: SimpleNamespace(
+    monkeypatch.setattr(pixel_trace, "_pixel_history_writer_bindings", _fake_bindings)
+    monkeypatch.setattr(replay_access, "_get_controller", _fake_get_controller)
+    monkeypatch.setattr(replay_access, "_ensure_event", _fake_ensure_event)
+    monkeypatch.setattr(visual_target, "_resolve_visual_target_for_event", _fake_resolve_visual_target_for_event)
+    monkeypatch.setattr(pixel_trace, "_pixel_history_raw_with_timeout", _fake_history)
+    monkeypatch.setattr(replay_facts, "pixel_history_input_attachment_conflict", lambda *args: None)
+    monkeypatch.setattr(truth_matrix, "_event_truth_metadata", _fake_truth)
+    monkeypatch.setattr(renderdoc_api, "_get_rd", lambda: SimpleNamespace(
         Subresource=_Subresource, CompType=SimpleNamespace(Float=1)))
-    server.server_runtime._render_service = object()
+    live_state._render_service = object()
 
     payload = json.loads(
         asyncio.run(
-            server._dispatch_texture(
+            texture_ops.dispatch(
                 "get_pixel_history",
                 {"session_id": "sess_demo", "event_id": 77, "target": {"rt_index": 1}, "x": 4, "y": 5},
             )
         )
     )
-    without_bindings = json.loads(asyncio.run(server._dispatch_texture("get_pixel_history", {
+    without_bindings = json.loads(asyncio.run(texture_ops.dispatch("get_pixel_history", {
         "session_id": "sess_demo", "event_id": 77, "target": {"rt_index": 1},
         "x": 4, "y": 5, "include_shaders": False,
     })))
     conflict = json.loads(
         asyncio.run(
-            server._dispatch_texture(
+            texture_ops.dispatch(
                 "get_pixel_history",
                 {
                     "session_id": "sess_demo",
@@ -491,7 +496,6 @@ def test_pixel_history_resolves_explicit_output_target(monkeypatch: pytest.Monke
 
 
 def test_pixel_history_rejects_invalid_vulkan_attachment_and_restores_entry(monkeypatch: pytest.MonkeyPatch) -> None:
-    runtime = server.server_runtime
     active = {"event": 19}
 
     async def get_controller(session_id: str) -> object:
@@ -507,17 +511,17 @@ def test_pixel_history_rejects_invalid_vulkan_attachment_and_restores_entry(monk
     async def forbidden_native_call(*args: object) -> list[object]:
         raise AssertionError("Pixel History must not run for an invalid input attachment")
 
-    monkeypatch.setattr(runtime, "_get_controller", get_controller)
-    monkeypatch.setattr(runtime, "_ensure_event", ensure_event)
-    monkeypatch.setattr(runtime, "_active_event", lambda session_id: active["event"])
-    monkeypatch.setattr(runtime, "_resolve_texture_id", resolve_texture)
-    monkeypatch.setattr(runtime, "_get_rd", lambda: SimpleNamespace(Subresource=SimpleNamespace))
-    monkeypatch.setattr(runtime, "_runtime_context_id", lambda: "owned-context")
-    monkeypatch.setattr(runtime, "pixel_history_input_attachment_conflict", lambda *args: (7, 0x10))
-    monkeypatch.setattr(runtime, "_pixel_history_raw", forbidden_native_call)
-    monkeypatch.setattr(runtime, "_render_service", object())
+    monkeypatch.setattr(replay_access, "_get_controller", get_controller)
+    monkeypatch.setattr(replay_access, "_ensure_event", ensure_event)
+    monkeypatch.setattr(replay_access, "_active_event", lambda session_id: active["event"])
+    monkeypatch.setattr(replay_access, "_resolve_texture_id", resolve_texture)
+    monkeypatch.setattr(renderdoc_api, "_get_rd", lambda: SimpleNamespace(Subresource=SimpleNamespace))
+    monkeypatch.setattr(live_state, "_runtime_context_id", lambda: "owned-context")
+    monkeypatch.setattr(replay_facts, "pixel_history_input_attachment_conflict", lambda *args: (7, 0x10))
+    monkeypatch.setattr(pixel_trace, "_pixel_history_raw", forbidden_native_call)
+    monkeypatch.setattr(live_state, "_render_service", object())
 
-    payload = json.loads(asyncio.run(server._dispatch_texture("get_pixel_history", {
+    payload = json.loads(asyncio.run(texture_ops.dispatch("get_pixel_history", {
         "session_id": "replay", "texture_id": "texture", "event_id": 5, "x": 1, "y": 2,
     })))
     assert payload["success"] is False
@@ -530,7 +534,6 @@ def test_pixel_history_rejects_invalid_vulkan_attachment_and_restores_entry(monk
 
 
 def test_pixel_history_bindings_follow_writer_events_and_restore_query_event(monkeypatch: pytest.MonkeyPatch) -> None:
-    runtime = server.server_runtime
     observed: list[tuple[object, ...]] = []
 
     class _Snapshot:
@@ -549,9 +552,9 @@ def test_pixel_history_bindings_follow_writer_events_and_restore_query_event(mon
         def SetFrameEvent(self, event_id: int, force: bool) -> None:
             observed.append(("restore", event_id, force))
 
-    monkeypatch.setattr(runtime, "_pipeline_service", _Pipeline())
-    monkeypatch.setattr(runtime, "_session_backend_record", lambda *args, **kwargs: ("remote", {}))
-    bindings = asyncio.run(runtime._pixel_history_writer_bindings("session", 50,
+    monkeypatch.setattr(live_state, "_pipeline_service", _Pipeline())
+    monkeypatch.setattr(truth_matrix, "_session_backend_record", lambda *args, **kwargs: ("remote", {}))
+    bindings = asyncio.run(pixel_trace._pixel_history_writer_bindings("session", 50,
         [{"event_id": 11}, {"event_id": 11}, {"event_id": 21}], _Controller()))
     assert observed == [("inspect", 11, ("shaders", "output_targets")),
                         ("inspect", 21, ("shaders", "output_targets")), ("restore", 50, True)]
@@ -565,7 +568,6 @@ def test_pixel_history_bindings_follow_writer_events_and_restore_query_event(mon
 
 
 def test_pixel_history_writer_binding_restore_failure_marks_session_for_recovery(monkeypatch: pytest.MonkeyPatch) -> None:
-    runtime = server.server_runtime
     recorded: list[dict[str, object]] = []
 
     class _Snapshot:
@@ -581,26 +583,25 @@ def test_pixel_history_writer_binding_restore_failure_marks_session_for_recovery
         def SetFrameEvent(self, event_id: int, force: bool) -> None:
             raise RuntimeError("restore failed")
 
-    monkeypatch.setattr(runtime, "_pipeline_service", _Pipeline())
-    monkeypatch.setattr(runtime, "_session_backend_record", lambda *args, **kwargs: ("remote", {}))
-    monkeypatch.setattr(runtime, "_update_context_session_record", lambda session, **fields: recorded.append(fields))
-    with pytest.raises(runtime.CoreError) as raised:
-        asyncio.run(runtime._pixel_history_writer_bindings("session", 50, [{"event_id": 11}], _Controller()))
+    monkeypatch.setattr(live_state, "_pipeline_service", _Pipeline())
+    monkeypatch.setattr(truth_matrix, "_session_backend_record", lambda *args, **kwargs: ("remote", {}))
+    monkeypatch.setattr(context_records, "_update_context_session_record", lambda session, **fields: recorded.append(fields))
+    with pytest.raises(CoreError) as raised:
+        asyncio.run(pixel_trace._pixel_history_writer_bindings("session", 50, [{"event_id": 11}], _Controller()))
     assert raised.value.code == "replay_restore_failed"
     assert recorded[0]["recovery_status"] == "requires_restart"
 
 
 def test_pixel_history_preserves_native_modification_values(monkeypatch: pytest.MonkeyPatch) -> None:
-    runtime = server.server_runtime
     comp_types = SimpleNamespace(Float=1, UNorm=2, SNorm=3, UInt=4, SInt=5,
                                  UScaled=6, SScaled=7, Depth=8, UNormSRGB=9)
-    monkeypatch.setattr(runtime, "_get_rd", lambda: SimpleNamespace(CompType=comp_types))
+    monkeypatch.setattr(renderdoc_api, "_get_rd", lambda: SimpleNamespace(CompType=comp_types))
 
     float_target = SimpleNamespace(format=SimpleNamespace(compType=comp_types.Float))
-    assert runtime._pixel_history_color_type(float_target) == "float"
+    assert pixel_trace._pixel_history_color_type(float_target) == "float"
     uint_target = SimpleNamespace(format=SimpleNamespace(compType=comp_types.UInt))
-    assert runtime._pixel_history_color_type(uint_target) == "uint"
-    assert runtime._pixel_history_color_type(object()) == "unknown"
+    assert pixel_trace._pixel_history_color_type(uint_target) == "uint"
+    assert pixel_trace._pixel_history_color_type(object()) == "unknown"
 
     def modification(*, valid: bool, depth: float, stencil: int) -> SimpleNamespace:
         return SimpleNamespace(
@@ -617,7 +618,7 @@ def test_pixel_history_preserves_native_modification_values(monkeypatch: pytest.
         shaderOut=modification(valid=True, depth=0.4, stencil=2),
         postMod=modification(valid=False, depth=0.5, stencil=3),
     )
-    payload = runtime._pixel_history_item_payload(item, "float")
+    payload = pixel_trace._pixel_history_item_payload(item, "float")
     assert payload["pre_mod"] == {
         "valid": True, "color_type": "float", "color_rgba": [0.25, None, 0.75, 1.0],
         "non_finite_channels": [1], "depth": None, "stencil": None,
@@ -627,7 +628,7 @@ def test_pixel_history_preserves_native_modification_values(monkeypatch: pytest.
     assert payload["shader_out"]["stencil"] == 2
     assert payload["post_mod"] == {"valid": False, "unavailable_reason": "native_value_invalid"}
     item.fragIndex = 1
-    second_fragment = runtime._pixel_history_item_payload(item, "uint")
+    second_fragment = pixel_trace._pixel_history_item_payload(item, "uint")
     assert second_fragment["pre_mod"] == {"valid": False, "unavailable_reason": "non_first_fragment"}
     assert second_fragment["shader_out"]["color_rgba"] == [1, 2, 3, 4]
 
@@ -642,20 +643,20 @@ def test_shader_reflection_and_disassembly_support_stage_only_queries(monkeypatc
     async def _fake_ensure_event(session_id: str, event_id: int | None) -> int:
         return int(event_id or 314)
 
-    monkeypatch.setattr(server.server_runtime, "_offload", _inline_offload)
-    monkeypatch.setattr(server.server_runtime, "_get_controller", _fake_get_controller)
-    monkeypatch.setattr(server.server_runtime, "_ensure_event", _fake_ensure_event)
-    monkeypatch.setattr(server.server_runtime, "_rd_stage", lambda stage: stage)
-    monkeypatch.setattr(server.server_runtime, "_is_null_resource_id", lambda rid: str(rid) in {"", "ResourceId::0", "0"})
+    monkeypatch.setattr(renderdoc_api, "_offload", _inline_offload)
+    monkeypatch.setattr(replay_access, "_get_controller", _fake_get_controller)
+    monkeypatch.setattr(replay_access, "_ensure_event", _fake_ensure_event)
+    monkeypatch.setattr(renderdoc_api, "_rd_stage", lambda stage: stage)
+    monkeypatch.setattr(renderdoc_api, "_is_null_resource_id", lambda rid: str(rid) in {"", "ResourceId::0", "0"})
     monkeypatch.setattr(
-        server.server_runtime.PatchEngine,
+        PatchEngine,
         "_resolve_source",
         staticmethod(lambda *args, **kwargs: ("disassembly:mock-target", "raw", "mock-target", False)),
     )
 
     reflection_payload = json.loads(
         asyncio.run(
-            server._dispatch_shader(
+            shader_ops.dispatch(
                 "get_reflection",
                 {
                     "session_id": "sess_demo",
@@ -667,7 +668,7 @@ def test_shader_reflection_and_disassembly_support_stage_only_queries(monkeypatc
     )
     disassembly_payload = json.loads(
         asyncio.run(
-            server._dispatch_shader(
+            shader_ops.dispatch(
                 "get_disassembly",
                 {
                     "session_id": "sess_demo",
@@ -702,7 +703,7 @@ def test_shader_reflection_and_disassembly_support_stage_only_queries(monkeypatc
     )
     missing_debug_payload = json.loads(
         asyncio.run(
-            server._dispatch_shader(
+            shader_ops.dispatch(
                 "get_reflection", {"session_id": "sess_demo", "event_id": 314, "stage": "ps"}
             )
         )
@@ -723,7 +724,7 @@ def test_shader_reflection_and_disassembly_support_stage_only_queries(monkeypatc
     )
     partial_debug_payload = json.loads(
         asyncio.run(
-            server._dispatch_shader(
+            shader_ops.dispatch(
                 "get_reflection", {"session_id": "sess_demo", "event_id": 314, "stage": "ps"}
             )
         )
@@ -768,15 +769,15 @@ def test_shader_get_constant_buffer_contents_returns_decoded_payload(monkeypatch
             }
         ]
 
-    monkeypatch.setattr(server.server_runtime, "_offload", _inline_offload)
-    monkeypatch.setattr(server.server_runtime, "_get_controller", _fake_get_controller)
-    monkeypatch.setattr(server.server_runtime, "_ensure_event", _fake_ensure_event)
-    monkeypatch.setattr(server.server_runtime, "_rd_stage", lambda stage: stage)
-    monkeypatch.setattr(server.server_runtime, "_collect_constant_buffers", _fake_collect_constant_buffers)
+    monkeypatch.setattr(renderdoc_api, "_offload", _inline_offload)
+    monkeypatch.setattr(replay_access, "_get_controller", _fake_get_controller)
+    monkeypatch.setattr(replay_access, "_ensure_event", _fake_ensure_event)
+    monkeypatch.setattr(renderdoc_api, "_rd_stage", lambda stage: stage)
+    monkeypatch.setattr(shader_values, "_collect_constant_buffers", _fake_collect_constant_buffers)
 
     payload = json.loads(
         asyncio.run(
-            server._dispatch_shader(
+            shader_ops.dispatch(
                 "get_constant_buffer_contents",
                 {
                     "session_id": "sess_demo",
@@ -811,12 +812,12 @@ def test_texture_get_data_defaults_to_npz_container(monkeypatch: pytest.MonkeyPa
     async def at_state(session_id, resource_id, args, reader):
         return await reader(314), {"state": "current", "resolved_event_id": 314,
                                   "restored_event_id": 11, "replay_state_restored": True}
-    monkeypatch.setattr(server.server_runtime, "_resolve_resource_id", resolve)
-    monkeypatch.setattr(server.server_runtime, "_get_controller", controller)
-    monkeypatch.setattr(server.server_runtime, "_read_at_capture_state", at_state)
-    monkeypatch.setattr(server.server_runtime, "_render_service", SimpleNamespace(read_texture_array=read))
+    monkeypatch.setattr(replay_access, "_resolve_resource_id", resolve)
+    monkeypatch.setattr(replay_access, "_get_controller", controller)
+    monkeypatch.setattr(texture_export, "_read_at_capture_state", at_state)
+    monkeypatch.setattr(live_state, "_render_service", SimpleNamespace(read_texture_array=read))
     output = tmp_path / "readback.npz"
-    payload = json.loads(asyncio.run(server._dispatch_texture("get_data", {
+    payload = json.loads(asyncio.run(texture_ops.dispatch("get_data", {
         "session_id": "sess_demo", "event_id": 314, "texture_id": "ResourceId::178817",
         "output_path": str(output), "as_base64": True,
     })))
@@ -857,15 +858,15 @@ def test_texture_get_data_rejects_non_npz_output_path(monkeypatch: pytest.Monkey
     artifact_path = tmp_path / "readback.npz"
     artifact_path.write_bytes(b"npz-payload")
 
-    monkeypatch.setattr(server.server_runtime, "_ensure_event", _fake_ensure_event)
-    monkeypatch.setattr(server.server_runtime, "_resolve_texture_id", _fake_resolve_texture_id)
-    monkeypatch.setattr(server.server_runtime, "_artifact_path", lambda artifact_ref: str(artifact_path))
-    server.server_runtime._session_manager = SimpleNamespace()
-    server.server_runtime._render_service = SimpleNamespace(readback_texture=_fake_readback_texture)
+    monkeypatch.setattr(replay_access, "_ensure_event", _fake_ensure_event)
+    monkeypatch.setattr(replay_access, "_resolve_texture_id", _fake_resolve_texture_id)
+    monkeypatch.setattr(artifact_payloads, "_artifact_path", lambda artifact_ref: str(artifact_path))
+    live_state._session_manager = SimpleNamespace()
+    live_state._render_service = SimpleNamespace(readback_texture=_fake_readback_texture)
 
     payload = json.loads(
         asyncio.run(
-            server._dispatch_texture(
+            texture_ops.dispatch(
                 "get_data",
                 {
                     "session_id": "sess_demo",
@@ -916,16 +917,16 @@ def test_shader_get_constant_buffer_contents_returns_raw_fallback_when_decode_un
             }
         ]
 
-    monkeypatch.setattr(server.server_runtime, "_offload", _inline_offload)
-    monkeypatch.setattr(server.server_runtime, "_get_controller", _fake_get_controller)
-    monkeypatch.setattr(server.server_runtime, "_ensure_event", _fake_ensure_event)
-    monkeypatch.setattr(server.server_runtime, "_rd_stage", lambda stage: stage)
-    monkeypatch.setattr(server.server_runtime, "_resolve_resource_id", _fake_resolve_resource_id)
-    monkeypatch.setattr(server.server_runtime, "_collect_constant_buffers", _fake_collect_constant_buffers)
+    monkeypatch.setattr(renderdoc_api, "_offload", _inline_offload)
+    monkeypatch.setattr(replay_access, "_get_controller", _fake_get_controller)
+    monkeypatch.setattr(replay_access, "_ensure_event", _fake_ensure_event)
+    monkeypatch.setattr(renderdoc_api, "_rd_stage", lambda stage: stage)
+    monkeypatch.setattr(replay_access, "_resolve_resource_id", _fake_resolve_resource_id)
+    monkeypatch.setattr(shader_values, "_collect_constant_buffers", _fake_collect_constant_buffers)
 
     payload = json.loads(
         asyncio.run(
-            server._dispatch_shader(
+            shader_ops.dispatch(
                 "get_constant_buffer_contents",
                 {
                     "session_id": "sess_demo",
@@ -948,7 +949,6 @@ def test_shader_get_constant_buffer_contents_returns_raw_fallback_when_decode_un
 
 
 def test_constant_buffer_slot_is_reflection_index_not_removed_bindpoint(monkeypatch):
-    runtime = server.server_runtime
     reads = []
     blocks = [SimpleNamespace(name=f"block{i}", fixedBindNumber=20+i,
                               fixedBindSetOrSpace=2, variables=[], byteSize=16) for i in range(4)]
@@ -961,13 +961,13 @@ def test_constant_buffer_slot_is_reflection_index_not_removed_bindpoint(monkeypa
         return []
     async def offload(fn, *args):
         return fn(*args)
-    monkeypatch.setattr(runtime, "_offload", offload)
-    monkeypatch.setattr(runtime, "_rd_stage", lambda stage: stage)
-    monkeypatch.setattr(runtime, "_get_rd", lambda: SimpleNamespace(ResourceId=lambda: None))
-    monkeypatch.setattr(runtime, "_pipeline_object_for_cbuffer", lambda *_: "pipeline")
+    monkeypatch.setattr(renderdoc_api, "_offload", offload)
+    monkeypatch.setattr(renderdoc_api, "_rd_stage", lambda stage: stage)
+    monkeypatch.setattr(renderdoc_api, "_get_rd", lambda: SimpleNamespace(ResourceId=lambda: None))
+    monkeypatch.setattr(shader_values, "_pipeline_object_for_cbuffer", lambda *_: "pipeline")
     pipe = SimpleNamespace(GetConstantBlock=get_block)
     reflection = SimpleNamespace(constantBlocks=blocks, entryPoint="main")
-    result = asyncio.run(runtime._collect_constant_buffers(
+    result = asyncio.run(shader_values._collect_constant_buffers(
         SimpleNamespace(GetCBufferVariableContents=get_values), pipe, reflection, "ps", "shader",
         slot=3, array_index=1, include_contents=True))
     assert reads == [("ps", 3, 1)]
@@ -977,14 +977,13 @@ def test_constant_buffer_slot_is_reflection_index_not_removed_bindpoint(monkeypa
     assert result[0]["resource_id"] == "ResourceId::cb"
     assert result[0]["offset"] == 32
     assert result[0]["contents"] == []
-    assert asyncio.run(runtime._collect_constant_buffers(
+    assert asyncio.run(shader_values._collect_constant_buffers(
         SimpleNamespace(), pipe, reflection, "ps", "shader", slot=9)) == []
 
 
 @pytest.mark.parametrize("failure,restore", [("slot", "ok"), ("decode", "ok"),
     ("slot", "raises"), ("slot", "mismatch"), ("slot", "unknown")])
 def test_constant_buffer_failure_restores_original_event_without_success(monkeypatch, failure, restore):
-    runtime = server.server_runtime
     active = [0 if restore == "unknown" else 11]
     events = []
     async def ensure(session_id, event_id):
@@ -999,14 +998,14 @@ def test_constant_buffer_failure_restores_original_event_without_success(monkeyp
         return _FakeShaderController()
     async def buffers(*args, **kwargs):
         return [] if failure == "slot" else [{"contents": [], "flattened_contents": {}}]
-    monkeypatch.setattr(runtime, "_active_event", lambda _: active[0])
-    monkeypatch.setattr(runtime, "_runtime_context_id", lambda: "owned-context")
-    monkeypatch.setattr(runtime, "_ensure_event", ensure)
-    monkeypatch.setattr(runtime, "_offload", offload)
-    monkeypatch.setattr(runtime, "_get_controller", controller)
-    monkeypatch.setattr(runtime, "_rd_stage", lambda stage: stage)
-    monkeypatch.setattr(runtime, "_collect_constant_buffers", buffers)
-    payload = json.loads(asyncio.run(server._dispatch_shader("get_constant_buffer_contents",
+    monkeypatch.setattr(replay_access, "_active_event", lambda _: active[0])
+    monkeypatch.setattr(live_state, "_runtime_context_id", lambda: "owned-context")
+    monkeypatch.setattr(replay_access, "_ensure_event", ensure)
+    monkeypatch.setattr(renderdoc_api, "_offload", offload)
+    monkeypatch.setattr(replay_access, "_get_controller", controller)
+    monkeypatch.setattr(renderdoc_api, "_rd_stage", lambda stage: stage)
+    monkeypatch.setattr(shader_values, "_collect_constant_buffers", buffers)
+    payload = json.loads(asyncio.run(shader_ops.dispatch("get_constant_buffer_contents",
         {"session_id": "sess_demo", "event_id": 314, "stage": "ps", "slot": 8})))
     assert payload["success"] is False
     if restore == "ok":
@@ -1043,12 +1042,12 @@ def test_region_inline_view_matches_full_export_and_bound(monkeypatch, tmp_path,
         return texture
     async def truth(*args):
         return {"binding_truth_level": "binding_verified", "evidence_truth_level": "structured_readback"}
-    monkeypatch.setattr(server.server_runtime, "_ensure_event", ensure)
-    monkeypatch.setattr(server.server_runtime, "_resolve_texture_id", resolve)
-    monkeypatch.setattr(server.server_runtime, "_event_truth_metadata", truth)
-    monkeypatch.setattr(server.server_runtime, "_render_service", SimpleNamespace(read_texture_array=read))
-    monkeypatch.setattr(server.server_runtime, "_artifact_store", SimpleNamespace(store=store, get_path=lambda _: tmp_path / "region.npz"))
-    result = json.loads(asyncio.run(server._dispatch_texture("get_region_values", {
+    monkeypatch.setattr(replay_access, "_ensure_event", ensure)
+    monkeypatch.setattr(replay_access, "_resolve_texture_id", resolve)
+    monkeypatch.setattr(truth_matrix, "_event_truth_metadata", truth)
+    monkeypatch.setattr(live_state, "_render_service", SimpleNamespace(read_texture_array=read))
+    monkeypatch.setattr(live_state, "_artifact_store", SimpleNamespace(store=store, get_path=lambda _: tmp_path / "region.npz"))
+    result = json.loads(asyncio.run(texture_ops.dispatch("get_region_values", {
         "session_id": "session", "event_id": 9, "texture_id": "texture",
         "rect": {"x": 3, "y": 5, "w": shape[1], "h": shape[0]}, "stride": stride, "as_type": value_type,
     })))
@@ -1085,24 +1084,24 @@ def test_region_inline_nonfinite_values_remain_explicit_and_channel_stats_finite
         return texture
     async def truth(*args):
         return {}
-    monkeypatch.setattr(server.server_runtime, "_ensure_event", ensure)
-    monkeypatch.setattr(server.server_runtime, "_resolve_texture_id", resolve)
-    monkeypatch.setattr(server.server_runtime, "_event_truth_metadata", truth)
-    monkeypatch.setattr(server.server_runtime, "_render_service", SimpleNamespace(read_texture_array=read))
-    monkeypatch.setattr(server.server_runtime, "_artifact_store", SimpleNamespace(store=store, get_path=lambda _: tmp_path / "region.npz"))
+    monkeypatch.setattr(replay_access, "_ensure_event", ensure)
+    monkeypatch.setattr(replay_access, "_resolve_texture_id", resolve)
+    monkeypatch.setattr(truth_matrix, "_event_truth_metadata", truth)
+    monkeypatch.setattr(live_state, "_render_service", SimpleNamespace(read_texture_array=read))
+    monkeypatch.setattr(live_state, "_artifact_store", SimpleNamespace(store=store, get_path=lambda _: tmp_path / "region.npz"))
     args = {"session_id": "session", "event_id": 9, "texture_id": "texture", "rect": {"x": 0, "y": 0, "w": 2, "h": 1}}
-    result = json.loads(asyncio.run(server._dispatch_texture("get_region_values", args)))
+    result = json.loads(asyncio.run(texture_ops.dispatch("get_region_values", args)))
     assert result["values"] == [[["NaN", "Infinity", "-Infinity", 1.0], ["NaN", 2.0, 3.0, 1.0]]]
     assert result["stats"]["channels"]["r"] == {"min": None, "max": None, "mean": None, "nan_count": 2, "inf_count": 0}
     assert result["stats"]["channels"]["g"]["mean"] == 2.0
     assert result["stats"]["channels"]["b"]["mean"] == 3.0
     assert result["stats"]["channels"]["a"]["mean"] == 1.0
-    whole = json.loads(asyncio.run(server._dispatch_texture("compute_stats", {
+    whole = json.loads(asyncio.run(texture_ops.dispatch("compute_stats", {
         "session_id": "session", "event_id": 9, "texture_id": "texture",
     })))
     assert whole["stats"]["channels"] == result["stats"]["channels"]
     assert writes == [True]  # Statistics stay in memory; only explicit region readback exported.
-    integer_result = json.loads(asyncio.run(server._dispatch_texture("get_region_values", {**args, "as_type": "int"})))
+    integer_result = json.loads(asyncio.run(texture_ops.dispatch("get_region_values", {**args, "as_type": "int"})))
     assert integer_result["success"] is False
     assert integer_result["code"] == "texture_nonfinite_data"
     assert writes == [True]

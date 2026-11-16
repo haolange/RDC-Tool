@@ -5,12 +5,13 @@ import json
 
 import pytest
 
-from rdc_tool import server
+from rdc_tool.runtime import dispatch
+from rdc_tool.runtime.operations import vfs as vfs_ops
 
 
 @pytest.mark.unit
 def test_vfs_ls_root_lists_top_level_domains() -> None:
-    payload = json.loads(asyncio.run(server._dispatch_vfs("ls", {"path": "/"})))
+    payload = json.loads(asyncio.run(vfs_ops.dispatch("ls", {"path": "/"})))
 
     assert payload["success"] is True
     entries = payload["entries"]
@@ -33,9 +34,9 @@ def test_vfs_cat_context_uses_context_snapshot(monkeypatch) -> None:
             "meta": {},
         }
 
-    monkeypatch.setattr(server, "dispatch_operation", _fake_dispatch)
+    monkeypatch.setattr(dispatch, "dispatch_operation", _fake_dispatch)
 
-    payload = json.loads(asyncio.run(server._dispatch_vfs("cat", {"path": "/context"})))
+    payload = json.loads(asyncio.run(vfs_ops.dispatch("cat", {"path": "/context"})))
 
     assert payload["success"] is True
     assert payload["node"]["data"]["context_id"] == "ctx-demo"
@@ -71,11 +72,11 @@ def test_vfs_draw_shader_path_routes_through_pipeline_tools(monkeypatch) -> None
             }
         raise AssertionError(f"unexpected tool: {tool_name}")
 
-    monkeypatch.setattr(server, "dispatch_operation", _fake_dispatch)
+    monkeypatch.setattr(dispatch, "dispatch_operation", _fake_dispatch)
 
     payload = json.loads(
         asyncio.run(
-            server._dispatch_vfs(
+            vfs_ops.dispatch(
                 "cat",
                 {"path": "/draws/42/shaders/ps", "session_id": "sess_demo"},
             )
@@ -112,11 +113,11 @@ def test_vfs_shader_not_bound_becomes_unavailable_node(monkeypatch) -> None:
             }
         raise AssertionError(f"unexpected tool: {tool_name}")
 
-    monkeypatch.setattr(server, "dispatch_operation", _fake_dispatch)
+    monkeypatch.setattr(dispatch, "dispatch_operation", _fake_dispatch)
 
     payload = json.loads(
         asyncio.run(
-            server._dispatch_vfs(
+            vfs_ops.dispatch(
                 "tree",
                 {"path": "/draws/42/shaders", "session_id": "sess_demo", "depth": 1},
             )
@@ -132,7 +133,7 @@ def test_vfs_shader_not_bound_becomes_unavailable_node(monkeypatch) -> None:
 
 @pytest.mark.unit
 def test_vfs_resolve_uses_node_key() -> None:
-    payload = json.loads(asyncio.run(server._dispatch_vfs("resolve", {"path": "/"})))
+    payload = json.loads(asyncio.run(vfs_ops.dispatch("resolve", {"path": "/"})))
 
     assert payload["success"] is True
     assert payload["node"]["path"] == "/"
@@ -140,7 +141,7 @@ def test_vfs_resolve_uses_node_key() -> None:
 
 @pytest.mark.unit
 def test_vfs_tree_respects_max_nodes_budget() -> None:
-    payload = json.loads(asyncio.run(server._dispatch_vfs("tree", {"path": "/", "depth": 1, "max_nodes": 2})))
+    payload = json.loads(asyncio.run(vfs_ops.dispatch("tree", {"path": "/", "depth": 1, "max_nodes": 2})))
 
     assert payload["success"] is True
     assert payload["max_nodes"] == 2
@@ -172,11 +173,11 @@ def test_vfs_tree_draws_defers_action_details(monkeypatch) -> None:
             raise AssertionError("vfs tree should not materialize full action details for /draws/<event>")
         raise AssertionError(f"unexpected tool: {tool_name}")
 
-    monkeypatch.setattr(server, "dispatch_operation", _fake_dispatch)
+    monkeypatch.setattr(dispatch, "dispatch_operation", _fake_dispatch)
 
     payload = json.loads(
         asyncio.run(
-            server._dispatch_vfs(
+            vfs_ops.dispatch(
                 "tree",
                 {"path": "/draws", "session_id": "sess_demo", "depth": 2, "max_nodes": 8},
             )

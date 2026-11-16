@@ -23,9 +23,27 @@ rdc-tool（CLI 进程，短命）
 |---|---|---|
 | 入口 | `bin/rdc-tool`、`bin/rdc-tool.cmd`、`cli/run_cli.py`、`rdc_tool/cli.py` | 选择同安装的 Python，解析命令，输出 canonical JSON |
 | daemon | `rdc_tool/daemon/` | context 所有权、state 文件（`daemon/state.py` 唯一所有者）、IPC 服务、worker 生命周期 |
-| 运行时 | `rdc_tool/server_runtime.py`、`rdc_tool/core/` | `rd.*` 操作实现与回放服务 |
+| 运行时 | `rdc_tool/runtime/`、`rdc_tool/core/` | worker 内执行 `rd.*` 操作：路由、操作实现与回放服务（结构见下文） |
 | 契约 | `rdc_tool/operation_definitions.py`、`rdc_tool/runtime_catalog.py` | 操作定义唯一真源；catalog 与参考文档由它生成 |
 | 平台 | `rdc_tool/platform/` | 所有操作系统差异 |
+
+## 运行时结构
+
+`rdc_tool/runtime/` 只在 worker 进程内运行（入口 `worker_main.py`，daemon 以模块名启动它），自上而下分四层：
+
+| 层 | 模块 | 职责 |
+|---|---|---|
+| 执行 | `dispatch.py`、`routing.py` | 一次操作的完整执行：context 就绪、preview 同步、路由、canonical 结果、操作日志与进程身份；路由按命名空间找到操作模块，并做参数校验、前置条件与 replay 健康作用域 |
+| 操作 | `operations/<ns>.py` | 每个 `rd.<ns>` 一个模块，暴露 `dispatch(action, args)`，处理的动作集合与 catalog 完全一致 |
+| 服务 | replay 服务组（`replay_access`、`session_recovery`、`shader_patches`、`truth_matrix`、`visual_target`）、`preview_sync`、`remote_target`、`remote_session`、`texture_export`、`pixel_trace`、`shader_values`、`shader_debug`、`vfs_tree`、`discovery`、`observation`、`runtime_lifecycle` | 回放访问与恢复、可视目标与真值元数据、远端连接、导出、像素历史、着色器值、VFS 与发现 |
+| 记录与基础 | `context_records`、`remote_records`、`oplog`、`settings`；`live_state`、`envelope`、`coerce`、`renderdoc_api`、`action_index`、`texture_naming`、`artifact_payloads` | context 状态与快照、操作日志、配置；进程内对象与每次调用的上下文、结果信封、参数转换、RenderDoc 绑定访问 |
+
+规则：
+
+- 模块之间以 `module.name` 引用，每个函数只存在于一个命名空间；测试替换一次即对所有调用方生效。
+- 可变的进程内状态只在 `live_state`；可被替换的外部协作者（如 `remote_bootstrap`、`timeout_policy`）同样以模块引用。
+- 唯一允许的循环是 replay 服务组之间的互相恢复与探测；服务层不导入操作层与执行层（VFS 读取重新进入完整执行流程时在函数内显式导入 `dispatch`）。
+- `rdc_tool/runtime` 之外的代码不导入它。`tests/test_runtime_layering.py` 守住以上规则与路由覆盖。
 
 ## 平台层
 

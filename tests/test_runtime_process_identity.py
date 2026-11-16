@@ -7,7 +7,8 @@ import sys
 import pytest
 
 from rdc_tool import runtime_process_identity as identity
-from rdc_tool import server
+from rdc_tool import runtime_process_identity
+from rdc_tool.runtime import dispatch
 
 pytestmark = pytest.mark.contract
 
@@ -61,11 +62,11 @@ def test_context_and_canonical_results_expose_only_process_births(monkeypatch):
     expected = {"status": "available", "daemon": {"pid": 31, "start_generation": "birth:100"},
                 "worker": {"pid": 32, "start_generation": "birth:200"}}
     monkeypatch.setattr(identity, "runtime_process_identity", lambda: expected)
-    monkeypatch.setattr(server, "runtime_process_identity", lambda: expected)
-    result = asyncio.run(server.dispatch_operation("rd.session.get_context", {}, transport="test"))
+    monkeypatch.setattr(runtime_process_identity, "runtime_process_identity", lambda: expected)
+    result = asyncio.run(dispatch.dispatch_operation("rd.session.get_context", {}, transport="test"))
     assert result["ok"] is True
     assert result["data"]["process_identity"] == expected
     assert result["meta"]["process_identity"] == expected
-    failure = asyncio.run(server.dispatch_operation("rd.nonexistent", {}, transport="test"))
+    failure = asyncio.run(dispatch.dispatch_operation("rd.nonexistent", {}, transport="test"))
     assert failure["ok"] is False
     assert failure["meta"]["process_identity"] == expected

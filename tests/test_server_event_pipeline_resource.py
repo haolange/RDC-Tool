@@ -9,10 +9,23 @@ from typing import Any
 
 import pytest
 
-from rdc_tool import server
 from rdc_tool.context_snapshot import clear_context_snapshot
 from rdc_tool.core import pipeline_service as pipeline_module
 from rdc_tool.models import ShaderStage
+from rdc_tool.runtime import artifact_payloads, context_records, dispatch, live_state, renderdoc_api, replay_access, shader_values, texture_export, texture_naming, truth_matrix, visual_target
+from rdc_tool.runtime.operations import capture as capture_ops
+from rdc_tool.runtime.operations import event as event_ops
+from rdc_tool.runtime.operations import export as export_ops
+from rdc_tool.runtime.operations import macro as macro_ops
+from rdc_tool.runtime.operations import pipeline as pipeline_ops
+from rdc_tool.runtime.operations import resource as resource_ops
+from rdc_tool.runtime.operations import shader as shader_ops
+from rdc_tool.runtime.operations import texture as texture_ops
+
+
+def _execute_routed(operation, args):
+    """Run an operation through the real catalog router and envelope, without the process wrapper."""
+    return dispatch._execute(operation, args, live_state.ExecutionContext())
 
 
 class _FakeActionFlags:
@@ -193,14 +206,14 @@ def _install_common_env(monkeypatch: pytest.MonkeyPatch, controller: _FakeContro
         ActionFlags=_FakeActionFlags,
         ShaderStage=_FakeShaderStage,
     )
-    monkeypatch.setattr(server.server_runtime, "_offload", _inline_offload)
-    monkeypatch.setattr(server.server_runtime, "_get_controller", _fake_get_controller)
-    monkeypatch.setattr(server.server_runtime, "_get_rd", lambda: fake_rd)
+    monkeypatch.setattr(renderdoc_api, "_offload", _inline_offload)
+    monkeypatch.setattr(replay_access, "_get_controller", _fake_get_controller)
+    monkeypatch.setattr(renderdoc_api, "_get_rd", lambda: fake_rd)
 
 
 def _seed_capture(capture_file_id: str = "capf_demo") -> None:
-    server._runtime.captures = {
-        capture_file_id: server.CaptureFileHandle(
+    live_state._runtime.captures = {
+        capture_file_id: live_state.CaptureFileHandle(
             capture_file_id=capture_file_id,
             file_path="capture.rdc",
             read_only=True,
@@ -209,15 +222,15 @@ def _seed_capture(capture_file_id: str = "capf_demo") -> None:
 
 
 def _seed_session(active_event_id: int, *, session_id: str = "sess_demo", capture_file_id: str = "capf_demo") -> None:
-    server._runtime.replays = {
-        session_id: server.ReplayHandle(
+    live_state._runtime.replays = {
+        session_id: live_state.ReplayHandle(
             session_id=session_id,
             capture_file_id=capture_file_id,
             frame_index=0,
             active_event_id=active_event_id,
         )
     }
-    server._set_context_runtime_session(
+    context_records._set_context_runtime_session(
         session_id,
         capture_file_id=capture_file_id,
         backend_type="local",
@@ -227,29 +240,29 @@ def _seed_session(active_event_id: int, *, session_id: str = "sess_demo", captur
 
 
 def _poison_active_event(event_id: int) -> None:
-    server._runtime.replays["sess_demo"].active_event_id = int(event_id)
-    server._set_context_active_event("sess_demo", int(event_id))
+    live_state._runtime.replays["sess_demo"].active_event_id = int(event_id)
+    context_records._set_context_active_event("sess_demo", int(event_id))
 
 
 @pytest.fixture(autouse=True)
 def _reset_server_state() -> None:
-    original_captures = dict(server._runtime.captures)
-    original_replays = dict(server._runtime.replays)
-    original_contexts = dict(server._runtime.context_snapshots)
-    original_pipeline_service = server.server_runtime._pipeline_service
-    original_session_manager = server.server_runtime._session_manager
+    original_captures = dict(live_state._runtime.captures)
+    original_replays = dict(live_state._runtime.replays)
+    original_contexts = dict(live_state._runtime.context_snapshots)
+    original_pipeline_service = live_state._pipeline_service
+    original_session_manager = live_state._session_manager
     clear_context_snapshot()
-    server._runtime.context_snapshots.clear()
+    live_state._runtime.context_snapshots.clear()
     try:
         yield
     finally:
         clear_context_snapshot()
-        server._runtime.context_snapshots.clear()
-        server._runtime.captures = original_captures
-        server._runtime.replays = original_replays
-        server._runtime.context_snapshots.update(original_contexts)
-        server.server_runtime._pipeline_service = original_pipeline_service
-        server.server_runtime._session_manager = original_session_manager
+        live_state._runtime.context_snapshots.clear()
+        live_state._runtime.captures = original_captures
+        live_state._runtime.replays = original_replays
+        live_state._runtime.context_snapshots.update(original_contexts)
+        live_state._pipeline_service = original_pipeline_service
+        live_state._session_manager = original_session_manager
 
 
 def test_event_set_active_validates_before_mutating_state(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -263,21 +276,21 @@ def test_event_set_active_validates_before_mutating_state(monkeypatch: pytest.Mo
     _seed_capture()
     _seed_session(202)
 
-    invalid = asyncio.run(server.dispatch_operation("rd.event.set_active", {"session_id": "sess_demo", "event_id": 53}, transport="test"))
+    invalid = asyncio.run(dispatch.dispatch_operation("rd.event.set_active", {"session_id": "sess_demo", "event_id": 53}, transport="test"))
     assert invalid["ok"] is False
     assert invalid["error"]["code"] == "event_not_found"
     assert invalid["error"]["category"] == "not_found"
     assert invalid["error"]["details"] == {"session_id": "sess_demo", "event_id": 53}
     assert controller.set_frame_calls == []
-    assert server._runtime.replays["sess_demo"].active_event_id == 202
-    assert server._context_snapshot()["runtime"]["active_event_id"] == 202
+    assert live_state._runtime.replays["sess_demo"].active_event_id == 202
+    assert context_records._context_snapshot()["runtime"]["active_event_id"] == 202
 
-    valid = asyncio.run(server.dispatch_operation("rd.event.set_active", {"session_id": "sess_demo", "event_id": 101}, transport="test"))
+    valid = asyncio.run(dispatch.dispatch_operation("rd.event.set_active", {"session_id": "sess_demo", "event_id": 101}, transport="test"))
     assert valid["ok"] is True
     assert valid["data"]["active_event_id"] == 101
     assert controller.set_frame_calls == [101]
-    assert server._runtime.replays["sess_demo"].active_event_id == 101
-    assert server._context_snapshot()["runtime"]["active_event_id"] == 101
+    assert live_state._runtime.replays["sess_demo"].active_event_id == 101
+    assert context_records._context_snapshot()["runtime"]["active_event_id"] == 101
 
 
 def test_pixel_value_rejects_missing_event_before_replay_effects(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -288,9 +301,9 @@ def test_pixel_value_rejects_missing_event_before_replay_effects(monkeypatch: py
     _install_common_env(monkeypatch, controller)
     _seed_capture()
     _seed_session(1248)
-    server.server_runtime._render_service = SimpleNamespace()
+    live_state._render_service = SimpleNamespace()
 
-    rejected = json.loads(asyncio.run(server._dispatch_texture("get_pixel_value", {
+    rejected = json.loads(asyncio.run(texture_ops.dispatch("get_pixel_value", {
         "session_id": "sess_demo", "event_id": 1247,
         "texture_id": "ResourceId::208592", "x": 675, "y": 65,
     })))
@@ -304,8 +317,8 @@ def test_pixel_value_rejects_missing_event_before_replay_effects(monkeypatch: py
         "context_preserved": True,
     }
     assert controller.set_frame_calls == []
-    assert server._runtime.replays["sess_demo"].active_event_id == 1248
-    assert server._context_snapshot()["runtime"]["active_event_id"] == 1248
+    assert live_state._runtime.replays["sess_demo"].active_event_id == 1248
+    assert context_records._context_snapshot()["runtime"]["active_event_id"] == 1248
 
 
 def test_search_actions_filters_flags_before_result_limit(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -320,21 +333,21 @@ def test_search_actions_filters_flags_before_result_limit(monkeypatch: pytest.Mo
     _seed_capture()
     _seed_session(101)
 
-    included = json.loads(asyncio.run(server._dispatch_event(
+    included = json.loads(asyncio.run(event_ops.dispatch(
         "search_actions",
         {"session_id": "sess_demo", "query": {"flags_include": ["Drawcall"]}, "max_results": 1},
     )))
     assert included["success"] is True
     assert [item["event_id"] for item in included["matches"]] == [202]
 
-    excluded = json.loads(asyncio.run(server._dispatch_event(
+    excluded = json.loads(asyncio.run(event_ops.dispatch(
         "search_actions",
         {"session_id": "sess_demo", "query": {"flags_exclude": ["Drawcall"]}, "max_results": 2},
     )))
     assert excluded["success"] is True
     assert [item["event_id"] for item in excluded["matches"]] == [101, 303]
 
-    invalid = json.loads(asyncio.run(server._dispatch_event(
+    invalid = json.loads(asyncio.run(event_ops.dispatch(
         "search_actions",
         {"session_id": "sess_demo", "query": {"flags_include": ["NotAFlag"]}, "max_results": 1},
     )))
@@ -356,8 +369,8 @@ def test_search_actions_rejects_invalid_flags_before_controller(monkeypatch: pyt
     async def unexpected_controller(session_id: str) -> None:
         raise AssertionError("validation must precede controller acquisition")
 
-    monkeypatch.setattr(server.server_runtime, "_get_controller", unexpected_controller)
-    rejected = asyncio.run(server.dispatch_operation("rd.event.search_actions", {
+    monkeypatch.setattr(replay_access, "_get_controller", unexpected_controller)
+    rejected = asyncio.run(dispatch.dispatch_operation("rd.event.search_actions", {
         "session_id": "sess_demo", "query": query,
     }, transport="test"))
     assert rejected["ok"] is False
@@ -368,8 +381,8 @@ def test_search_actions_rejects_invalid_flags_before_controller(monkeypatch: pyt
         "effects_attempted": False, "context_preserved": True,
     }
     assert controller.set_frame_calls == []
-    assert server._runtime.replays["sess_demo"].active_event_id == 202
-    assert server._context_snapshot()["runtime"]["active_event_id"] == 202
+    assert live_state._runtime.replays["sess_demo"].active_event_id == 202
+    assert context_records._context_snapshot()["runtime"]["active_event_id"] == 202
 
 
 def test_search_actions_native_failure_does_not_claim_pre_effect_validation(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -382,7 +395,7 @@ def test_search_actions_native_failure_does_not_claim_pre_effect_validation(monk
         raise RuntimeError("native action read failed")
 
     monkeypatch.setattr(controller, "GetRootActions", failed_roots)
-    rejected = asyncio.run(server.dispatch_operation("rd.event.search_actions", {
+    rejected = asyncio.run(dispatch.dispatch_operation("rd.event.search_actions", {
         "session_id": "sess_demo", "query": {"flags_include": ["Drawcall"]},
     }, transport="test"))
     assert rejected["ok"] is False
@@ -404,7 +417,7 @@ def test_get_action_tree_paginates_and_bounds_nodes(monkeypatch: pytest.MonkeyPa
 
     payload = json.loads(
         asyncio.run(
-            server._dispatch_event(
+            event_ops.dispatch(
                 "get_action_tree",
                 {"session_id": "sess_demo", "offset": 1, "limit": 1, "max_nodes": 2},
             )
@@ -445,7 +458,7 @@ def test_get_action_tree_does_not_materialize_children_past_node_budget(monkeypa
 
     payload = json.loads(
         asyncio.run(
-            server._dispatch_event(
+            event_ops.dispatch(
                 "get_action_tree",
                 {"session_id": "sess_demo", "max_nodes": 2},
             )
@@ -471,7 +484,7 @@ def test_get_action_tree_supports_targeted_subtree(monkeypatch: pytest.MonkeyPat
     _seed_capture()
     _seed_session(101)
 
-    payload = json.loads(asyncio.run(server._dispatch_event("get_action_tree", {"session_id": "sess_demo", "event_id": 111})))
+    payload = json.loads(asyncio.run(event_ops.dispatch("get_action_tree", {"session_id": "sess_demo", "event_id": 111})))
 
     assert payload["success"] is True
     assert payload["root"]["children"][0]["event_id"] == 111
@@ -490,8 +503,6 @@ def test_get_action_tree_supports_targeted_subtree(monkeypatch: pytest.MonkeyPat
 def test_catalog_routed_vfs_draws_preserves_action_tree_pagination(
     monkeypatch, shape, max_nodes, depth, reason, emitted, source_truncated,
 ):
-    from rdc_tool.core.engine import CoreEngine
-    from rdc_tool.tool_router import build_operation_registry
 
     roots = [_FakeAction(event_id, children=[_FakeAction(event_id + 1)] if shape == "nested" else [])
              for event_id in (101, 201, 301)]
@@ -499,20 +510,19 @@ def test_catalog_routed_vfs_draws_preserves_action_tree_pagination(
     _install_common_env(monkeypatch, controller)
     _seed_capture()
     _seed_session(101)
-    engine = CoreEngine(registry=build_operation_registry())
     calls = []
 
     async def routed_dispatch(operation, args, **kwargs):
         calls.append((operation, dict(args)))
-        return await engine.execute(operation, args)
+        return await dispatch._execute(operation, args, live_state.ExecutionContext())
 
     # Only replace the process/context wrapper: both outer VFS and its nested
     # canonical action-tree query execute through the real catalog router.
-    monkeypatch.setattr(server, "dispatch_operation", routed_dispatch)
-    source = asyncio.run(engine.execute("rd.event.get_action_tree", {
+    monkeypatch.setattr(dispatch, "dispatch_operation", routed_dispatch)
+    source = asyncio.run(_execute_routed("rd.event.get_action_tree", {
         "session_id": "sess_demo", "max_depth": 2, "max_nodes": max(1, max_nodes),
     }))
-    result = asyncio.run(engine.execute("rd.vfs.tree", {
+    result = asyncio.run(_execute_routed("rd.vfs.tree", {
         "session_id": "sess_demo", "path": "/draws", "depth": depth, "max_nodes": max_nodes,
     }))
     assert source["ok"] is True
@@ -536,14 +546,12 @@ def test_catalog_routed_vfs_draws_preserves_action_tree_pagination(
         "session_id": "sess_demo", "max_depth": 2, "max_nodes": max(1, max_nodes),
     })]
     assert controller.set_frame_calls == []
-    assert server._runtime.replays["sess_demo"].active_event_id == 101
+    assert live_state._runtime.replays["sess_demo"].active_event_id == 101
 
 
 @pytest.mark.parametrize("action", ["ls", "cat", "resolve"])
 @pytest.mark.parametrize("source_kind", ["depth", "root_page", "complete"])
 def test_catalog_routed_vfs_node_readers_keep_upstream_pagination(monkeypatch, action, source_kind):
-    from rdc_tool.core.engine import CoreEngine
-    from rdc_tool.tool_router import build_operation_registry
 
     if source_kind == "depth":
         roots = [_FakeAction(101, children=[_FakeAction(111, children=[_FakeAction(112)])])]
@@ -552,20 +560,19 @@ def test_catalog_routed_vfs_node_readers_keep_upstream_pagination(monkeypatch, a
     _install_common_env(monkeypatch, _FakeController(roots=roots))
     _seed_capture()
     _seed_session(101)
-    engine = CoreEngine(registry=build_operation_registry())
     calls = []
 
     async def routed_dispatch(operation, args, **kwargs):
         calls.append((operation, dict(args)))
-        return await engine.execute(operation, args)
+        return await dispatch._execute(operation, args, live_state.ExecutionContext())
 
-    monkeypatch.setattr(server, "dispatch_operation", routed_dispatch)
+    monkeypatch.setattr(dispatch, "dispatch_operation", routed_dispatch)
     source_args = {"session_id": "sess_demo", "max_depth": 2, "max_nodes": 2000}
-    source = asyncio.run(engine.execute("rd.event.get_action_tree", source_args))
+    source = asyncio.run(_execute_routed("rd.event.get_action_tree", source_args))
     args = {"session_id": "sess_demo", "path": "/draws"}
     if action == "ls":
         args["projection"] = {"kind": "tabular"}
-    result = asyncio.run(engine.execute(f"rd.vfs.{action}", args))
+    result = asyncio.run(_execute_routed(f"rd.vfs.{action}", args))
     assert source["ok"] is True and result["ok"] is True
     node = result["data"]["node"]
     assert node["pagination"] == source["data"]["pagination"]
@@ -596,7 +603,7 @@ def test_get_action_tree_tabular_projection_flattens_actions(monkeypatch: pytest
 
     payload = json.loads(
         asyncio.run(
-            server._dispatch_event(
+            event_ops.dispatch(
                 "get_action_tree",
                 {"session_id": "sess_demo", "projection": {"kind": "tabular", "include_tsv_text": True}},
             )
@@ -622,11 +629,11 @@ def test_ensure_event_repairs_polluted_active_event(monkeypatch: pytest.MonkeyPa
     _seed_capture()
     _seed_session(53)
 
-    resolved = asyncio.run(server._ensure_event("sess_demo", None))
+    resolved = asyncio.run(replay_access._ensure_event("sess_demo", None))
     assert resolved == 101
     assert controller.set_frame_calls == [101]
-    assert server._runtime.replays["sess_demo"].active_event_id == 101
-    assert server._context_snapshot()["runtime"]["active_event_id"] == 101
+    assert live_state._runtime.replays["sess_demo"].active_event_id == 101
+    assert context_records._context_snapshot()["runtime"]["active_event_id"] == 101
 
 
 def test_pipeline_dispatch_uses_one_resolved_event_context(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -638,12 +645,12 @@ def test_pipeline_dispatch_uses_one_resolved_event_context(monkeypatch: pytest.M
     )
     pipeline_service = _FakePipelineService()
     _install_common_env(monkeypatch, controller)
-    server.server_runtime._pipeline_service = pipeline_service
-    server.server_runtime._session_manager = SimpleNamespace()
+    live_state._pipeline_service = pipeline_service
+    live_state._session_manager = SimpleNamespace()
     _seed_capture()
     _seed_session(53)
 
-    state = json.loads(asyncio.run(server._dispatch_pipeline("get_state", {"session_id": "sess_demo", "detail": "summary"})))
+    state = json.loads(asyncio.run(pipeline_ops.dispatch("get_state", {"session_id": "sess_demo", "detail": "summary"})))
     assert state["success"] is True
     assert state["pipeline_state"]["render_targets"][0]["resource_id"] == "rt@101"
     assert state["pipeline_state"]["summary_status"] == "verified"
@@ -651,13 +658,13 @@ def test_pipeline_dispatch_uses_one_resolved_event_context(monkeypatch: pytest.M
     assert pipeline_service.snapshot_calls == [(101, ("shaders", "output_targets", "topology", "viewports_scissors"))]
 
     _poison_active_event(53)
-    shader = json.loads(asyncio.run(server._dispatch_pipeline("get_shader", {"session_id": "sess_demo", "stage": "ps"})))
+    shader = json.loads(asyncio.run(pipeline_ops.dispatch("get_shader", {"session_id": "sess_demo", "stage": "ps"})))
     assert shader["success"] is True
     assert shader["shader"]["shader_id"] == "shader@101"
     assert len(pipeline_service.snapshot_calls) == 1
 
     _poison_active_event(53)
-    bindings = json.loads(asyncio.run(server._dispatch_pipeline("get_resource_bindings", {"session_id": "sess_demo", "stage": "ps"})))
+    bindings = json.loads(asyncio.run(pipeline_ops.dispatch("get_resource_bindings", {"session_id": "sess_demo", "stage": "ps"})))
     assert bindings["success"] is True
     assert bindings["bindings"][0]["resource_id"] == "srv@101"
     assert len(pipeline_service.snapshot_calls) == 1
@@ -675,8 +682,8 @@ def test_find_state_change_point_reports_match_and_budget_or_range_exhaustion(mo
     )
     pipeline_service = _FakePipelineService()
     _install_common_env(monkeypatch, controller)
-    server.server_runtime._pipeline_service = pipeline_service
-    server.server_runtime._session_manager = SimpleNamespace()
+    live_state._pipeline_service = pipeline_service
+    live_state._session_manager = SimpleNamespace()
     _seed_capture()
     _seed_session(101)
 
@@ -686,11 +693,11 @@ def test_find_state_change_point_reports_match_and_budget_or_range_exhaustion(mo
         "state_path": "shaders.0.shader_id",
         "target_value": "shader@202",
     }
-    budgeted = json.loads(asyncio.run(server._dispatch_macro("find_state_change_point", {**base_args, "max_events": 1})))
-    found = json.loads(asyncio.run(server._dispatch_macro("find_state_change_point", {**base_args, "max_events": 3})))
+    budgeted = json.loads(asyncio.run(macro_ops.dispatch("find_state_change_point", {**base_args, "max_events": 1})))
+    found = json.loads(asyncio.run(macro_ops.dispatch("find_state_change_point", {**base_args, "max_events": 3})))
     exhausted = json.loads(
         asyncio.run(
-            server._dispatch_macro(
+            macro_ops.dispatch(
                 "find_state_change_point",
                 {**base_args, "target_value": "shader@999", "max_events": 3},
             )
@@ -716,7 +723,7 @@ def test_find_state_change_point_reports_match_and_budget_or_range_exhaustion(mo
     assert exhausted["range_exhausted"] is True
     assert exhausted["budget_exhausted"] is False
     assert all(sections == ("shaders",) for _, sections in pipeline_service.snapshot_calls)
-    assert server._runtime.replays["sess_demo"].active_event_id == 303
+    assert live_state._runtime.replays["sess_demo"].active_event_id == 303
 
 
 @pytest.mark.parametrize(
@@ -729,11 +736,11 @@ def test_pipeline_truth_only_qualifies_requested_sections(
     controller = _FakeController(roots=[_FakeAction(101, flags=_FakeActionFlags.Drawcall)])
     pipeline_service = _FakePipelineService()
     _install_common_env(monkeypatch, controller)
-    monkeypatch.setattr(server.server_runtime, "_pipeline_service", pipeline_service)
-    monkeypatch.setattr(server.server_runtime, "_session_manager", SimpleNamespace())
+    monkeypatch.setattr(live_state, "_pipeline_service", pipeline_service)
+    monkeypatch.setattr(live_state, "_session_manager", SimpleNamespace())
     _seed_capture()
     _seed_session(101)
-    monkeypatch.setattr(server.server_runtime, "_session_backend_record", lambda *args, **kwargs: ("remote", {}))
+    monkeypatch.setattr(truth_matrix, "_session_backend_record", lambda *args, **kwargs: ("remote", {}))
     original_dump = _FakeSnapshot.model_dump
 
     def section_snapshot(self, mode="json"):  # type: ignore[no-untyped-def]
@@ -744,7 +751,7 @@ def test_pipeline_truth_only_qualifies_requested_sections(
         return snapshot
 
     monkeypatch.setattr(_FakeSnapshot, "model_dump", section_snapshot)
-    result = json.loads(asyncio.run(server._dispatch_pipeline("get_state", {
+    result = json.loads(asyncio.run(pipeline_ops.dispatch("get_state", {
         "session_id": "sess_demo", "event_id": 101, "sections": sections,
     })))
     state = result["pipeline_state"]
@@ -765,8 +772,8 @@ def test_pipeline_summary_and_outputs_include_selected_visual_target(monkeypatch
     )
     pipeline_service = _FakePipelineService()
     _install_common_env(monkeypatch, controller)
-    server.server_runtime._pipeline_service = pipeline_service
-    server.server_runtime._session_manager = SimpleNamespace()
+    live_state._pipeline_service = pipeline_service
+    live_state._session_manager = SimpleNamespace()
     _seed_capture()
     _seed_session(101)
 
@@ -791,9 +798,9 @@ def test_pipeline_summary_and_outputs_include_selected_visual_target(monkeypatch
             },
         )
 
-    monkeypatch.setattr(server.server_runtime, "_resolve_visual_target_for_event", _fake_resolve_visual_target_for_event)
+    monkeypatch.setattr(visual_target, "_resolve_visual_target_for_event", _fake_resolve_visual_target_for_event)
 
-    state = json.loads(asyncio.run(server._dispatch_pipeline("get_state", {"session_id": "sess_demo", "sections": ["output_targets"]})))
+    state = json.loads(asyncio.run(pipeline_ops.dispatch("get_state", {"session_id": "sess_demo", "sections": ["output_targets"]})))
 
     assert state["success"] is True
     assert state["pipeline_state"]["selected_visual_target"]["target_source"] == "event_binding_uav_3"
@@ -840,12 +847,12 @@ def test_pipeline_render_targets_use_current_descriptor_resource(monkeypatch: py
 
 
 def test_present_detection_accepts_only_present_flag(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(server.server_runtime, "_get_rd", lambda: SimpleNamespace(ActionFlags=_FakeActionFlags))
+    monkeypatch.setattr(renderdoc_api, "_get_rd", lambda: SimpleNamespace(ActionFlags=_FakeActionFlags))
 
-    assert server.server_runtime._is_present_action(SimpleNamespace(flags=_FakeActionFlags.Present)) is True
-    assert server.server_runtime._is_present_action(SimpleNamespace(flags=_FakeActionFlags.Clear)) is False
-    assert server.server_runtime._is_present_action(SimpleNamespace(flags=_FakeActionFlags.PassBoundary)) is False
-    assert server.server_runtime._is_present_action(SimpleNamespace(flags=_FakeActionFlags.Clear | _FakeActionFlags.PassBoundary)) is False
+    assert visual_target._is_present_action(SimpleNamespace(flags=_FakeActionFlags.Present)) is True
+    assert visual_target._is_present_action(SimpleNamespace(flags=_FakeActionFlags.Clear)) is False
+    assert visual_target._is_present_action(SimpleNamespace(flags=_FakeActionFlags.PassBoundary)) is False
+    assert visual_target._is_present_action(SimpleNamespace(flags=_FakeActionFlags.Clear | _FakeActionFlags.PassBoundary)) is False
 
 
 def test_pipeline_get_constant_buffers_uses_collected_entries(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -856,8 +863,8 @@ def test_pipeline_get_constant_buffers_uses_collected_entries(monkeypatch: pytes
     )
     pipeline_service = _FakePipelineService()
     _install_common_env(monkeypatch, controller)
-    server.server_runtime._pipeline_service = pipeline_service
-    server.server_runtime._session_manager = SimpleNamespace()
+    live_state._pipeline_service = pipeline_service
+    live_state._session_manager = SimpleNamespace()
     _seed_capture()
     _seed_session(101)
 
@@ -875,10 +882,10 @@ def test_pipeline_get_constant_buffers_uses_collected_entries(monkeypatch: pytes
             }
         ]
 
-    monkeypatch.setattr(server.server_runtime, "_collect_constant_buffers", _fake_collect_constant_buffers)
+    monkeypatch.setattr(shader_values, "_collect_constant_buffers", _fake_collect_constant_buffers)
 
     payload = json.loads(
-        asyncio.run(server._dispatch_pipeline("get_constant_buffers", {"session_id": "sess_demo", "stage": "ps", "include_contents": True})),
+        asyncio.run(pipeline_ops.dispatch("get_constant_buffers", {"session_id": "sess_demo", "stage": "ps", "include_contents": True})),
         parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)),
     )
 
@@ -904,13 +911,13 @@ def test_pipeline_get_shader_returns_runtime_error_when_stage_is_unbound(monkeyp
     )
     pipeline_service = _FakePipelineService()
     _install_common_env(monkeypatch, controller)
-    monkeypatch.setattr(server.server_runtime, "_is_null_resource_id", lambda rid: str(rid) in {"", "ResourceId::0", "0"})
-    server.server_runtime._pipeline_service = pipeline_service
-    server.server_runtime._session_manager = SimpleNamespace()
+    monkeypatch.setattr(renderdoc_api, "_is_null_resource_id", lambda rid: str(rid) in {"", "ResourceId::0", "0"})
+    live_state._pipeline_service = pipeline_service
+    live_state._session_manager = SimpleNamespace()
     _seed_capture()
     _seed_session(101)
 
-    payload = json.loads(asyncio.run(server._dispatch_pipeline("get_shader", {"session_id": "sess_demo", "stage": "ps"})))
+    payload = json.loads(asyncio.run(pipeline_ops.dispatch("get_shader", {"session_id": "sess_demo", "stage": "ps"})))
 
     assert payload["success"] is False
     assert payload["code"] == "shader_not_bound"
@@ -942,14 +949,14 @@ def test_resource_usage_exposes_write_classification_and_raw_event_ids(monkeypat
         ],
     )
     _install_common_env(monkeypatch, controller)
-    rd = server.server_runtime._get_rd()
+    rd = renderdoc_api._get_rd()
     rd.ResourceUsage = SimpleNamespace(PS_Resource="PS_Resource", CopyDst="CopyDst")
     _seed_capture()
     _seed_session(101)
 
     usage = json.loads(
         asyncio.run(
-            server._dispatch_resource(
+            resource_ops.dispatch(
                 "get_usage",
                 {"session_id": "sess_demo", "resource_id": "ResourceId::7", "max_events": 10},
             )
@@ -986,7 +993,7 @@ def test_resource_list_all_tabular_projection(monkeypatch: pytest.MonkeyPatch) -
 
     payload = json.loads(
         asyncio.run(
-            server._dispatch_resource(
+            resource_ops.dispatch(
                 "list_all",
                 {"session_id": "sess_demo", "projection": {"kind": "tabular", "include_tsv_text": True}},
             )
@@ -1001,27 +1008,27 @@ def test_resource_list_all_tabular_projection(monkeypatch: pytest.MonkeyPatch) -
     assert "main_color" in tabular["tsv_text"]
 
     textures_only = json.loads(
-        asyncio.run(server._dispatch_resource("list_all", {"session_id": "sess_demo", "kind": "texture"}))
+        asyncio.run(resource_ops.dispatch("list_all", {"session_id": "sess_demo", "kind": "texture"}))
     )
     assert textures_only["success"] is True
     assert {item["texture_id"] for item in textures_only["resources"]} == {"ResourceId::7"}
 
     invalid = json.loads(
-        asyncio.run(server._dispatch_resource("list_all", {"session_id": "sess_demo", "kind": "shader"}))
+        asyncio.run(resource_ops.dispatch("list_all", {"session_id": "sess_demo", "kind": "shader"}))
     )
     assert invalid["success"] is False
     assert invalid["code"] == "validation_error"
 
 
 def test_capture_close_file_rejects_unknown_handle() -> None:
-    payload = json.loads(asyncio.run(server._dispatch_capture("close_file", {"capture_file_id": "capf_missing"})))
+    payload = json.loads(asyncio.run(capture_ops.dispatch("close_file", {"capture_file_id": "capf_missing"})))
     assert payload["success"] is False
     assert payload["error_message"] == "Unknown capture_file_id: capf_missing"
 
 
 def test_restored_capture_thumbnail_rejects_obsolete_size_parameter() -> None:
     payload = asyncio.run(
-        server.dispatch_operation(
+        dispatch.dispatch_operation(
             "rd.capture.get_thumbnail",
             {"capture_file_id": "capf_demo", "max_size_px": 640},
             transport="test",
@@ -1037,7 +1044,7 @@ def test_capture_close_file_rejects_when_replay_depends_on_capture() -> None:
     _seed_capture()
     _seed_session(101)
 
-    payload = json.loads(asyncio.run(server._dispatch_capture("close_file", {"capture_file_id": "capf_demo"})))
+    payload = json.loads(asyncio.run(capture_ops.dispatch("close_file", {"capture_file_id": "capf_demo"})))
     assert payload["success"] is False
     assert payload["code"] == "capture_file_in_use"
     assert payload["category"] == "runtime"
@@ -1046,19 +1053,19 @@ def test_capture_close_file_rejects_when_replay_depends_on_capture() -> None:
         "dependent_session_ids": ["sess_demo"],
         "dependent_session_count": 1,
     }
-    assert "capf_demo" in server._runtime.captures
-    assert server._runtime.replays["sess_demo"].capture_file_id == "capf_demo"
-    assert server._context_snapshot()["runtime"]["capture_file_id"] == "capf_demo"
+    assert "capf_demo" in live_state._runtime.captures
+    assert live_state._runtime.replays["sess_demo"].capture_file_id == "capf_demo"
+    assert context_records._context_snapshot()["runtime"]["capture_file_id"] == "capf_demo"
 
 
 
 def test_capture_close_file_reports_all_dependent_sessions() -> None:
     _seed_capture()
-    server._runtime.replays = {
-        "sess_b": server.ReplayHandle(session_id="sess_b", capture_file_id="capf_demo", frame_index=0, active_event_id=0),
-        "sess_a": server.ReplayHandle(session_id="sess_a", capture_file_id="capf_demo", frame_index=0, active_event_id=0),
+    live_state._runtime.replays = {
+        "sess_b": live_state.ReplayHandle(session_id="sess_b", capture_file_id="capf_demo", frame_index=0, active_event_id=0),
+        "sess_a": live_state.ReplayHandle(session_id="sess_a", capture_file_id="capf_demo", frame_index=0, active_event_id=0),
     }
-    server._set_context_runtime_session(
+    context_records._set_context_runtime_session(
         "sess_a",
         capture_file_id="capf_demo",
         backend_type="local",
@@ -1066,30 +1073,30 @@ def test_capture_close_file_reports_all_dependent_sessions() -> None:
         active_event_id=0,
     )
 
-    payload = json.loads(asyncio.run(server._dispatch_capture("close_file", {"capture_file_id": "capf_demo"})))
+    payload = json.loads(asyncio.run(capture_ops.dispatch("close_file", {"capture_file_id": "capf_demo"})))
     assert payload["success"] is False
     assert payload["details"]["dependent_session_ids"] == ["sess_a", "sess_b"]
     assert payload["details"]["dependent_session_count"] == 2
-    assert "capf_demo" in server._runtime.captures
+    assert "capf_demo" in live_state._runtime.captures
 
 
 
 def test_capture_close_file_succeeds_after_close_replay() -> None:
     manager = _FakeSessionManager()
-    server.server_runtime._session_manager = manager
+    live_state._session_manager = manager
     _seed_capture()
     _seed_session(101)
 
-    close_replay = json.loads(asyncio.run(server._dispatch_capture("close_replay", {"session_id": "sess_demo"})))
+    close_replay = json.loads(asyncio.run(capture_ops.dispatch("close_replay", {"session_id": "sess_demo"})))
     assert close_replay["success"] is True
     assert manager.closed_sessions == ["sess_demo"]
-    assert server._runtime.replays == {}
-    assert "capf_demo" in server._runtime.captures
+    assert live_state._runtime.replays == {}
+    assert "capf_demo" in live_state._runtime.captures
 
-    close_file = json.loads(asyncio.run(server._dispatch_capture("close_file", {"capture_file_id": "capf_demo"})))
+    close_file = json.loads(asyncio.run(capture_ops.dispatch("close_file", {"capture_file_id": "capf_demo"})))
     assert close_file["success"] is True
-    assert server._runtime.captures == {}
-    context = server._context_snapshot()
+    assert live_state._runtime.captures == {}
+    context = context_records._context_snapshot()
     assert context["runtime"]["session_id"] == ""
     assert context["runtime"]["capture_file_id"] == ""
 
@@ -1134,14 +1141,14 @@ def test_export_shader_bundle_forwards_requested_event(monkeypatch: pytest.Monke
             return json.dumps({"success": True, "disassembly": disassembly_text, "target": "SPIR-V ASM", "source_encoding": "spirvasm", "is_raw_spirv_asm": True, "source_hash": hashlib.sha256(disassembly_text.encode("utf-8")).hexdigest(), "edit_plan": {"can_build": True, "can_edit_text": True}})
         raise AssertionError(action)
 
-    monkeypatch.setattr(server.server_runtime, "_ensure_event", _fake_ensure_event)
-    monkeypatch.setattr(server.server_runtime, "_dispatch_pipeline", _fake_dispatch_pipeline)
-    monkeypatch.setattr(server.server_runtime, "_dispatch_shader", _fake_dispatch_shader)
+    monkeypatch.setattr(replay_access, "_ensure_event", _fake_ensure_event)
+    monkeypatch.setattr(pipeline_ops, "dispatch", _fake_dispatch_pipeline)
+    monkeypatch.setattr(shader_ops, "dispatch", _fake_dispatch_shader)
 
     output_dir = tmp_path / "shader_bundle"
     payload = json.loads(
         asyncio.run(
-            server._dispatch_export(
+            export_ops.dispatch(
                 "shader_bundle",
                 {"session_id": "sess_demo", "event_id": 202, "output_dir": str(output_dir),
                  **({"disassembly_target": disassembly_target} if disassembly_target else {})},
@@ -1193,12 +1200,12 @@ def test_shader_bundle_reports_unavailable_requested_exports(monkeypatch: pytest
         assert args["target"] == (disassembly_target or "auto")
         return json.dumps({"success": False, "code": "shader_disassembly_unavailable", "error_message": "No supported target"})
 
-    monkeypatch.setattr(server.server_runtime, "_ensure_event", _fake_ensure_event)
-    monkeypatch.setattr(server.server_runtime, "_dispatch_pipeline", _fake_dispatch_pipeline)
-    monkeypatch.setattr(server.server_runtime, "_dispatch_shader", _fake_dispatch_shader)
+    monkeypatch.setattr(replay_access, "_ensure_event", _fake_ensure_event)
+    monkeypatch.setattr(pipeline_ops, "dispatch", _fake_dispatch_pipeline)
+    monkeypatch.setattr(shader_ops, "dispatch", _fake_dispatch_shader)
 
     output_dir = tmp_path / "partial_shader_bundle"
-    payload = json.loads(asyncio.run(server._dispatch_export("shader_bundle", {
+    payload = json.loads(asyncio.run(export_ops.dispatch("shader_bundle", {
         "session_id": "sess_demo", "event_id": 202, "output_dir": str(output_dir),
         "include_binaries": False, "include_reflection": False, "include_disassembly": True,
         **({"disassembly_target": disassembly_target} if disassembly_target else {}),
@@ -1224,11 +1231,11 @@ def test_shader_bundle_does_not_substitute_a_different_explicit_target(monkeypat
         assert args["target"] == "SPIR-V ASM"
         return json.dumps({"success": True, "target": "SPIR-V (RenderDoc)", "disassembly": "presentation only"})
 
-    monkeypatch.setattr(server.server_runtime, "_ensure_event", ensure)
-    monkeypatch.setattr(server.server_runtime, "_dispatch_pipeline", pipeline)
-    monkeypatch.setattr(server.server_runtime, "_dispatch_shader", shader)
+    monkeypatch.setattr(replay_access, "_ensure_event", ensure)
+    monkeypatch.setattr(pipeline_ops, "dispatch", pipeline)
+    monkeypatch.setattr(shader_ops, "dispatch", shader)
     output = tmp_path / "explicit"
-    result = json.loads(asyncio.run(server._dispatch_export("shader_bundle", {
+    result = json.loads(asyncio.run(export_ops.dispatch("shader_bundle", {
         "session_id": "sess", "event_id": 202, "output_dir": str(output),
         "include_binaries": False, "include_reflection": False, "disassembly_target": "SPIR-V ASM",
     })))
@@ -1279,15 +1286,15 @@ def test_export_screenshot_forwards_requested_event(monkeypatch: pytest.MonkeyPa
             "summary_degraded_reasons": [],
         }
 
-    monkeypatch.setattr(server.server_runtime, "_ensure_event", _fake_ensure_event)
-    monkeypatch.setattr(server.server_runtime, "_output_target_resource_ids", _fake_output_target_resource_ids)
-    monkeypatch.setattr(server.server_runtime, "_get_texture_descriptor", _fake_get_texture_descriptor)
-    monkeypatch.setattr(server.server_runtime, "_event_truth_metadata", _fake_event_truth_metadata)
-    monkeypatch.setattr(server.server_runtime, "_binding_name_index_for_event", lambda session_id, event_id: asyncio.sleep(0, result={}))
-    monkeypatch.setattr(server.server_runtime, "_dispatch_texture", _fake_dispatch_texture)
-    monkeypatch.setattr(server.server_runtime, "_recommend_formats_for_texture", lambda texture_desc, name_info, for_screenshot=False: ["png"])
+    monkeypatch.setattr(replay_access, "_ensure_event", _fake_ensure_event)
+    monkeypatch.setattr(replay_access, "_output_target_resource_ids", _fake_output_target_resource_ids)
+    monkeypatch.setattr(replay_access, "_get_texture_descriptor", _fake_get_texture_descriptor)
+    monkeypatch.setattr(truth_matrix, "_event_truth_metadata", _fake_event_truth_metadata)
+    monkeypatch.setattr(replay_access, "_binding_name_index_for_event", lambda session_id, event_id: asyncio.sleep(0, result={}))
+    monkeypatch.setattr(texture_ops, "dispatch", _fake_dispatch_texture)
+    monkeypatch.setattr(texture_naming, "_recommend_formats_for_texture", lambda texture_desc, name_info, for_screenshot=False: ["png"])
     monkeypatch.setattr(
-        server.server_runtime,
+        live_state,
         "_render_service",
         SimpleNamespace(
             get_texture_stats=lambda **kwargs: asyncio.sleep(
@@ -1308,7 +1315,7 @@ def test_export_screenshot_forwards_requested_event(monkeypatch: pytest.MonkeyPa
 
     payload = json.loads(
         asyncio.run(
-            server._dispatch_export(
+            export_ops.dispatch(
                 "screenshot",
                 {"session_id": "sess_demo", "event_id": 202, "output_path": str(tmp_path / "shot.png")},
             )
@@ -1328,8 +1335,8 @@ def test_export_screenshot_forwards_requested_event(monkeypatch: pytest.MonkeyPa
         result["meta"].pop("width")
         return json.dumps(result)
 
-    monkeypatch.setattr(server.server_runtime, "_dispatch_texture", _missing_dimensions)
-    missing = json.loads(asyncio.run(server._dispatch_export("screenshot", {
+    monkeypatch.setattr(texture_ops, "dispatch", _missing_dimensions)
+    missing = json.loads(asyncio.run(export_ops.dispatch("screenshot", {
         "session_id": "sess_demo", "event_id": 202, "output_path": str(tmp_path / "shot.png"),
     })))
     assert missing["success"] is False
@@ -1354,13 +1361,13 @@ def test_export_shader_bundle_returns_runtime_error_when_event_has_no_bound_shad
             }
         )
 
-    monkeypatch.setattr(server.server_runtime, "_ensure_event", _fake_ensure_event)
-    monkeypatch.setattr(server.server_runtime, "_dispatch_pipeline", _fake_dispatch_pipeline)
+    monkeypatch.setattr(replay_access, "_ensure_event", _fake_ensure_event)
+    monkeypatch.setattr(pipeline_ops, "dispatch", _fake_dispatch_pipeline)
 
     output_dir = tmp_path / "shader_bundle_empty"
     payload = json.loads(
         asyncio.run(
-            server._dispatch_export(
+            export_ops.dispatch(
                 "shader_bundle",
                 {"session_id": "sess_demo", "event_id": 202, "output_dir": str(output_dir)},
             )
@@ -1382,10 +1389,10 @@ def test_pipeline_stage_rejection_precedes_native_and_event_access(monkeypatch, 
     def forbidden(*args, **kwargs):
         pytest.fail("stage rejection must precede native/controller/event access")
 
-    monkeypatch.setattr(server.server_runtime, "_get_rd", forbidden)
-    monkeypatch.setattr(server.server_runtime, "_get_controller", forbidden)
-    monkeypatch.setattr(server.server_runtime, "_ensure_event", forbidden)
-    payload = json.loads(asyncio.run(server._dispatch_pipeline(
+    monkeypatch.setattr(renderdoc_api, "_get_rd", forbidden)
+    monkeypatch.setattr(replay_access, "_get_controller", forbidden)
+    monkeypatch.setattr(replay_access, "_ensure_event", forbidden)
+    payload = json.loads(asyncio.run(pipeline_ops.dispatch(
         action, {"session_id": "not-opened", "event_id": 1691, "stage": stage})))
     assert payload["success"] is False
     assert payload["code"] == code
@@ -1403,16 +1410,14 @@ def test_pipeline_stage_rejection_precedes_native_and_event_access(monkeypatch, 
     ("", "invalid_shader_stage", "validation"),
 ])
 def test_catalog_routed_stage_rejection_preserves_canonical_proof(monkeypatch, action, stage, code, category):
-    from rdc_tool.core.engine import CoreEngine
-    from rdc_tool.tool_router import build_operation_registry
 
     def forbidden(*args, **kwargs):
         pytest.fail("catalog-routed stage rejection must precede native/controller/event access")
 
-    for name in ("_get_rd", "_get_controller", "_ensure_event"):
-        monkeypatch.setattr(server.server_runtime, name, forbidden)
+    for module, name in ((renderdoc_api, "_get_rd"), (replay_access, "_get_controller"), (replay_access, "_ensure_event")):
+        monkeypatch.setattr(module, name, forbidden)
     operation = f"rd.pipeline.{action}"
-    result = asyncio.run(CoreEngine(registry=build_operation_registry()).execute(
+    result = asyncio.run(_execute_routed(
         operation, {"session_id": "not-opened", "event_id": 1691, "stage": stage}))
     assert result["ok"] is False
     assert result["result_kind"] == operation
@@ -1425,15 +1430,13 @@ def test_catalog_routed_stage_rejection_preserves_canonical_proof(monkeypatch, a
 
 @pytest.mark.parametrize("stage", ["VS", "hs", "DS", "gs", "PS", "cs", "MS", "as"])
 def test_catalog_routed_shader_query_keeps_case_insensitive_stage(monkeypatch, stage):
-    from rdc_tool.core.engine import CoreEngine
-    from rdc_tool.tool_router import build_operation_registry
 
     controller = _FakeController(roots=[_FakeAction(101, flags=_FakeActionFlags.Drawcall)])
     _install_common_env(monkeypatch, controller)
-    server.server_runtime._pipeline_service = _FakePipelineService()
+    live_state._pipeline_service = _FakePipelineService()
     _seed_capture()
     _seed_session(101)
-    result = asyncio.run(CoreEngine(registry=build_operation_registry()).execute(
+    result = asyncio.run(_execute_routed(
         "rd.pipeline.get_shader", {"session_id": "sess_demo", "stage": stage, "event_id": 101}))
     assert result["ok"] is True
     assert result["data"]["shader"]["stage"] == stage.upper()
@@ -1442,16 +1445,16 @@ def test_catalog_routed_shader_query_keeps_case_insensitive_stage(monkeypatch, s
 
 @pytest.mark.parametrize("stage", ["VS", "hs", "DS", "gs", "PS", "cs", "MS", "as"])
 def test_native_shader_stage_keeps_exact_supported_mapping(monkeypatch, stage):
-    monkeypatch.setattr(server.server_runtime, "_get_rd", lambda: SimpleNamespace(ShaderStage=_FakeShaderStage))
-    assert server.server_runtime._rd_stage(stage) == stage.lower()
+    monkeypatch.setattr(renderdoc_api, "_get_rd", lambda: SimpleNamespace(ShaderStage=_FakeShaderStage))
+    assert renderdoc_api._rd_stage(stage) == stage.lower()
 
 
 def test_missing_mesh_stage_never_falls_back_to_compute(monkeypatch):
     from rdc_tool.core.errors import CoreError
-    monkeypatch.setattr(server.server_runtime, "_get_rd", lambda: SimpleNamespace(
+    monkeypatch.setattr(renderdoc_api, "_get_rd", lambda: SimpleNamespace(
         ShaderStage=SimpleNamespace(Pixel="ps", Compute="cs")))
     with pytest.raises(CoreError) as error:
-        server.server_runtime._rd_stage("MS")
+        renderdoc_api._rd_stage("MS")
     assert error.value.code == "shader_stage_unsupported"
     assert error.value.category == "capability"
 
@@ -1485,19 +1488,19 @@ def test_pipeline_get_stage_state_reports_degraded_binding_truth(monkeypatch: py
             }
         ]
 
-    monkeypatch.setattr(server.server_runtime, "_ensure_event", _fake_ensure_event)
+    monkeypatch.setattr(replay_access, "_ensure_event", _fake_ensure_event)
     monkeypatch.setattr(
-        server.server_runtime,
+        live_state,
         "_pipeline_service",
         SimpleNamespace(snapshot_pipeline=lambda session_id, event_id, session_manager: asyncio.sleep(0, result=_FakeSnapshot(int(event_id or 7)))),
     )
-    monkeypatch.setattr(server.server_runtime, "_pipeline_truth_metadata", lambda session_id, snapshot: {"binding_truth_level": "binding_degraded", "summary_degraded_reasons": ["d3d12_reflection_partial"]})
-    monkeypatch.setattr(server.server_runtime, "_resolve_visual_target_for_event", lambda *args, **kwargs: asyncio.sleep(0, result={}))
-    monkeypatch.setattr(server.server_runtime, "_collect_constant_buffers", _fake_collect_constant_buffers)
+    monkeypatch.setattr(truth_matrix, "_pipeline_truth_metadata", lambda session_id, snapshot: {"binding_truth_level": "binding_degraded", "summary_degraded_reasons": ["d3d12_reflection_partial"]})
+    monkeypatch.setattr(visual_target, "_resolve_visual_target_for_event", lambda *args, **kwargs: asyncio.sleep(0, result={}))
+    monkeypatch.setattr(shader_values, "_collect_constant_buffers", _fake_collect_constant_buffers)
 
     payload = json.loads(
         asyncio.run(
-            server._dispatch_pipeline(
+            pipeline_ops.dispatch(
                 "get_stage_state",
                 {"session_id": "sess_demo", "event_id": 7, "stage": "ps"},
             )
@@ -1526,16 +1529,16 @@ def test_export_texture_explicit_hdr_fails_when_encoder_falls_back_to_png(monkey
             assert kwargs["output_format"] == "hdr"
             return SimpleNamespace(sha256="png-sha"), {"format": "png"}, str(tmp_path / "fake.png")
 
-    monkeypatch.setattr(server.server_runtime, "_ensure_event", _fake_ensure_event)
-    monkeypatch.setattr(server.server_runtime, "_get_texture_descriptor", _fake_get_texture_descriptor)
-    monkeypatch.setattr(server.server_runtime, "_binding_name_index_for_event", lambda session_id, event_id: asyncio.sleep(0, result={}))
-    monkeypatch.setattr(server.server_runtime, "_recommend_formats_for_texture", lambda texture_desc, name_info, for_screenshot=False: ["png"])
-    monkeypatch.setattr(server.server_runtime, "_artifact_path", lambda artifact_ref: str(tmp_path / "fake.png"))
-    monkeypatch.setattr(server.server_runtime, "_render_service", _FakeRenderService())
+    monkeypatch.setattr(replay_access, "_ensure_event", _fake_ensure_event)
+    monkeypatch.setattr(replay_access, "_get_texture_descriptor", _fake_get_texture_descriptor)
+    monkeypatch.setattr(replay_access, "_binding_name_index_for_event", lambda session_id, event_id: asyncio.sleep(0, result={}))
+    monkeypatch.setattr(texture_naming, "_recommend_formats_for_texture", lambda texture_desc, name_info, for_screenshot=False: ["png"])
+    monkeypatch.setattr(artifact_payloads, "_artifact_path", lambda artifact_ref: str(tmp_path / "fake.png"))
+    monkeypatch.setattr(live_state, "_render_service", _FakeRenderService())
 
     payload = json.loads(
         asyncio.run(
-            server.server_runtime._export_texture_file(
+            texture_export._export_texture_file(
                 {
                     "session_id": "sess_demo",
                     "texture_id": "ResourceId::tex",

@@ -119,7 +119,7 @@ class RuntimeWorkerProcess:
         }
 
         proc = subprocess.Popen(
-            child_python_argv("rdc_tool.runtime_worker", "--context-id", self.context_id),
+            child_python_argv("rdc_tool.runtime.worker_main", "--context-id", self.context_id),
             **popen_kwargs,
         )
         assert proc.stdout is not None

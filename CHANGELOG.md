@@ -9,6 +9,7 @@
 - `bin/rdc-tool` 按主机选择捆绑解释器（Linux x86_64 → `binaries/linux/x64/python/bin/python3.14`，MSYS/Cygwin → Windows 解释器），未知主机与缺失解释器以退出码 2 明确拒绝；两个 launcher 清除 `PYTHONHOME`/`PYTHONPATH`、以 `python -s` 启动，不再导出任何 `RDC_TOOL_*` 变量。preview 几何 smoke 改经公开 launcher 运行，adb 只走主机工具契约，删除 PATH/SDK 搜索。
 - daemon 与 worker 子进程以 `python -P -m` 启动：工作目录里同名的 `rdc_tool` 包不再遮蔽安装本身（Linux 候选真实运行发现）。
 - 新增 `scripts/native_source_digest.py`，按 Git 提交内容定义回执的 `tree_sha256`；本地候选只认证并携带其回执配对的目标；新增需显式开启的 `fixture_integration` 真实回放测试（`--fixture-integration`、`--fixture-root`）；删除与 `vkcube.rdc` 字节相同的 `hello_triangle.rdc`。
+- 13.5k 行的 `server_runtime.py` 按领域拆入 `rdc_tool/runtime/`：`dispatch`（执行）→ `routing`（catalog 路由、参数与前置条件、replay 健康作用域）→ `operations/<ns>.py`（每个命名空间一个 `dispatch(action, args)`）→ 服务与记录模块；删除 `server.py` 转发壳、`tool_router.py`、19 个一行 `handlers/`、`core/engine.py`、`core/operation_registry.py` 与 `replay_observation.py`（并入 `runtime/observation.py`），worker 入口移至 `rdc_tool.runtime.worker_main`。新增分层门禁：只允许 replay 服务组成环、服务层不依赖操作层、各命名空间处理的动作与 catalog 完全一致（删除了无法到达的 `remote.set_overlay_options` 分支）。
 - 发布脚本按主机布局工作：包名带主机目标，`binaries/` 只带本主机运行目录、Android helper 与共享回执；校验解压时还原权限位；原生加载核验不再依赖 Windows 专属 `PATH`。删除发布门禁与包校验中的“已删除名单”（旧别名、pre-GA 标记、MCP 标记、`rdc_tool.bat` 示例、旧路径扫描）及依赖 `rg` 的双实现扫描器；catalog 与定义完全一致的检查已覆盖多余工具。
 
 ## 1.1.2 — 2026-10-29

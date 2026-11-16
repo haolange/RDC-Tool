@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import asyncio
 
-from rdc_tool import server
+from rdc_tool.runtime import dispatch
 
 
 def _call(operation, args):
-    return asyncio.run(server.dispatch_operation(operation, args, transport="test"))
+    return asyncio.run(dispatch.dispatch_operation(operation, args, transport="test"))
 
 
 def test_set_config_rejects_unsupported_keys_instead_of_ignoring_them():

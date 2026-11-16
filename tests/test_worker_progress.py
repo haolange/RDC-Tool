@@ -6,10 +6,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from rdc_tool import runtime_worker, server
+from rdc_tool.runtime import worker_main
 from rdc_tool.daemon.server import DaemonRuntime
 from rdc_tool.daemon.worker import RuntimeWorkerProcess
 from rdc_tool.progress import ProgressEvent
+from rdc_tool.runtime import dispatch as runtime_dispatch
+from rdc_tool.runtime import runtime_lifecycle
 
 
 def event(stage="installing", **changes):
@@ -78,7 +80,6 @@ def test_sink_failure_does_not_lose_final_operation_receipt(monkeypatch):
 
 @pytest.mark.parametrize("sink_write_fails", [False, True])
 def test_runtime_worker_progress_and_final_reply_share_request_identity(monkeypatch, sink_write_fails):
-    import rdc_tool
     monkeypatch.setenv("RDC_TOOL_CONTEXT_ID", "default")
     outputs = []
     def emit(payload):
@@ -90,12 +91,13 @@ def test_runtime_worker_progress_and_final_reply_share_request_identity(monkeypa
         return {"ok": True, "data": {"installed_apk": True}}
     async def shutdown(*, clear_context_state):
         assert clear_context_state is False
-    monkeypatch.setattr(rdc_tool, "server", SimpleNamespace(dispatch_operation=dispatch, runtime_shutdown=shutdown))
+    monkeypatch.setattr(runtime_dispatch, "dispatch_operation", dispatch)
+    monkeypatch.setattr(runtime_lifecycle, "runtime_shutdown", shutdown)
     requests = [{"id": "call", "method": "exec", "params": {"operation": "rd.remote.connect"}},
         {"id": "stop", "method": "shutdown"}]
-    monkeypatch.setattr(runtime_worker.sys, "stdin", io.StringIO("\n".join(json.dumps(item) for item in requests)))
-    monkeypatch.setattr(runtime_worker, "_emit", emit)
-    assert runtime_worker.main(["--context-id", "progress-worker"]) == 0
+    monkeypatch.setattr(worker_main.sys, "stdin", io.StringIO("\n".join(json.dumps(item) for item in requests)))
+    monkeypatch.setattr(worker_main, "_emit", emit)
+    assert worker_main.main(["--context-id", "progress-worker"]) == 0
     if not sink_write_fails:
         progress = next(item for item in outputs if item.get("kind") == "progress")
         assert progress["id"] == "call"

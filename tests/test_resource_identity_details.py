@@ -5,10 +5,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from rdc_tool import server
 from test_server_event_pipeline_resource import (
     _FakeAction, _FakeController, _install_common_env, _seed_capture, _seed_session,
 )
+from rdc_tool.runtime import dispatch, replay_access
 
 
 class ResourceId:
@@ -45,7 +45,7 @@ def install(monkeypatch: pytest.MonkeyPatch, kind: str, value: int):
         binding_calls.append(args)
         return {}
 
-    monkeypatch.setattr(server.server_runtime, "_binding_name_index_for_event", bindings)
+    monkeypatch.setattr(replay_access, "_binding_name_index_for_event", bindings)
     return controller, rid, binding_calls
 
 
@@ -54,7 +54,7 @@ def install(monkeypatch: pytest.MonkeyPatch, kind: str, value: int):
 @pytest.mark.parametrize("wrapped", [False, True])
 def test_resource_details_resolves_exact_native_identity(monkeypatch, kind, value, wrapped):
     controller, rid, _ = install(monkeypatch, kind, value)
-    result = asyncio.run(server.dispatch_operation("rd.resource.get_details", {
+    result = asyncio.run(dispatch.dispatch_operation("rd.resource.get_details", {
         "session_id": "sess_demo", "resource_id": str(rid) if wrapped else str(value),
         "include_initialization": True,
     }, transport="test"))
@@ -72,7 +72,7 @@ def test_resource_details_resolves_exact_native_identity(monkeypatch, kind, valu
 
 def test_completed_inventory_miss_has_pre_effect_proof_before_binding_queries(monkeypatch):
     controller, _, binding_calls = install(monkeypatch, "texture", 203)
-    result = asyncio.run(server.dispatch_operation("rd.resource.get_details", {
+    result = asyncio.run(dispatch.dispatch_operation("rd.resource.get_details", {
         "session_id": "sess_demo", "resource_id": "1203",
     }, transport="test"))
     assert result["ok"] is False
@@ -95,7 +95,7 @@ def test_incomplete_native_inventory_never_claims_pre_effect_proof(monkeypatch, 
         raise RuntimeError("native inventory read failed")
 
     monkeypatch.setattr(controller, method, fail)
-    result = asyncio.run(server.dispatch_operation("rd.resource.get_details", {
+    result = asyncio.run(dispatch.dispatch_operation("rd.resource.get_details", {
         "session_id": "sess_demo", "resource_id": "203",
     }, transport="test"))
     assert result["ok"] is False

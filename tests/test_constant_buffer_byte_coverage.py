@@ -6,7 +6,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from rdc_tool import server_runtime as rt
+from rdc_tool.core.errors import CoreError
+from rdc_tool.runtime import renderdoc_api, shader_values, texture_export
+from rdc_tool.runtime.operations import export as export_ops
+from rdc_tool.runtime.operations import pipeline as pipeline_ops
 
 
 def collect(monkeypatch, *, block=64, bound=64, budget=64, value=7, include=True, supported=True, unbound=False, backed=True):
@@ -23,14 +26,14 @@ def collect(monkeypatch, *, block=64, bound=64, budget=64, value=7, include=True
         access=SimpleNamespace(index=0, type=9)))
     reflection = SimpleNamespace(entryPoint="main", constantBlocks=[SimpleNamespace(
         name="Block", byteSize=block, variables=[], bufferBacked=backed, fixedBindSetOrSpace=0)])
-    monkeypatch.setattr(rt, "_offload", inline)
-    monkeypatch.setattr(rt, "_get_rd", lambda: SimpleNamespace(ResourceId=lambda: "ResourceId::0"))
-    monkeypatch.setattr(rt, "_rd_stage", lambda stage: stage)
-    monkeypatch.setattr(rt, "_pipeline_object_for_cbuffer", lambda *_: "pipeline")
-    monkeypatch.setattr(rt, "_shader_variable_payload", lambda variable: {"name": variable.name, "value": variable.value})
-    monkeypatch.setattr(rt, "_flatten_shader_variable_values", lambda variable, _prefix, out: out.update({variable.name: variable.value}))
+    monkeypatch.setattr(renderdoc_api, "_offload", inline)
+    monkeypatch.setattr(renderdoc_api, "_get_rd", lambda: SimpleNamespace(ResourceId=lambda: "ResourceId::0"))
+    monkeypatch.setattr(renderdoc_api, "_rd_stage", lambda stage: stage)
+    monkeypatch.setattr(shader_values, "_pipeline_object_for_cbuffer", lambda *_: "pipeline")
+    monkeypatch.setattr(shader_values, "_shader_variable_payload", lambda variable: {"name": variable.name, "value": variable.value})
+    monkeypatch.setattr(shader_values, "_flatten_shader_variable_values", lambda variable, _prefix, out: out.update({variable.name: variable.value}))
     controller = SimpleNamespace(GetCBufferVariableContents=decode) if supported else SimpleNamespace()
-    result = asyncio.run(rt._collect_constant_buffers(controller, pipe, reflection, "ps", shader,
+    result = asyncio.run(shader_values._collect_constant_buffers(controller, pipe, reflection, "ps", shader,
         slot=0, include_contents=include, max_bytes=budget, flatten=True))
     return result[0], calls
 
@@ -102,15 +105,15 @@ def test_metadata_query_does_not_attempt_or_claim_decoding(monkeypatch):
 
 
 def test_negative_window_budget_is_validation_failure():
-    with pytest.raises(rt.CoreError, match="max_bytes"):
-        rt._constant_buffer_byte_window(64, 64, -1)
+    with pytest.raises(CoreError, match="max_bytes"):
+        shader_values._constant_buffer_byte_window(64, 64, -1)
 
 
 def test_decoded_export_propagates_unavailable_values_as_partial(monkeypatch, tmp_path):
     async def pipeline(_action, _args):
         return json.dumps({"success": True, "constant_buffers": [{"slot": 0, "decode_error": "budget_limited", "contents": []}]})
-    monkeypatch.setattr(rt, "_dispatch_pipeline", pipeline)
-    result = json.loads(asyncio.run(rt._dispatch_export("cbuffer_dump", {
+    monkeypatch.setattr(pipeline_ops, "dispatch", pipeline)
+    result = json.loads(asyncio.run(export_ops.dispatch("cbuffer_dump", {
         "session_id": "test-session", "output_dir": str(tmp_path), "stages": ["ps"], "max_bytes": 16,
     })))
     assert result["success"] is True
@@ -127,9 +130,9 @@ def test_raw_export_budget_zero_means_the_block_not_zero_native_length(monkeypat
     async def export(args):
         requests.append(args)
         return json.dumps({"success": True, "saved_path": args["output_path"]})
-    monkeypatch.setattr(rt, "_dispatch_pipeline", pipeline)
-    monkeypatch.setattr(rt, "_export_buffer_file", export)
-    result = json.loads(asyncio.run(rt._dispatch_export("cbuffer_dump", {
+    monkeypatch.setattr(pipeline_ops, "dispatch", pipeline)
+    monkeypatch.setattr(texture_export, "_export_buffer_file", export)
+    result = json.loads(asyncio.run(export_ops.dispatch("cbuffer_dump", {
         "session_id": "test-session", "output_dir": str(tmp_path), "stages": ["ps"], "max_bytes": budget,
         "include_decoded": False, "include_raw": True,
     })))

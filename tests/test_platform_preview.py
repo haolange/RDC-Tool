@@ -4,9 +4,9 @@ import asyncio
 
 import pytest
 
-from rdc_tool import server
 from rdc_tool.core.errors import CoreError
 from rdc_tool.platform import host, preview
+from rdc_tool.runtime import dispatch, live_state, preview_sync
 
 
 def test_non_windows_host_reports_structured_preview_unsupported(monkeypatch):
@@ -20,17 +20,17 @@ def test_non_windows_host_reports_structured_preview_unsupported(monkeypatch):
 def test_preview_binding_maps_unsupported_host_to_capability_error(monkeypatch):
     monkeypatch.setattr(host, "IS_WINDOWS", False)
     with pytest.raises(CoreError) as caught:
-        asyncio.run(server.server_runtime._create_preview_binding("ctx-preview", title="t"))
+        asyncio.run(preview_sync._create_preview_binding("ctx-preview", title="t"))
     assert caught.value.code == "preview_unsupported_platform"
     assert caught.value.category == "capability"
     assert caught.value.details["capability"] == "preview_window"
     assert caught.value.details["alternative"] == "rd.session.observe"
-    assert "ctx-preview" not in server.server_runtime._runtime.previews
+    assert "ctx-preview" not in live_state._runtime.previews
 
 
 def test_capabilities_declare_preview_window(monkeypatch):
     monkeypatch.setattr(host, "IS_WINDOWS", False)
-    result = asyncio.run(server.dispatch_operation("rd.core.get_capabilities", {}, transport="test"))
+    result = asyncio.run(dispatch.dispatch_operation("rd.core.get_capabilities", {}, transport="test"))
     assert result["ok"] is True
     entry = result["data"]["capabilities"]["preview_window"]
     assert entry["available"] is False

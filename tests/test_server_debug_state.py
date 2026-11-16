@@ -3,12 +3,13 @@ import json
 from types import SimpleNamespace
 
 import pytest
-from rdc_tool import server
+from rdc_tool.runtime import live_state, renderdoc_api, replay_access
+from rdc_tool.runtime.operations import debug as debug_ops
+from rdc_tool.runtime.operations import shader as shader_ops
 
 
 @pytest.fixture
 def native_debug(monkeypatch):
-    runtime = server.server_runtime
     def var(name, value, kind='Float', members=None):
         return SimpleNamespace(name=name, type=kind, rows=1, columns=1, members=members or [],
                                value=SimpleNamespace(**{('f32v' if kind == 'Float' else 'u32v'): [value]}))
@@ -25,15 +26,15 @@ def native_debug(monkeypatch):
         return controller
     async def ensure_event(session_id, event_id):
         return 42 if event_id is None else event_id
-    monkeypatch.setattr(runtime, '_ensure_event', ensure_event)
+    monkeypatch.setattr(replay_access, '_ensure_event', ensure_event)
     async def offload(fn, *args):
         return fn(*args)
-    handle = runtime.ShaderDebugHandle('trace', 'replay', 'pixel', 42, object(), object())
-    monkeypatch.setattr(runtime._runtime, 'shader_debugs', {'trace': handle})
-    monkeypatch.setattr(runtime, '_get_controller', get_controller)
-    monkeypatch.setattr(runtime, '_offload', offload)
+    handle = live_state.ShaderDebugHandle('trace', 'replay', 'pixel', 42, object(), object())
+    monkeypatch.setattr(live_state._runtime, 'shader_debugs', {'trace': handle})
+    monkeypatch.setattr(replay_access, '_get_controller', get_controller)
+    monkeypatch.setattr(renderdoc_api, '_offload', offload)
     def call(action, **args):
-        return json.loads(asyncio.run(server._dispatch_debug(action, {'session_id': 'replay', 'shader_debug_id': 'trace', **args})))
+        return json.loads(asyncio.run(debug_ops.dispatch(action, {'session_id': 'replay', 'shader_debug_id': 'trace', **args})))
     return SimpleNamespace(call=call, handle=handle, advances=advances, freed=freed, controller=controller)
 
 
@@ -59,7 +60,7 @@ def test_native_batches_and_before_after_are_preserved(native_debug):
     assert d.call('get_variables', name_filter='y')['variables'] == []
     d.call('finish')
     assert d.freed == [d.handle.trace]
-    assert 'trace' not in server._runtime.shader_debugs
+    assert 'trace' not in live_state._runtime.shader_debugs
 
 
 @pytest.mark.parametrize('action,args', [
@@ -72,7 +73,7 @@ def test_invalid_requests_do_not_touch_controller(monkeypatch, native_debug, act
     native_debug.handle.current_state = SimpleNamespace(stepIndex=4)
     async def forbidden(_):
         raise AssertionError('invalid request must precede native access')
-    monkeypatch.setattr(server.server_runtime, '_get_controller', forbidden)
+    monkeypatch.setattr(replay_access, '_get_controller', forbidden)
     result = native_debug.call(action, **args)
     assert result['success'] is False
     assert result['code'] == 'validation_error'
@@ -101,7 +102,7 @@ def test_release_failure_keeps_handle(native_debug):
     native_debug.controller.FreeTrace = fail
     with pytest.raises(RuntimeError, match='trace release failed'):
         native_debug.call('finish')
-    assert server._runtime.shader_debugs['trace'] is native_debug.handle
+    assert live_state._runtime.shader_debugs['trace'] is native_debug.handle
 
 
 def test_current_catalog_admits_trace_pc_and_rejects_unimplemented_modes():
@@ -121,7 +122,7 @@ def test_current_catalog_admits_trace_pc_and_rejects_unimplemented_modes():
 
 
 def shader_state(d, **args):
-    return json.loads(asyncio.run(server._dispatch_shader('get_debug_state', {
+    return json.loads(asyncio.run(shader_ops.dispatch('get_debug_state', {
         'session_id': 'replay', 'shader_debug_id': 'trace', **args})))
 
 
@@ -188,7 +189,7 @@ def test_full_state_is_bounded_and_snapshot_is_not_mutated(native_debug):
 def test_bad_state_detail_rejected_before_native(monkeypatch, native_debug, detail):
     async def forbidden(_):
         raise AssertionError('invalid detail must precede controller access')
-    monkeypatch.setattr(server.server_runtime, '_get_controller', forbidden)
+    monkeypatch.setattr(replay_access, '_get_controller', forbidden)
     result = shader_state(native_debug, detail_level=detail)
     assert not result['success'] and result['code'] == 'validation_error'
     assert result['details']['effects_attempted'] is False

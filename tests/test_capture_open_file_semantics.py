@@ -4,9 +4,10 @@ import asyncio
 import json
 from types import SimpleNamespace
 
-from rdc_tool import server
 from rdc_tool.context_snapshot import clear_context_snapshot
 from rdc_tool.runtime_state import clear_context_state
+from rdc_tool.runtime import action_index, live_state, preview_sync, renderdoc_api, visual_target
+from rdc_tool.runtime.operations import capture as capture_ops
 
 
 class _FakeCaptureFile:
@@ -29,7 +30,7 @@ class _FakeCaptureFile:
 
 
 def test_dispatch_capture_open_file_does_not_open_replay(monkeypatch, tmp_path) -> None:
-    original_captures = dict(server._runtime.captures)
+    original_captures = dict(live_state._runtime.captures)
     fake_capture = _FakeCaptureFile()
     sample = tmp_path / "sample.rdc"
     sample.write_bytes(b"rdc")
@@ -37,35 +38,35 @@ def test_dispatch_capture_open_file_does_not_open_replay(monkeypatch, tmp_path) 
     async def _inline_offload(fn, *args, **kwargs):
         return fn(*args, **kwargs)
 
-    monkeypatch.setattr(server.server_runtime, "_offload", _inline_offload)
-    monkeypatch.setattr(server.server_runtime, "_check_status", lambda status, operation, **kwargs: None)
-    monkeypatch.setattr(server.server_runtime, "_get_rd", lambda: SimpleNamespace(OpenCaptureFile=lambda: fake_capture))
+    monkeypatch.setattr(renderdoc_api, "_offload", _inline_offload)
+    monkeypatch.setattr(renderdoc_api, "_check_status", lambda status, operation, **kwargs: None)
+    monkeypatch.setattr(renderdoc_api, "_get_rd", lambda: SimpleNamespace(OpenCaptureFile=lambda: fake_capture))
 
     clear_context_snapshot()
     clear_context_state()
-    server._runtime.context_snapshots.clear()
-    server._runtime.context_states.clear()
-    server._runtime.hydrated_contexts.clear()
-    server._runtime.captures.clear()
+    live_state._runtime.context_snapshots.clear()
+    live_state._runtime.context_states.clear()
+    live_state._runtime.hydrated_contexts.clear()
+    live_state._runtime.captures.clear()
     try:
-        payload = json.loads(asyncio.run(server._dispatch_capture("open_file", {"file_path": str(sample)})))
+        payload = json.loads(asyncio.run(capture_ops.dispatch("open_file", {"file_path": str(sample)})))
         assert payload["success"] is True
         assert payload["driver"] == "D3D12"
         assert fake_capture.calls == [f"OpenFile:{sample}", "DriverName", "CloseFile"]
     finally:
         clear_context_snapshot()
         clear_context_state()
-        server._runtime.context_snapshots.clear()
-        server._runtime.context_states.clear()
-        server._runtime.hydrated_contexts.clear()
-        server._runtime.captures.clear()
-        server._runtime.captures.update(original_captures)
+        live_state._runtime.context_snapshots.clear()
+        live_state._runtime.context_states.clear()
+        live_state._runtime.hydrated_contexts.clear()
+        live_state._runtime.captures.clear()
+        live_state._runtime.captures.update(original_captures)
 
 
 def test_dispatch_capture_open_replay_returns_after_ready_state_without_preview_sync(monkeypatch, tmp_path) -> None:
-    original_captures = dict(server._runtime.captures)
-    original_replays = dict(server._runtime.replays)
-    original_session_manager = server.server_runtime._session_manager
+    original_captures = dict(live_state._runtime.captures)
+    original_replays = dict(live_state._runtime.replays)
+    original_session_manager = live_state._session_manager
     sample = tmp_path / "sample.rdc"
     sample.write_bytes(b"rdc")
 
@@ -104,28 +105,28 @@ def test_dispatch_capture_open_replay_returns_after_ready_state_without_preview_
     async def _unexpected_preview_sync(*_args, **_kwargs) -> None:
         raise AssertionError("open_replay should not auto-sync preview before returning")
 
-    monkeypatch.setattr(server.server_runtime, "_offload", _inline_offload)
-    monkeypatch.setattr(server.server_runtime, "_pick_default_event_id", lambda _roots: 147)
-    monkeypatch.setattr(server.server_runtime, "_pick_previewable_default_event_id", _pick_previewable_default_event_id)
-    monkeypatch.setattr(server.server_runtime, "_auto_sync_preview_if_enabled", _unexpected_preview_sync)
+    monkeypatch.setattr(renderdoc_api, "_offload", _inline_offload)
+    monkeypatch.setattr(action_index, "_pick_default_event_id", lambda _roots: 147)
+    monkeypatch.setattr(visual_target, "_pick_previewable_default_event_id", _pick_previewable_default_event_id)
+    monkeypatch.setattr(preview_sync, "_auto_sync_preview_if_enabled", _unexpected_preview_sync)
 
     clear_context_snapshot()
     clear_context_state()
-    server._runtime.context_snapshots.clear()
-    server._runtime.context_states.clear()
-    server._runtime.hydrated_contexts.clear()
-    server._runtime.captures.clear()
-    server._runtime.replays.clear()
-    server._runtime.captures["capf_demo"] = server.server_runtime.CaptureFileHandle(
+    live_state._runtime.context_snapshots.clear()
+    live_state._runtime.context_states.clear()
+    live_state._runtime.hydrated_contexts.clear()
+    live_state._runtime.captures.clear()
+    live_state._runtime.replays.clear()
+    live_state._runtime.captures["capf_demo"] = live_state.CaptureFileHandle(
         capture_file_id="capf_demo",
         file_path=str(sample),
         read_only=True,
         driver="D3D12",
     )
-    server.server_runtime._session_manager = _FakeSessionManager()
+    live_state._session_manager = _FakeSessionManager()
     try:
         payload = json.loads(
-            asyncio.run(server._dispatch_capture("open_replay", {"capture_file_id": "capf_demo", "options": {}}))
+            asyncio.run(capture_ops.dispatch("open_replay", {"capture_file_id": "capf_demo", "options": {}}))
         )
 
         assert payload["success"] is True
@@ -137,19 +138,19 @@ def test_dispatch_capture_open_replay_returns_after_ready_state_without_preview_
     finally:
         clear_context_snapshot()
         clear_context_state()
-        server._runtime.context_snapshots.clear()
-        server._runtime.context_states.clear()
-        server._runtime.hydrated_contexts.clear()
-        server._runtime.captures.clear()
-        server._runtime.captures.update(original_captures)
-        server._runtime.replays.clear()
-        server._runtime.replays.update(original_replays)
-        server.server_runtime._session_manager = original_session_manager
+        live_state._runtime.context_snapshots.clear()
+        live_state._runtime.context_states.clear()
+        live_state._runtime.hydrated_contexts.clear()
+        live_state._runtime.captures.clear()
+        live_state._runtime.captures.update(original_captures)
+        live_state._runtime.replays.clear()
+        live_state._runtime.replays.update(original_replays)
+        live_state._session_manager = original_session_manager
 
 def test_dispatch_capture_open_replay_reuses_live_session_for_same_capture(monkeypatch, tmp_path) -> None:
-    original_captures = dict(server._runtime.captures)
-    original_replays = dict(server._runtime.replays)
-    original_session_manager = server.server_runtime._session_manager
+    original_captures = dict(live_state._runtime.captures)
+    original_replays = dict(live_state._runtime.replays)
+    original_session_manager = live_state._session_manager
     sample = tmp_path / "sample.rdc"
     sample.write_bytes(b"rdc")
 
@@ -162,27 +163,27 @@ def test_dispatch_capture_open_replay_reuses_live_session_for_same_capture(monke
 
     clear_context_snapshot()
     clear_context_state()
-    server._runtime.context_snapshots.clear()
-    server._runtime.context_states.clear()
-    server._runtime.hydrated_contexts.clear()
-    server._runtime.captures.clear()
-    server._runtime.replays.clear()
-    server._runtime.captures["capf_demo"] = server.server_runtime.CaptureFileHandle(
+    live_state._runtime.context_snapshots.clear()
+    live_state._runtime.context_states.clear()
+    live_state._runtime.hydrated_contexts.clear()
+    live_state._runtime.captures.clear()
+    live_state._runtime.replays.clear()
+    live_state._runtime.captures["capf_demo"] = live_state.CaptureFileHandle(
         capture_file_id="capf_demo",
         file_path=str(sample),
         read_only=True,
         driver="D3D12",
     )
-    server._runtime.replays["sess_live"] = server.server_runtime.ReplayHandle(
+    live_state._runtime.replays["sess_live"] = live_state.ReplayHandle(
         session_id="sess_live",
         capture_file_id="capf_demo",
         frame_index=0,
         active_event_id=7010,
     )
-    server.server_runtime._session_manager = _UnexpectedSessionManager()
+    live_state._session_manager = _UnexpectedSessionManager()
     try:
         payload = json.loads(
-            asyncio.run(server._dispatch_capture("open_replay", {"capture_file_id": "capf_demo", "options": {}}))
+            asyncio.run(capture_ops.dispatch("open_replay", {"capture_file_id": "capf_demo", "options": {}}))
         )
 
         assert payload["success"] is True
@@ -193,11 +194,11 @@ def test_dispatch_capture_open_replay_reuses_live_session_for_same_capture(monke
     finally:
         clear_context_snapshot()
         clear_context_state()
-        server._runtime.context_snapshots.clear()
-        server._runtime.context_states.clear()
-        server._runtime.hydrated_contexts.clear()
-        server._runtime.captures.clear()
-        server._runtime.captures.update(original_captures)
-        server._runtime.replays.clear()
-        server._runtime.replays.update(original_replays)
-        server.server_runtime._session_manager = original_session_manager
+        live_state._runtime.context_snapshots.clear()
+        live_state._runtime.context_states.clear()
+        live_state._runtime.hydrated_contexts.clear()
+        live_state._runtime.captures.clear()
+        live_state._runtime.captures.update(original_captures)
+        live_state._runtime.replays.clear()
+        live_state._runtime.replays.update(original_replays)
+        live_state._session_manager = original_session_manager

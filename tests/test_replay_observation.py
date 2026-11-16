@@ -7,12 +7,12 @@ from pathlib import Path
 
 import pytest
 
-from rdc_tool import replay_observation as observation
+from rdc_tool.runtime import observation
+from rdc_tool.runtime import context_records, live_state, renderdoc_api, replay_access
 
 
 @pytest.fixture
 def replay(monkeypatch):
-    runtime = observation.runtime
     applied = []
     flat = [SimpleNamespace(eventId=i, customName=f'event {i}', flags=1) for i in range(1, 2502)]
     async def nothing(*args, **kwargs):
@@ -31,21 +31,21 @@ def replay(monkeypatch):
         assert kwargs['artifact_store'] is None
         Path(kwargs['output_path']).write_bytes(b'PNG-test')
         return {'saved_path': kwargs['output_path']}
-    monkeypatch.setattr(runtime, '_runtime_context_id', lambda: 'isolated')
-    monkeypatch.setattr(runtime, '_context_state', lambda _: {'current_session_id': 'sess', 'backend': 'remote'})
-    monkeypatch.setattr(runtime, '_ensure_live_session', nothing)
-    monkeypatch.setattr(runtime, '_load_action_index', index)
-    monkeypatch.setattr(runtime, '_active_event', lambda _: 42)
-    monkeypatch.setattr(runtime, '_store_active_event', lambda *a, **k: None)
-    monkeypatch.setattr(runtime, '_get_controller', controller)
-    monkeypatch.setattr(runtime, '_offload', offload)
-    monkeypatch.setattr(runtime, '_output_target_resource_ids', outputs)
-    monkeypatch.setattr(runtime, '_get_texture_descriptor', descriptor)
-    monkeypatch.setattr(runtime, '_render_service', SimpleNamespace(save_texture_file=save))
-    monkeypatch.setattr(runtime, '_get_rd', lambda: SimpleNamespace(ActionFlags=SimpleNamespace(Present=2)))
+    monkeypatch.setattr(live_state, '_runtime_context_id', lambda: 'isolated')
+    monkeypatch.setattr(context_records, '_context_state', lambda _: {'current_session_id': 'sess', 'backend': 'remote'})
+    monkeypatch.setattr(replay_access, '_ensure_live_session', nothing)
+    monkeypatch.setattr(replay_access, '_load_action_index', index)
+    monkeypatch.setattr(replay_access, '_active_event', lambda _: 42)
+    monkeypatch.setattr(replay_access, '_store_active_event', lambda *a, **k: None)
+    monkeypatch.setattr(replay_access, '_get_controller', controller)
+    monkeypatch.setattr(renderdoc_api, '_offload', offload)
+    monkeypatch.setattr(replay_access, '_output_target_resource_ids', outputs)
+    monkeypatch.setattr(replay_access, '_get_texture_descriptor', descriptor)
+    monkeypatch.setattr(live_state, '_render_service', SimpleNamespace(save_texture_file=save))
+    monkeypatch.setattr(renderdoc_api, '_get_rd', lambda: SimpleNamespace(ActionFlags=SimpleNamespace(Present=2)))
     async def present(session, event, resource):
         return len(applied)
-    monkeypatch.setattr(runtime, '_session_manager', SimpleNamespace(present_remote=present))
+    monkeypatch.setattr(live_state, '_session_manager', SimpleNamespace(present_remote=present))
     observation._revisions.clear()
     return applied
 
@@ -99,7 +99,7 @@ def test_export_failure_removes_partial_file(replay, tmp_path, monkeypatch):
     async def broken(**kwargs):
         Path(kwargs['output_path']).write_bytes(b'partial')
         raise RuntimeError('device disconnected')
-    monkeypatch.setattr(observation.runtime, '_render_service', SimpleNamespace(save_texture_file=broken))
+    monkeypatch.setattr(live_state, '_render_service', SimpleNamespace(save_texture_file=broken))
     destination = tmp_path / 'a.png'
     result = call('observe', {'out_path': str(destination)})
     assert result['image_path'] is None and result['image_error']
@@ -108,8 +108,7 @@ def test_export_failure_removes_partial_file(replay, tmp_path, monkeypatch):
 
 
 def test_final_target_rejects_pass_boundary_and_ambiguous_resources(monkeypatch):
-    runtime = observation.runtime
-    monkeypatch.setattr(runtime, '_get_rd', lambda: SimpleNamespace(ActionFlags=SimpleNamespace(Present=2), TextureCategory=SimpleNamespace(SwapBuffer=4)))
+    monkeypatch.setattr(renderdoc_api, '_get_rd', lambda: SimpleNamespace(ActionFlags=SimpleNamespace(Present=2), TextureCategory=SimpleNamespace(SwapBuffer=4)))
     with pytest.raises(ValueError, match='explicit Present'):
         asyncio.run(observation._final_target('sess', [SimpleNamespace(eventId=9, flags=1)]))
     async def controller(*args):
@@ -117,8 +116,8 @@ def test_final_target_rejects_pass_boundary_and_ambiguous_resources(monkeypatch)
                                GetUsage=lambda rid: [SimpleNamespace(eventId=9, usage='Present')])
     async def offload(fn, *args):
         return fn(*args)
-    monkeypatch.setattr(runtime, '_get_controller', controller)
-    monkeypatch.setattr(runtime, '_offload', offload)
+    monkeypatch.setattr(replay_access, '_get_controller', controller)
+    monkeypatch.setattr(renderdoc_api, '_offload', offload)
     with pytest.raises(ValueError, match='exactly one'):
         asyncio.run(observation._final_target('sess', [SimpleNamespace(eventId=9, flags=2, copyDestination='a')]))
 
@@ -126,7 +125,7 @@ def test_final_target_rejects_pass_boundary_and_ambiguous_resources(monkeypatch)
 def test_no_output_is_distinct_from_missing_target(replay, tmp_path, monkeypatch):
     async def outputs(*args):
         return []
-    monkeypatch.setattr(observation.runtime, '_output_target_resource_ids', outputs)
+    monkeypatch.setattr(replay_access, '_output_target_resource_ids', outputs)
     result = call('observe', {'out_path': str(tmp_path / 'empty.png'), 'event_id': 5})
     assert result['event_id'] == 5 and result['image_path'] is None
     assert result['image_error']['code'] == 'no_color_output'
@@ -140,9 +139,9 @@ def test_manual_present_uses_same_verified_target_as_open(replay, tmp_path, monk
         return 14, 'swap-buffer', SimpleNamespace(width=640, height=480)
     async def outputs(*args):
         return []
-    monkeypatch.setattr(observation.runtime, '_load_action_index', index)
-    monkeypatch.setattr(observation.runtime, '_active_event', lambda _: 14)
-    monkeypatch.setattr(observation.runtime, '_output_target_resource_ids', outputs)
+    monkeypatch.setattr(replay_access, '_load_action_index', index)
+    monkeypatch.setattr(replay_access, '_active_event', lambda _: 14)
+    monkeypatch.setattr(replay_access, '_output_target_resource_ids', outputs)
     monkeypatch.setattr(observation, '_final_target', final)
     opened = call('observe', {'out_path': str(tmp_path / 'open.png'), 'final_output': True})
     selected = call('observe', {'out_path': str(tmp_path / 'manual.png'), 'event_id': 14})
@@ -153,15 +152,15 @@ def test_manual_present_uses_same_verified_target_as_open(replay, tmp_path, monk
     assert Path(opened['image_path']).read_bytes() == Path(selected['image_path']).read_bytes()
 
 def test_observation_reports_actual_replacement_state(replay, tmp_path, monkeypatch):
-    monkeypatch.setattr(observation.runtime, '_replacement_metadata_entries', lambda session: [])
-    monkeypatch.setattr(observation.runtime._runtime, 'restored_shader_sessions', set())
+    monkeypatch.setattr(context_records, '_replacement_metadata_entries', lambda session: [])
+    monkeypatch.setattr(live_state._runtime, 'restored_shader_sessions', set())
     baseline = call('observe', {'out_path': str(tmp_path / 'baseline.png')})
     assert baseline['modification_state'] == 'baseline'
     assert baseline['display_parameters'] == {'mip': 0, 'slice': 0, 'sample': 0, 'range_min': 0.0, 'range_max': 1.0}
-    monkeypatch.setattr(observation.runtime, '_replacement_metadata_entries', lambda session: [{'replacement_id': 'patch'}])
+    monkeypatch.setattr(context_records, '_replacement_metadata_entries', lambda session: [{'replacement_id': 'patch'}])
     assert call('observe', {'out_path': str(tmp_path / 'modified.png')})['modification_state'] == 'intervention'
-    monkeypatch.setattr(observation.runtime, '_replacement_metadata_entries', lambda session: [])
-    observation.runtime._runtime.restored_shader_sessions.add('sess')
+    monkeypatch.setattr(context_records, '_replacement_metadata_entries', lambda session: [])
+    live_state._runtime.restored_shader_sessions.add('sess')
     assert call('observe', {'out_path': str(tmp_path / 'restored.png')})['modification_state'] == 'restored'
 
 def test_remote_failure_does_not_reuse_previous_receipt(replay, tmp_path, monkeypatch):
@@ -169,7 +168,7 @@ def test_remote_failure_does_not_reuse_previous_receipt(replay, tmp_path, monkey
     assert first['remote_display']['status'] == 'presented'
     async def failed(*args):
         raise RuntimeError('surface lost')
-    monkeypatch.setattr(observation.runtime, '_session_manager', SimpleNamespace(present_remote=failed))
+    monkeypatch.setattr(live_state, '_session_manager', SimpleNamespace(present_remote=failed))
     result = call('observe', {'out_path': str(tmp_path / 'second.png'), 'event_id': 12})
     assert result['remote_display'] == {'status': 'unavailable', 'event_id': 12,
         'texture_id': 'resource-7', 'sequence': None, 'reason': 'surface lost'}
@@ -183,8 +182,8 @@ def test_no_color_sends_native_clear(replay, tmp_path, monkeypatch):
     async def present(*args):
         calls.append(args)
         return 9
-    monkeypatch.setattr(observation.runtime, '_output_target_resource_ids', outputs)
-    monkeypatch.setattr(observation.runtime, '_session_manager', SimpleNamespace(present_remote=present))
+    monkeypatch.setattr(replay_access, '_output_target_resource_ids', outputs)
+    monkeypatch.setattr(live_state, '_session_manager', SimpleNamespace(present_remote=present))
     result = call('observe', {'out_path': str(tmp_path / 'clear.png'), 'event_id': 5})
     assert calls == [('sess', 5, None)]
     assert result['remote_display'] == {'status': 'unavailable', 'event_id': 5,
@@ -192,7 +191,7 @@ def test_no_color_sends_native_clear(replay, tmp_path, monkeypatch):
 
 
 def test_local_receipt_is_explicitly_not_applicable(replay, tmp_path, monkeypatch):
-    monkeypatch.setattr(observation.runtime, '_context_state', lambda _: {'current_session_id': 'sess', 'backend': 'local'})
+    monkeypatch.setattr(context_records, '_context_state', lambda _: {'current_session_id': 'sess', 'backend': 'local'})
     result = call('observe', {'out_path': str(tmp_path / 'local.png')})
     assert result['remote_display'] == {'status': 'not_applicable', 'event_id': 42,
         'texture_id': None, 'sequence': None, 'reason': None}

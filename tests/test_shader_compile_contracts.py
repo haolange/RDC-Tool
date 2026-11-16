@@ -6,8 +6,9 @@ from enum import IntEnum
 from types import SimpleNamespace
 
 import pytest
-from rdc_tool import server_runtime as runtime
 from rdc_tool.core import patch_engine
+from rdc_tool.runtime import live_state, renderdoc_api, replay_access, truth_matrix
+from rdc_tool.runtime.operations import shader as shader_ops
 
 
 class Encoding(IntEnum):
@@ -33,19 +34,19 @@ def compile_env(monkeypatch):
         return fn(*args, **kwargs)
     async def get_controller(session_id):
         return controller
-    monkeypatch.setattr(runtime, "_get_controller", get_controller)
-    monkeypatch.setattr(runtime, "_offload", offload)
-    monkeypatch.setattr(runtime, "_get_rd", lambda: SimpleNamespace(ShaderEncoding=Encoding, ShaderCompileFlags=lambda: [], ResourceId=lambda: "ResourceId::0"))
-    monkeypatch.setattr(runtime, "_rd_stage", lambda stage: stage)
-    monkeypatch.setattr(runtime, "_is_null_resource_id", lambda rid: rid in (None, "ResourceId::0"))
-    monkeypatch.setattr(runtime, "_session_replace_capability", lambda *args: (True, ""))
-    monkeypatch.setattr(runtime._runtime, "replays", {"live": object()})
+    monkeypatch.setattr(replay_access, "_get_controller", get_controller)
+    monkeypatch.setattr(renderdoc_api, "_offload", offload)
+    monkeypatch.setattr(renderdoc_api, "_get_rd", lambda: SimpleNamespace(ShaderEncoding=Encoding, ShaderCompileFlags=lambda: [], ResourceId=lambda: "ResourceId::0"))
+    monkeypatch.setattr(renderdoc_api, "_rd_stage", lambda stage: stage)
+    monkeypatch.setattr(renderdoc_api, "_is_null_resource_id", lambda rid: rid in (None, "ResourceId::0"))
+    monkeypatch.setattr(truth_matrix, "_session_replace_capability", lambda *args: (True, ""))
+    monkeypatch.setattr(live_state._runtime, "replays", {"live": object()})
     monkeypatch.setattr(patch_engine.PatchEngine, "_assemble_spirv_asm", staticmethod(lambda source: MODULE))
     return controller, calls
 
 
 def compile_shader(**args):
-    return json.loads(asyncio.run(runtime._dispatch_shader("compile", dict(session_id="live", stage="ps", source_encoding="spirvasm", **args))))
+    return json.loads(asyncio.run(shader_ops.dispatch("compile", dict(session_id="live", stage="ps", source_encoding="spirvasm", **args))))
 
 
 def test_raw_asm_compiles_as_native_spirv_build_input(compile_env, tmp_path):
