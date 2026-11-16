@@ -35,6 +35,20 @@ RDC-Tool 不自动跟随上游每个版本；新运行库只有在完成同源�
 - 两个 Android helper 同时存在时，signer 证书与版本元数据必须一致。
 - 场景按需要的目标集合判定资格：正式发布要求本主机目标加两个 Android helper；本地候选要求本主机目标加其回执配对的 helper，且只随包携带被配对的 helper，绝不混入其他源码树的产物。需要的目标未列出或缺席时状态为 `unavailable`（并给出 `missing_targets`）；任何已存在的字节与回执矛盾时为 `invalid`。worker 拒绝在 `invalid` 下启动，正式打包与发布验证只接受 `verified`。
 
+## Linux 原生构建
+
+Linux 主机布局的原生库与绑定从与其他目标相同的冻结源码构建，源码树不做任何修改：
+
+| 项 | 值 |
+|---|---|
+| 源码 | 回执 `source.revision` 的干净检出（当前 dde8822），构建前后 `git status` 均为空 |
+| 配置 | `cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DENABLE_QRENDERDOC=OFF -DENABLE_PYRENDERDOC=ON -DCMAKE_CXX_FLAGS="-include vector" -DPYTHON_EXECUTABLE=… -DPYTHON_INCLUDE_DIR=… -DPYTHON_LIBRARY=…`；Python 与 `scripts/python-runtimes.json` 钉住的捆绑解释器同版本、同 ABI（cp314） |
+| `-include vector` | dde8822 的 `renderdoc/driver/vulkan/vk_pixelhistory.cpp` 用到 `std::vector` 却没有包含 `<vector>`。MSVC 与 Android NDK 的标准库会间接带入，现有 Windows 与 Android 产物就是这样构建出来的；GCC 的 libstdc++ 不会。用编译选项补齐而不改源码，Linux 产物与它们同属一个 revision，能写进同一份回执。下一次基线升级改动 fork 时，把这行 include 合入源码并删除该选项 |
+| 自定义 SWIG | 构建会下载 `baldurk/swig` 标签 `renderdoc-modified-7` 的源码包；下载受限时用 `-DRENDERDOC_SWIG_PACKAGE=<本地 zip>` 指向同一标签的源码包 |
+| 输出 | 运行目录根部的 `librenderdoc.so` 与 Vulkan layer `renderdoc_capture.json`，以及 `pymodules/renderdoc.so`；回执 `linux-x64` 项的 `toolchain` 记录 GCC、CMake、glibc、Python 与 `cxx_flags` |
+
+正式产物还须在 glibc 较老的构建环境中按此配置构建，否则用户系统必须具备构建机的 glibc 版本。
+
 ## 原生运行库变更
 
 修改 RenderDoc 或 helper 运行内容时，必须从同一份冻结源码构建，并通过同一份回执配对各主机的原生库与绑定（Windows DLL/PYD、Linux `.so`）以及两个 Android helper APK。主机运行文件清单必须覆盖完整原生集合（如 Windows 的 `renderdoc.dll`、`renderdoc.pyd`、`renderdoc.json` 与支持库）。禁止把单个库拷进旧集合、混用不同源码树的产物，或向 PATH、其他安装、SDK、上游二进制添加未经验证的 fallback。
