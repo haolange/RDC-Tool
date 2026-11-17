@@ -461,7 +461,8 @@ def test_edit_and_replace_returns_capability_failure_without_mock_success(
 
     assert payload.ok is False
     assert payload.code == "shader_replace_backend_unsupported"
-    assert payload.category == "capability"
+    assert payload.category == "runtime"
+    assert "context_preserved" not in payload.details
     assert payload.details["capability"] == "shader_replace"
     assert "mock_applied" not in repr(payload)
     assert "status" not in payload.details
@@ -1601,6 +1602,12 @@ def test_revert_patch_rebinds_target_event(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 def test_get_disassembly_rejects_unknown_target_before_replay_effects(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(live_state._runtime, "replays", {
+        "sess_demo": live_state.ReplayHandle(session_id="sess_demo", capture_file_id="capture", active_event_id=101),
+    })
+    monkeypatch.setattr(live_state._runtime, "captures", {
+        "capture": live_state.CaptureFileHandle(capture_file_id="capture", file_path="fixture.rdc", read_only=True),
+    })
     class _TargetsController(_SupportedController):
         def GetDisassemblyTargets(self, include_custom: bool) -> list[str]:
             assert include_custom is True
@@ -1628,6 +1635,12 @@ def test_get_disassembly_rejects_unknown_target_before_replay_effects(monkeypatc
 def test_shader_operations_reject_noncanonical_stage_before_replay_effects(
     monkeypatch: pytest.MonkeyPatch, action: str,
 ) -> None:
+    monkeypatch.setattr(live_state._runtime, "replays", {
+        "sess_demo": live_state.ReplayHandle(session_id="sess_demo", capture_file_id="capture", active_event_id=101),
+    })
+    monkeypatch.setattr(live_state._runtime, "captures", {
+        "capture": live_state.CaptureFileHandle(capture_file_id="capture", file_path="fixture.rdc", read_only=True),
+    })
     async def _unexpected_get_controller(session_id: str) -> object:
         raise AssertionError("stage validation must precede controller access")
 
@@ -1936,6 +1949,12 @@ def test_disassembly_success_discovers_native_targets_truthfully(monkeypatch, mo
 
 @pytest.mark.parametrize("mode", ["error", "missing"])
 def test_disassembly_target_probe_failure_precedes_event_effects(monkeypatch, mode) -> None:
+    monkeypatch.setattr(live_state._runtime, "replays", {
+        "sess_demo": live_state.ReplayHandle(session_id="sess_demo", capture_file_id="capture", active_event_id=101),
+    })
+    monkeypatch.setattr(live_state._runtime, "captures", {
+        "capture": live_state.CaptureFileHandle(capture_file_id="capture", file_path="fixture.rdc", read_only=True),
+    })
     class Controller(_SupportedController):
         def GetDisassemblyTargets(self, with_pipeline):
             raise RuntimeError("target query failed")
@@ -1951,8 +1970,14 @@ def test_disassembly_target_probe_failure_precedes_event_effects(monkeypatch, mo
     }))
     assert result.ok is False
     assert result.details["failure_reason"] == "target_discovery_failed"
-    assert result.details["effects_attempted"] is False
-    assert result.details["context_preserved"] is True
+    if mode == "error":
+        assert result.category == "runtime"
+        assert "effects_attempted" not in result.details
+        assert "context_preserved" not in result.details
+    else:
+        assert result.category == "validation"
+        assert result.details["effects_attempted"] is False
+        assert result.details["context_preserved"] is True
     assert result.details["available_targets_status"] == ("unavailable" if mode == "error" else "unsupported")
 
 
@@ -2360,7 +2385,8 @@ def test_get_source_reports_missing_native_metadata_separately_from_empty_files(
     payload = _embedded_source_result(monkeypatch, None)
     assert payload.ok is False
     assert payload.code == "shader_source_metadata_unavailable"
-    assert payload.category == "capability"
+    assert payload.category == "runtime"
+    assert "context_preserved" not in payload.details
 
 
 @pytest.mark.parametrize("restore_fails", [False, True])

@@ -25,7 +25,7 @@ Agent 把 `rdc-tool` 当作纯 CLI 使用，经 shell 工具调用 `rdc-tool` �
 
 ## 回放与远端
 
-本机运行库无法本地回放 capture 所用的 API 时，`rd.capture.open_replay` 在创建回放前返回 `local_replay_unsupported`（category `capability`，details 含 `capture_api`、`host_target`、`recovery_hint`）。此时改用支持该 API 的主机，或经 `rd.remote.connect` 连接远端并在 `options.remote_id` 中传入远端句柄。
+本机运行库无法本地回放 capture 所用的 API 时，`rd.capture.open_replay` 在创建回放前返回 `local_replay_unsupported`，details 与分类见[公共契约](public-contract.md)。此时改用支持该 API 的主机，或经 `rd.remote.connect` 连接远端并在 `options.remote_id` 中传入远端句柄。
 
 远端状态报告 `remote_handle_consumed` 时，不要复用该远端句柄；按需用远端生命周期工具重新连接、ping 或重新打开回放。
 

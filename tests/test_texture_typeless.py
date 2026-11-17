@@ -121,10 +121,13 @@ def test_texture_decode_failure_restores_event_and_returns_qualified_error(monke
         raise render_service.TextureDecodeError("Unsupported texture readback format")
     async def get_controller(session):
         return object()
+    async def action_index(session, **kwargs):
+        return [], [], {42: object()}
     async def read_at_state(session, resource, args, reader):
         active["event"] = 42
         return await reader(42), {}
     monkeypatch.setattr(replay_access, "_get_controller", get_controller)
+    monkeypatch.setattr(replay_access, "_load_action_index", action_index)
     monkeypatch.setattr(replay_access, "_resolve_resource_id", resolve)
     monkeypatch.setattr(texture_export, "_read_at_capture_state", read_at_state)
     monkeypatch.setattr(replay_access, "_ensure_event", ensure)

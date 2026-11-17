@@ -32,7 +32,14 @@ class _FakeCaptureFile:
 
 @pytest.mark.parametrize('action', ['open_file', 'close_file', 'get_info', 'open_replay'])
 def test_missing_capture_rejected_before_effects(monkeypatch, tmp_path, action):
-    monkeypatch.setattr(live_state._runtime, 'captures', {})
+    owned = live_state.CaptureFileHandle(capture_file_id='owned', file_path='owned.rdc', read_only=True)
+    monkeypatch.setattr(live_state._runtime, 'captures', {'owned': owned})
+    monkeypatch.setattr(live_state._runtime, 'replays', {
+        'session': live_state.ReplayHandle(session_id='session', capture_file_id='owned', active_event_id=1),
+    })
+    monkeypatch.setattr(live_state._runtime, 'context_states', {
+        live_state._runtime_context_id(): {'current_session_id': 'session', 'sessions': {}},
+    })
     args = {'file_path': str(tmp_path / 'missing.rdc')} if action == 'open_file' else {'capture_file_id': 'missing'}
     result = asyncio.run(capture_ops.dispatch(action, args))
     assert not result.ok
@@ -40,7 +47,7 @@ def test_missing_capture_rejected_before_effects(monkeypatch, tmp_path, action):
     assert result.category == 'validation'
     assert result.details['effects_attempted'] is False
     assert result.details['context_preserved'] is True
-    assert not live_state._runtime.captures
+    assert live_state._runtime.captures == {'owned': owned}
 
 
 def test_dispatch_capture_open_file_does_not_open_replay(monkeypatch, tmp_path) -> None:

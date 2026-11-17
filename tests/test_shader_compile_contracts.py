@@ -39,7 +39,12 @@ def compile_env(monkeypatch):
     monkeypatch.setattr(renderdoc_api, "_rd_stage", lambda stage: stage)
     monkeypatch.setattr(renderdoc_api, "_is_null_resource_id", lambda rid: rid in (None, "ResourceId::0"))
     monkeypatch.setattr(truth_matrix, "_session_replace_capability", lambda *args: (True, ""))
-    monkeypatch.setattr(live_state._runtime, "replays", {"live": object()})
+    monkeypatch.setattr(live_state._runtime, "replays", {
+        "live": live_state.ReplayHandle(session_id="live", capture_file_id="capture", active_event_id=1),
+    })
+    monkeypatch.setattr(live_state._runtime, "captures", {
+        "capture": live_state.CaptureFileHandle(capture_file_id="capture", file_path="fixture.rdc", read_only=True),
+    })
     monkeypatch.setattr(patch_engine.PatchEngine, "_assemble_spirv_asm", staticmethod(lambda source: MODULE))
     return controller, calls
 

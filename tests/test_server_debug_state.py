@@ -29,6 +29,12 @@ def native_debug(monkeypatch):
     async def offload(fn, *args):
         return fn(*args)
     handle = live_state.ShaderDebugHandle('trace', 'replay', 'pixel', 42, SimpleNamespace(inputs=[]), object())
+    monkeypatch.setattr(live_state._runtime, 'replays', {
+        'replay': live_state.ReplayHandle(session_id='replay', capture_file_id='capture', active_event_id=42),
+    })
+    monkeypatch.setattr(live_state._runtime, 'captures', {
+        'capture': live_state.CaptureFileHandle(capture_file_id='capture', file_path='fixture.rdc', read_only=True),
+    })
     monkeypatch.setattr(live_state._runtime, 'shader_debugs', {'trace': handle})
     monkeypatch.setattr(replay_access, '_get_controller', get_controller)
     monkeypatch.setattr(renderdoc_api, '_offload', offload)

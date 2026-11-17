@@ -17,7 +17,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                  'replay_state_restored=true, initial_provenance; base64 when requested (1 MiB '
                  'limit, no automatic artifact), otherwise explicit output/artifact. Initial '
                  'provenance unavailable, failed/incomplete read and restoration failure are '
-                 'distinct errors. Restoration failure requires closing and reopening the session.',
+                 'distinct errors. Restoration failure requires closing and reopening the session.'
+                 '<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
   'param_names': ['session_id',
                   'buffer_id',
                   'offset',
@@ -132,7 +133,10 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                    'optional): size (int, 可选)<br>max_results (integer, optional): max_results '
                    '(int, 可选, 默认 256)',
   'returns_raw': 'ok (bool)<br>data (dict): {matches}<br>artifacts (list)<br>error '
-                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
+                 '(dict|null): Invalid query flags, range bounds or regex are rejected before replay access. '
+                 'validation with failure_stage=validate_query, effects_attempted=false and context_preserved=true '
+                 'requires no native effects and unchanged replay, event, replacements and affected records; '
+                 'otherwise runtime without that proof.<br>meta (dict)<br>projections (dict, 可选)',
   'param_names': ['session_id', 'buffer_id', 'pattern', 'offset', 'size', 'max_results'],
   'prerequisites': [{'requires': 'session_id',
                      'via_tools': ['rd.capture.open_file', 'rd.capture.open_replay'],
@@ -257,7 +261,7 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                  'same-capture sessions are cleaned before reopen; cleanup failure returns '
                  'stale_session_requires_restart with recovery steps. A local replay whose capture API '
                  "this host's runtime cannot replay returns `local_replay_unsupported` (category "
-                 'capability; details capture_api, host_target, recovery_hint) before any replay is '
+                 'runtime when no preservation proof is available; details capture_api, host_target, recovery_hint) before any replay is '
                  'created.<br>meta '
                  '(dict)<br>projections (dict, 可选)',
   'param_names': ['capture_file_id', 'options'],
@@ -874,7 +878,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                    "'raster', 'om', 'ia'<br>include_unchanged (boolean, optional): "
                    'include_unchanged (bool, 可选, 默认 false)',
   'returns_raw': 'ok (bool)<br>data (dict): {diff}<br>artifacts (list)<br>error '
-                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
+                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)'
+                 '<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
   'param_names': ['session_id', 'event_a', 'event_b', 'scope', 'include_unchanged'],
   'prerequisites': [{'requires': 'session_id',
                      'via_tools': ['rd.capture.open_file', 'rd.capture.open_replay'],
@@ -906,7 +911,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'parameter_raw': 'session_id (string): session_id (str)<2>event_id (int)<br>event_id (integer, '
                    'optional): See input_schema for constraints.',
   'returns_raw': 'Returns parent_chain, nullable marker_path and depth_output; ResourceId is local to this capture.<br>ok (bool)<br>data (dict): {action}<br>artifacts (list)<br>error '
-                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
+                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)'
+                 '<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
   'param_names': ['session_id', 'event_id'],
   'prerequisites': [{'requires': 'session_id',
                      'via_tools': ['rd.capture.open_file', 'rd.capture.open_replay'],
@@ -935,7 +941,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                    'constraints.<br>projection (object, optional): See input_schema for '
                    'constraints.',
   'returns_raw': 'ok (bool)<br>data (dict): {root, pagination}<br>artifacts (list)<br>error '
-                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
+                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)'
+                 '<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
   'param_names': ['session_id',
                   'max_depth',
                   'filter',
@@ -1018,7 +1025,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                    '(int)<br>resolve_symbols (boolean, optional): resolve_symbols (bool, 可选, 默认 '
                    'false)',
   'returns_raw': 'ok (bool)<br>data (dict): {callstack}<br>artifacts (list)<br>error '
-                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
+                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)'
+                 '<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
   'param_names': ['session_id', 'event_id', 'resolve_symbols'],
   'prerequisites': [{'requires': 'session_id',
                      'via_tools': ['rd.capture.open_file', 'rd.capture.open_replay'],
@@ -1044,7 +1052,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'description': '获取指定 Event 的父链（从根节点到当前 Event），用于还原 Marker Stack 或 Pass 层级。',
   'parameter_raw': 'session_id (string): session_id (str)<br>event_id (integer): event_id (int)',
   'returns_raw': 'ok (bool)<br>data (dict): {parent_chain}<br>artifacts (list)<br>error '
-                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
+                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)'
+                 '<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
   'param_names': ['session_id', 'event_id'],
   'prerequisites': [{'requires': 'session_id',
                      'via_tools': ['rd.capture.open_file', 'rd.capture.open_replay'],
@@ -1067,7 +1076,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'description': '获取指定 Event 上资源的摘要使用情况，例如哪些资源被绑定为 RT/DS/SRV/UAV/CBV/IB/VB 等。',
   'parameter_raw': 'session_id (string): session_id (str)<br>event_id (integer): event_id (int)',
   'returns_raw': 'ok (bool)<br>data (dict): {usage}<br>artifacts (list)<br>error '
-                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
+                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)'
+                 '<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
   'param_names': ['session_id', 'event_id'],
   'prerequisites': [{'requires': 'session_id',
                      'via_tools': ['rd.capture.open_file', 'rd.capture.open_replay'],
@@ -1146,10 +1156,11 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
  {'name': 'rd.event.set_active',
   'group': '3.2，捕获文件与 Replay Session (Capture & Replay)',
   'description': '设置当前 active event；成功后 runtime 与 context snapshot 必须同步到同一个 resolved '
-                 'event，失败时保持旧状态不变。',
+                 'event；无法证明保全的失败须隔离回放。',
   'parameter_raw': 'session_id (string): session_id (str)<br>event_id (integer): event_id (int)',
   'returns_raw': 'ok (bool)<br>data (dict): {active_event_id}<br>artifacts (list)<br>error '
-                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
+                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)'
+                 '<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
   'param_names': ['session_id', 'event_id'],
   'prerequisites': [{'requires': 'session_id',
                      'via_tools': ['rd.capture.open_file', 'rd.capture.open_replay'],
@@ -1248,7 +1259,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'returns_raw': 'JSON declares exported attributes. VS input with include_attributes=true exports v/vt/vn with matching face indices; postvs is positions only.<br>data: '
                  '{saved_path,export_format,space,include_attributes,resolved_event_id,vertex_count,primitive_count}. '
                  'Unsupported geometry produces mesh_export_unsupported; no placeholder file is '
-                 'written.',
+                 'written.'
+                 '<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
   'param_names': ['session_id', 'event_id', 'format', 'output_path', 'include_attributes', 'space'],
   'prerequisites': [{'requires': 'session_id',
                      'via_tools': ['rd.capture.open_file', 'rd.capture.open_replay'],
@@ -1297,7 +1309,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                  'failure_stage, replay_state_restored, restored_event_id and '
                  'artifact_write_attempted in error.details; missing or failed restoration '
                  'does not prove replay safety<br>meta '
-                 '(dict)<br>projections (dict, 可选)',
+                 '(dict)<br>projections (dict, 可选)'
+                 '<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
   'param_names': ['session_id',
                   'target',
                   'event_id',
@@ -1354,7 +1367,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                  'resolved_event_id, disassembly_target, complete, failures}; bundle 的 disassembly export '
                  '包含实际 target、source_encoding、is_raw_spirv_asm、source_hash、edit_plan 及精确 UTF-8 文件 hash/大小；'
                  '显式 target 不匹配时标记 unavailable/complete=false，不保存替代展示文本。<br>artifacts (list)<br>error (dict|null): 当请求 event 没有可绑定 '
-                 'shader 时，显式返回 `shader_bundle_empty`<br>meta (dict)<br>projections (dict, 可选)',
+                 'shader 时，显式返回 `shader_bundle_empty`<br>meta (dict)<br>projections (dict, 可选)'
+                 '<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
   'param_names': ['session_id',
                   'event_id',
                   'output_dir',
@@ -1410,7 +1424,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                  'format_encoder_unavailable/format_not_supported, requested_formats, '
                  'supported_formats, recommended_formats, actual_format, and '
                  'downgrade_allowed=false.<br>artifacts (list)<br>error (dict|null)<br>meta '
-                 '(dict)<br>projections (dict, 可选)',
+                 '(dict)<br>projections (dict, 可选)'
+                 '<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
   'param_names': ['session_id',
                   'texture_id',
                   'subresource',
@@ -1549,7 +1564,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'parameter_raw': 'session_id (string): session_id (str)<br>event_id (integer, optional): '
                    'event_id (int, 可选); instance (integer, default 0); max_vertices (integer, default 128; 0 reads full draw)',
   'returns_raw': 'ok (bool)<br>data (dict): {mesh_config: {event_id, topology, bindings, vertex_input}}; vertex_input includes source=vs_input, vertex_rows with draw/vertex indices and typed semantic values, attributes position/normal/uv status, layout, index_binding, truncated. Values are shader inputs in original coordinate space; packed normal encoding is not interpreted as a geometric normal<br>artifacts (list)<br>error '
-                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
+                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)'
+                 '<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
   'param_names': ['session_id', 'event_id', 'instance', 'max_vertices'],
   'prerequisites': [{'requires': 'session_id',
                      'via_tools': ['rd.capture.open_file', 'rd.capture.open_replay'],
@@ -1611,7 +1627,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                 'no index bytes. Native topology_name/base_vertex/allow_restart/restart_index are '
                 'reported without inferring pixel coverage. Invalid window arguments are rejected '
                 'before replay access with effects_attempted=false/context_preserved=true; native '
-                'or post-effect read failures do not carry that proof.',
+                'or post-effect read failures do not carry that proof.'
+                 '<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
  'param_names': ['session_id',
                  'event_id',
                  'instance',
@@ -1776,7 +1793,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'group': '3.4，管线状态查询 (Pipeline State Inspection)',
   'description': '获取指定 stage 的 Constant Buffer 绑定（slot/buffer/offset/size）。 输入范围不足时不调用完整布局解码器，不用未覆盖数据的零填充冒充值。',
   'parameter_raw': 'session_id (string): session_id (str)<br>stage (string): stage (str)<br>include_contents (boolean, optional): include_contents (bool, 可选, 默认 false): 若 true 则额外解码变量值（可能较慢）<br>max_bytes (integer, optional): 每常量块输入字节上限，默认1048576；0表示该块不设上限，负数无效。预算或绑定范围不足完整反射块时不发布完整布局解码值。<br>event_id (integer, optional): Replay event; omitted uses the owning session current event.<br>array_index (integer, optional): See input_schema for constraints.<br>flatten (boolean, optional): See input_schema for constraints.<br>slot (integer, optional): See input_schema for constraints.',
-  'returns_raw': 'ok (bool)<br>data (dict): {constant_buffers}<br>artifacts (list)<br>error (dict|null)<br>meta (dict)<br>projections (dict, 可选) input_coverage说明required_bytes、binding_bytes、byte_budget、permitted_bytes及complete_range_permitted；这不是原始字节回执。decode_status明确decoded/unavailable/raw_fallback，decode_input_bytes是传给解码器的长度。raw_fallback.byte_size为实际返回字节；truncated表示块读取不全，preview_bytes/preview_truncated另外限定hex_preview交付范围。预算不足、未绑定输入或未知范围不能解释成已观测零。',
+  'returns_raw': 'ok (bool)<br>data (dict): {constant_buffers}<br>artifacts (list)<br>error (dict|null)<br>meta (dict)<br>projections (dict, 可选) input_coverage说明required_bytes、binding_bytes、byte_budget、permitted_bytes及complete_range_permitted；这不是原始字节回执。decode_status明确decoded/unavailable/raw_fallback，decode_input_bytes是传给解码器的长度。raw_fallback.byte_size为实际返回字节；truncated表示块读取不全，preview_bytes/preview_truncated另外限定hex_preview交付范围。预算不足、未绑定输入或未知范围不能解释成已观测零。'
+                 '<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
   'param_names': ['session_id',
                   'stage',
                   'include_contents',
@@ -1817,7 +1835,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'parameter_raw': 'session_id (string): session_id (str)<br>event_id (integer, optional): Replay '
                    'event; omitted uses the owning session current event.',
   'returns_raw': 'ok (bool)<br>data (dict): {index_buffer}<br>artifacts (list)<br>error '
-                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
+                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)'
+                 '<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
   'param_names': ['session_id', 'event_id'],
   'prerequisites': [{'requires': 'session_id',
                      'via_tools': ['rd.capture.open_file', 'rd.capture.open_replay'],
@@ -1844,7 +1863,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                    'input_schema for constraints.<br>event_id (integer, optional): Replay event; '
                    'omitted uses the owning session current event.',
   'returns_raw': 'ok (bool)<br>data (dict): {bindings}<br>artifacts (list)<br>error '
-                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
+                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)'
+                 '<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
   'param_names': ['session_id', 'stage', 'type', 'event_id'],
   'prerequisites': [{'requires': 'session_id',
                      'via_tools': ['rd.capture.open_file', 'rd.capture.open_replay'],
@@ -1875,7 +1895,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                    '(str)<br>event_id (integer, optional): Replay event; omitted uses the owning '
                    'session current event.',
   'returns_raw': 'ok (bool)<br>data (dict): {shader}<br>artifacts (list)<br>error '
-                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
+                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)'
+                 '<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
   'param_names': ['session_id', 'stage', 'event_id'],
   'prerequisites': [{'requires': 'session_id',
                      'via_tools': ['rd.capture.open_file', 'rd.capture.open_replay'],
@@ -1904,7 +1925,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                    'Replay event; omitted uses the owning session current event.<br>max_bytes '
                    '(integer, optional): See input_schema for constraints.',
   'returns_raw': 'ok (bool)<br>data (dict): {stage_state}<br>artifacts (list)<br>error '
-                 '(dict|null): unknown stages return validation/invalid_shader_stage; RT or a missing native stage enum returns capability/shader_stage_unsupported. Stage rejection precedes replay access and includes effects_attempted=false, context_preserved=true, failure_stage=validate_stage.<br>meta (dict)<br>projections (dict, 可选)',
+                 '(dict|null): invalid_shader_stage and shader_stage_unsupported are validation errors when the no-effect and entry-state proof succeeds; otherwise they are runtime failures without that proof.<br>meta (dict)<br>projections (dict, 可选)'
+                 '<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
   'param_names': ['session_id', 'stage', 'event_id', 'max_bytes'],
   'prerequisites': [{'requires': 'session_id',
                      'via_tools': ['rd.capture.open_file', 'rd.capture.open_replay'],
@@ -1936,7 +1958,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                    'these state sections; omitted selects all.',
   'returns_raw': 'Shader hash is SHA-256 of recorded shader rawBytes, or null when unavailable; debug_name is the native non-autogenerated shader resource debug name or null; resource_name retains the native display name including autogenerated names; debug_source_files lists actual debug source filenames separately. Neither is derived from ResourceId.<br>data: resolved_event_id, pipeline_state. Full indexed viewports/scissors, blend '
                  'options and complete front/back stencil. Blend factors/operations and depth compare use native RenderDoc enum names (for example SrcAlpha, InvSrcAlpha, GreaterEqual); unlabelled values are reported as unknown(raw) without guessing. API-specific sections carry api, status '
-                 'and native data; failed reads are not empty states.',
+                 'and native data; failed reads are not empty states.'
+                 '<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
   'param_names': ['session_id', 'event_id', 'context_id', 'detail', 'sections'],
   'prerequisites': [{'requires': 'session_id',
                      'via_tools': ['rd.capture.open_file', 'rd.capture.open_replay'],
@@ -1988,7 +2011,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'parameter_raw': 'session_id (string): session_id (str)<br>event_id (integer, optional): Replay '
                    'event; omitted uses the owning session current event.',
   'returns_raw': 'ok (bool)<br>data (dict): {vertex_buffers}<br>artifacts (list)<br>error '
-                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
+                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)'
+                 '<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
   'param_names': ['session_id', 'event_id'],
   'prerequisites': [{'requires': 'session_id',
                      'via_tools': ['rd.capture.open_file', 'rd.capture.open_replay'],
@@ -2448,7 +2472,7 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                    '(str)<br>include_initialization (boolean): Recorded initialization chunks and '
                    'parent/derived resources; not a creation call-stack claim.',
   'returns_raw': 'ok (bool)<br>data (dict): {details}<br>artifacts (list)<br>error '
-                 '(dict|null): Completed inventory miss is validation/resource_not_found with effects_attempted=false and context_preserved=true; native inventory failures carry no such proof.<br>meta (dict)<br>projections (dict, 可选)',
+                 '(dict|null): Completed inventory miss is resource_not_found; it is validation with effects_attempted=false and context_preserved=true only when entry-state preservation and no effects are proven, otherwise runtime. Native inventory failures carry no such proof.<br>meta (dict)<br>projections (dict, 可选)',
   'param_names': ['session_id', 'resource_id', 'include_initialization'],
   'prerequisites': [{'requires': 'session_id',
                      'via_tools': ['rd.capture.open_file', 'rd.capture.open_replay'],
@@ -2741,7 +2765,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                  'unsupported|not_applicable, event_id, texture_id, sequence, reason}}. Presented requires '
                  'successful native GPU presentation and a fresh positive sequence. No-color output '
                  'is unavailable with a successful clear sequence when the surface was cleared; '
-                 'failures never reuse a prior receipt.<br>artifacts (list)<br>error (dict|null)<br>meta (dict)',
+                 'failures never reuse a prior receipt.<br>artifacts (list)<br>error (dict|null)<br>meta (dict)'
+                 '<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
   'param_names': ['out_path', 'event_id', 'final_output', 'target', 'context_id'],
   'prerequisites': [{'requires': 'session_id',
                      'via_tools': ['rd.capture.open_replay'],
@@ -2904,7 +2929,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                  'validation/build failures include source_kind, resolved_source_path, '
                  'include_dirs, entry, target, and failure_stage. Unsupported source encoding '
                  'returns shader_compile_encoding_unsupported. Prebuild rejection/assembly failure returns effects_attempted=false, context_preserved=true; native build failures do not. Assembled SPIR-V artifact_kind is assembled-spirv-build-input, not device code. DXIL/DXBC captured disassembly text '
-                 'is not accepted as editable source.<br>meta (dict)<br>projections (dict, 可选)',
+                 'is not accepted as editable source.<br>meta (dict)<br>projections (dict, 可选)'
+                 '<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
   'param_names': ['source_text',
                   'source_path',
                   'stage',
@@ -2980,7 +3006,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                  'backend/session 明确不支持时，优先返回 capability-style 错误，而不是等到 trace 创建后才报 '
                  '`debugger_handle_missing`. When a target requires an unsupported Vulkan input-attachment '
                  'Pixel History, returns pixel_history_unsupported_input_attachment after replay position '
-                 'restoration.<br>meta (dict)<br>projections (dict, 可选)',
+                 'restoration.<br>meta (dict)<br>projections (dict, 可选)'
+                 '<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
   'param_names': ['session_id', 'mode', 'event_id', 'params', 'timeout_ms', 'context_id'],
   'prerequisites': [{'requires': 'session_id',
                      'via_tools': ['rd.capture.open_file', 'rd.capture.open_replay'],
@@ -3061,7 +3088,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                  'can compile then ReplaceResource when runtime_full_replace_supported=true. Build '
                  'failures do not call ReplaceResource. Replace failures include '
                  'replacement_attempted, cleanup_attempted, context_preserved, failure_stage, and '
-                 'failure_reason.<br>meta (dict)<br>projections (dict, optional)',
+                 'failure_reason.<br>meta (dict)<br>projections (dict, optional)'
+                 '<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
   'param_names': ['session_id',
                   'stage',
                   'event_id',
@@ -3153,7 +3181,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                    'constraints.<br>as_base64 (boolean, optional): See input_schema for '
                    'constraints.',
   'returns_raw': 'ok (bool)<br>data (dict): tool-specific payload<br>artifacts (list)<br>error '
-                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
+                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)'
+                 '<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
   'param_names': ['session_id',
                   'shader_id',
                   'output_path',
@@ -3194,7 +3223,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                    'the owning session current event.<br>stage (string, optional): See '
                    'input_schema for constraints.',
   'returns_raw': 'ok (bool)<br>data (dict): {mapping}<br>artifacts (list)<br>error '
-                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
+                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)'
+                 '<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
   'param_names': ['session_id', 'shader_id', 'event_id', 'stage'],
   'prerequisites': [{'requires': 'session_id',
                      'via_tools': ['rd.capture.open_file', 'rd.capture.open_replay'],
@@ -3225,7 +3255,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                    'omitted uses the owning session current event.<br>stage (string, optional): '
                    'See input_schema for constraints.',
   'returns_raw': 'ok (bool)<br>data (dict): {layout}<br>artifacts (list)<br>error '
-                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
+                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)'
+                 '<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
   'param_names': ['session_id', 'shader_id', 'block_name_or_index', 'event_id', 'stage'],
   'prerequisites': [{'requires': 'session_id',
                      'via_tools': ['rd.capture.open_file', 'rd.capture.open_replay'],
@@ -3252,7 +3283,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'group': '3.8，Shader 探查、反射与替换 (Shader Inspection & Replacement)',
   'description': '读取指定 stage 的反射常量块索引 slot 并解码变量；slot 不是 API 固定绑定号。无数据仍报错；已知读取失败仅在原事件实际恢复并核验后附恢复证明，恢复失败保持不确定。 输入范围不足时不调用完整布局解码器，不用未覆盖数据的零填充冒充值。',
   'parameter_raw': 'session_id (string): session_id (str)<br>stage (string): stage (str)<br>slot (integer): reflection constantBlocks index, not fixed binding number<br>array_index (integer, optional): array_index (int, 可选, 默认 0): CB array/space 情况<br>max_bytes (integer, optional): 每常量块输入字节上限，默认1048576；0表示该块不设上限，负数无效。预算或绑定范围不足完整反射块时不发布完整布局解码值。<br>flatten (boolean, optional): flatten (bool, 可选, 默认 true): 是否将嵌套结构摊平成 path->value<br>event_id (integer, optional): Replay event; omitted uses the owning session current event.<br>shader_id (string, optional): See input_schema for constraints.',
-  'returns_raw': 'ok (bool)<br>data (dict): {cbuffer}<br>artifacts (list)<br>error (dict|null)<br>meta (dict)<br>projections (dict, 可选) input_coverage说明required_bytes、binding_bytes、byte_budget、permitted_bytes及complete_range_permitted；这不是原始字节回执。decode_status明确decoded/unavailable/raw_fallback，decode_input_bytes是传给解码器的长度。raw_fallback.byte_size为实际返回字节；truncated表示块读取不全，preview_bytes/preview_truncated另外限定hex_preview交付范围。预算不足、未绑定输入或未知范围不能解释成已观测零。',
+  'returns_raw': 'ok (bool)<br>data (dict): {cbuffer}<br>artifacts (list)<br>error (dict|null)<br>meta (dict)<br>projections (dict, 可选) input_coverage说明required_bytes、binding_bytes、byte_budget、permitted_bytes及complete_range_permitted；这不是原始字节回执。decode_status明确decoded/unavailable/raw_fallback，decode_input_bytes是传给解码器的长度。raw_fallback.byte_size为实际返回字节；truncated表示块读取不全，preview_bytes/preview_truncated另外限定hex_preview交付范围。预算不足、未绑定输入或未知范围不能解释成已观测零。'
+                 '<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
   'param_names': ['session_id',
                   'stage',
                   'slot',
@@ -3301,7 +3333,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                    "可选, 默认 'full'): 'summary' | 'full'<br>event_id (integer, optional): Replay "
                    'event; omitted uses the owning session current event.',
   'returns_raw': 'ok (bool)<br>data (dict): {state}<br>artifacts (list)<br>error '
-                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
+                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)'
+                 '<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
   'param_names': ['session_id', 'shader_debug_id', 'detail_level', 'event_id'],
   'prerequisites': [{'requires': 'session_id',
                      'via_tools': ['rd.capture.open_file', 'rd.capture.open_replay'],
@@ -3350,7 +3383,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                  '`shader_binding_lookup_failed` / `shader_stage_mismatch`；当请求 target '
                  '不存在或源码不可取时，显式返回 `shader_disassembly_unavailable` 并带 `failure_stage` / '
                  '`failure_reason`；未知 target 在应用 replay event 前拒绝，返回 available_targets 与 '
-                 'effects_attempted=false / context_preserved=true<br>meta (dict)<br>projections (dict, 可选)',
+                 'effects_attempted=false / context_preserved=true<br>meta (dict)<br>projections (dict, 可选)'
+                 '<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
   'param_names': ['session_id', 'shader_id', 'target', 'event_id', 'stage'],
   'prerequisites': [{'requires': 'session_id',
                      'via_tools': ['rd.capture.open_file', 'rd.capture.open_replay'],
@@ -3382,7 +3416,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                    "severity_min (str, 可选, 默认 'info'): `'debug'<br>event_id (integer, optional): "
                    'Replay event; omitted uses the owning session current event.',
   'returns_raw': 'ok (bool)<br>data (dict): tool-specific payload<br>artifacts (list)<br>error '
-                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
+                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)'
+                 '<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
   'param_names': ['session_id', 'severity_min', 'event_id'],
   'prerequisites': [{'requires': 'session_id',
                      'via_tools': ['rd.capture.open_file', 'rd.capture.open_replay'],
@@ -3422,7 +3457,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                  '不能据此声称可调试<br>artifacts (list)<br>error (dict|null): 绑定失败显式返回 '
                  '`shader_binding_lookup_failed` / `shader_stage_mismatch` / '
                  '`shader_reflection_unavailable`，不再把所有失败折叠成 `shader_not_bound`<br>meta '
-                 '(dict)<br>projections (dict, 可选)',
+                 '(dict)<br>projections (dict, 可选)'
+                 '<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
   'param_names': ['session_id',
                   'shader_id',
                   'stage',
@@ -3489,7 +3525,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                  'source. Missing native metadata reports shader_source_metadata_unavailable; native read failure '
                  'reports shader_source_lookup_failed instead of successful source absence. Neither path reads '
                  'files from the host filesystem.<br>artifacts (list)<br>error (dict|null): invalid_shader_stage is rejected before any replay effect, with effects_attempted=false and context_preserved=true. An unbound shader at the requested event returns shader_binding_lookup_failed; the original replay event is restored and reported as replay_state_restored/restored_event_id only after native restoration succeeds. A failed restoration reports shader_inspection_recovery_failed and requires controlled recovery.<br>meta (dict)<br>projections '
-                 '(dict, 可选)',
+                 '(dict, 可选)'
+                 '<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
   'param_names': ['session_id', 'shader_id', 'prefer_original', 'event_id', 'stage'],
   'prerequisites': [{'requires': 'session_id',
                      'via_tools': ['rd.capture.open_file', 'rd.capture.open_replay'],
@@ -3523,7 +3560,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                    'the owning session current event.<br>stage (string, optional): See '
                    'input_schema for constraints.',
   'returns_raw': 'ok (bool)<br>data (dict): {entry_points}<br>artifacts (list)<br>error '
-                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
+                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)'
+                 '<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
   'param_names': ['session_id', 'shader_id', 'event_id', 'stage'],
   'prerequisites': [{'requires': 'session_id',
                      'via_tools': ['rd.capture.open_file', 'rd.capture.open_replay'],
@@ -3551,7 +3589,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'parameter_raw': 'session_id (string): session_id (str)<br>event_id (integer, optional): Replay '
                    'event; omitted uses the owning session current event.',
   'returns_raw': 'ok (bool)<br>data (dict): {replacements}<br>artifacts (list)<br>error '
-                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
+                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)'
+                 '<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
   'param_names': ['session_id', 'event_id'],
   'prerequisites': [{'requires': 'session_id',
                      'via_tools': ['rd.capture.open_file', 'rd.capture.open_replay'],
@@ -3577,7 +3616,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                    'replacement_id (str)<br>event_id (integer, optional): Replay event; omitted '
                    'uses the owning session current event.',
   'returns_raw': 'ok (bool)<br>data (dict): tool-specific payload<br>artifacts (list)<br>error '
-                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
+                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)'
+                 '<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
   'param_names': ['session_id', 'replacement_id', 'event_id'],
   'prerequisites': [{'requires': 'session_id',
                      'via_tools': ['rd.capture.open_file', 'rd.capture.open_replay'],
@@ -3611,7 +3651,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'returns_raw': 'data: {stats: {min,max,mean,nan_count,inf_count,channels}, '
                  'resolved_event_id,texture_id,target_metadata}. Channel min/max exclude '
                  'non-finite samples; all-nonfinite channels have null min/max. Unsupported '
-                 'packed/compressed formats fail explicitly.',
+                 'packed/compressed formats fail explicitly.'
+                 '<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
   'param_names': ['session_id', 'texture_id', 'mip', 'slice', 'sample', 'stride', 'event_id'],
   'prerequisites': [{'requires': 'session_id',
                      'via_tools': ['rd.capture.open_file', 'rd.capture.open_replay'],
@@ -3654,7 +3695,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'returns_raw': 'data: {diff: '
                  '{mse,max_abs,psnr,identical,psnr_peak,psnr_status},event_a,event_b}. Identical '
                  'samples return psnr=null and psnr_status=infinite. Mismatched shapes or '
-                 'non-finite samples fail. No files are created.',
+                 'non-finite samples fail. No files are created.'
+                 '<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
   'param_names': ['session_id', 'tex_a', 'tex_b', 'metric', 'event_id'],
   'prerequisites': [{'requires': 'session_id',
                      'via_tools': ['rd.capture.open_file', 'rd.capture.open_replay'],
@@ -3719,7 +3761,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                  'replay_state_restored=true, initial_provenance; base64 when requested (1 MiB '
                  'limit, no automatic artifact), otherwise explicit output/artifact. Initial '
                  'provenance unavailable, failed/incomplete read and restoration failure are '
-                 'distinct errors. Restoration failure requires closing and reopening the session.',
+                 'distinct errors. Restoration failure requires closing and reopening the session.'
+                 '<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
   'param_names': ['session_id',
                   'texture_id',
                   'event_id',
@@ -3795,7 +3838,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                    '(integer, optional): Replay event; omitted uses the owning session current '
                    'event.<br>sample (integer, optional): See input_schema for constraints.',
   'returns_raw': 'ok (bool)<br>data (dict): {histogram, bin_edges}<br>artifacts (list)<br>error '
-                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
+                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)'
+                 '<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
   'param_names': ['session_id',
                   'texture_id',
                   'mip',
@@ -3864,7 +3908,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                  'flags and quantization do not supply that bound. Vulkan images used as both input '
                  'and output attachments without input-attachment usage at any capture event return '
                  'pixel_history_unsupported_input_attachment after replay position restoration.<br>'
-                 'artifacts (list)<br>error (dict|null)<br>meta (dict)<br>projections (dict, 可选)',
+                 'artifacts (list)<br>error (dict|null)<br>meta (dict)<br>projections (dict, 可选)'
+                 '<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
   'param_names': ['session_id',
                   'texture_id',
                   'x',
@@ -3924,7 +3969,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                    "'int'<br>event_id (integer, optional): Replay event from the action tree; IDs may be sparse; omitted uses the owning "
                    'session current event.',
   'returns_raw': 'ok (bool)<br>data (dict): {value}<br>artifacts (list)<br>error '
-                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
+                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)'
+                 '<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
   'param_names': ['session_id',
                   'texture_id',
                   'x',
@@ -3983,7 +4029,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                  'TYPELESS 按查询事件绑定的唯一 view 格式解码；没有唯一 view 时保留原始无符号整数并在 stats 标注，忽略 as_type。'
                  '确定性解码失败在恢复原事件后返回 texture_readback_decode_failed。'
                  '通道指解码数组分量，不证明纹理存在物理alpha。非有限值使用NaN/Infinity/-Infinity字符串，不转成0。<br>artifacts (list)<br>error '
-                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
+                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)'
+                 '<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
   'param_names': ['session_id',
                   'texture_id',
                   'rect',
@@ -4043,7 +4090,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                    'constraints.<br>include_alpha (boolean, optional): See input_schema for '
                    'constraints.',
   'returns_raw': 'ok (bool)<br>data (dict): {image_path, image_mapping}. image_mapping reports native source_size, effective_scale, image-space content_rect and flip_y, or an unavailable reason when dimensions are missing.<br>artifacts (list)<br>error '
-                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
+                 '(dict|null)<br>meta (dict)<br>projections (dict, 可选)'
+                 '<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
   'param_names': ['session_id',
                   'texture_id',
                   'overlay',
@@ -4183,7 +4231,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                    '(str, 可选): 当 path 指向 replay 相关域时用于解析当前 session',
   'returns_raw': 'ok (bool)<br>data (dict): {path, node}<br>artifacts (list)<br>error '
                  '(dict|null)<br>meta (dict) /draws node.pagination preserves the canonical '
-                 'action-tree pagination unchanged; its truncated flag qualifies node.data and entries.',
+                 'action-tree pagination unchanged; its truncated flag qualifies node.data and entries.'
+                 '<br>For an explicit /draws/<event> path, missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
   'param_names': ['path', 'session_id'],
   'prerequisites': [],
   'namespace': 'vfs',
@@ -4209,7 +4258,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                  '可选): {format_version, columns, rows, row_count, tsv_text?} as a tabular summary '
                  'for scan/readability only, not semantic ranking<br>artifacts (list)<br>error '
                  '(dict|null)<br>meta (dict) /draws node.pagination preserves the canonical '
-                 'action-tree pagination unchanged; its truncated flag qualifies node.data, entries and tabular rows.',
+                 'action-tree pagination unchanged; its truncated flag qualifies node.data, entries and tabular rows.'
+                 '<br>For an explicit /draws/<event> path, missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
   'param_names': ['path', 'session_id', 'projection'],
   'prerequisites': [],
   'supports_projection': {'tabular': True},
@@ -4240,7 +4290,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                    '(str, 可选): 当 path 指向 replay 相关域时用于解析当前 session',
   'returns_raw': 'ok (bool)<br>data (dict): {path, node}<br>artifacts (list)<br>error '
                  '(dict|null)<br>meta (dict) /draws node.pagination preserves the canonical '
-                 'action-tree pagination unchanged; its truncated flag qualifies node.data and entries.',
+                 'action-tree pagination unchanged; its truncated flag qualifies node.data and entries.'
+                 '<br>For an explicit /draws/<event> path, missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
   'param_names': ['path', 'session_id'],
   'prerequisites': [],
   'namespace': 'vfs',
@@ -4274,7 +4325,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                  "truncation_reason='upstream_pagination_truncated' unless the VFS node budget "
                  "also truncates, when the existing 'max_nodes_exceeded' reason takes precedence. "
                  'Source pagination remains visible in either case; requested VFS depth alone '
-                 'does not mark truncation.<br>artifacts (list)<br>error (dict|null)<br>meta (dict)',
+                 'does not mark truncation.<br>artifacts (list)<br>error (dict|null)<br>meta (dict)'
+                 '<br>For an explicit /draws/<event> path, missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
   'param_names': ['path', 'session_id', 'depth', 'max_nodes'],
   'prerequisites': [],
   'namespace': 'vfs',
@@ -4337,7 +4389,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                  'one event_id/chunk_indices; child and character omissions explicit. Buffers '
                  'referenced without automatic export. Invalid event/chunk and missing structured '
                  'data fail. Each node includes object_path; continue a single chunk using '
-                 'next_child_offset or next_value_offset.',
+                 'next_child_offset or next_value_offset.'
+                 '<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
   'param_names': ['session_id',
                   'event_id',
                   'chunk_indices',
@@ -4392,7 +4445,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                    'first<br>count (integer): count<br>type (string): type',
   'returns_raw': 'data: descriptor_store_id, resolved_event_id, indexed descriptors and logical '
                  'locations, total, next_first. Empty slots retained; invalid ranges and '
-                 'incomplete reads fail.',
+                 'incomplete reads fail.'
+                 '<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
   'param_names': ['session_id', 'descriptor_store_id', 'event_id', 'first', 'count', 'type'],
   'prerequisites': [{'requires': 'session_id',
                      'via_tools': ['rd.capture.open_replay'],
@@ -4430,7 +4484,7 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                  'Excludes initial-content restoration, includes replay scheduling gaps, never '
                  'original application time. When FrameGPUDuration is missing from the runtime '
                  'enum or is not enumerated for the active replay, fail with '
-                 'frame_timing_unavailable/category=capability and details identifying the '
+                 'frame_timing_unavailable/category=runtime and details identifying the '
                  'counter and reason. Failed or incomplete native samples use '
                  'frame_timing_sample_failed/category=runtime. Unsupported capability and failed '
                  'timestamps are errors, not zero samples; no event-duration or CPU-time fallback '

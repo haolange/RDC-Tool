@@ -30,6 +30,7 @@ from rdc_tool.runtime import (
 )
 
 
+@replay_access._guard_rejection
 async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
     if action not in {"get_data", "get_region_values", "get_histogram", "compute_stats", "diff"}:
         return await _dispatch_texture_impl(action, args)
@@ -120,24 +121,7 @@ async def _dispatch_texture_impl(action: str, args: Dict[str, Any]) -> envelope.
     if action == "get_pixel_value":
         coerce._require(args, "texture_id", "x", "y")
         requested_event_id = coerce._as_int(args.get("event_id"), 0) if args.get("event_id") is not None else None
-        try:
-            event_id = await replay_access._ensure_event(session_id, requested_event_id)
-        except CoreError as exc:
-            if exc.code != "event_not_found" or requested_event_id is None:
-                raise
-            # _ensure_event validates an explicit id against the action index before SetFrameEvent.
-            # This rejection cannot have moved the replay or attempted a texture readback.
-            return envelope.failure(
-                exc.message,
-                code=exc.code,
-                category="validation",
-                details={
-                    **dict(exc.details),
-                    "failure_stage": "validate_event",
-                    "effects_attempted": False,
-                    "context_preserved": True,
-                },
-            )
+        event_id = await replay_access._ensure_event(session_id, requested_event_id)
         rid = await replay_access._resolve_texture_id(session_id, args["texture_id"], event_id=event_id)
         pixel = await live_state._render_service.pick_pixel(
             session_id=session_id,
@@ -213,12 +197,17 @@ async def _dispatch_texture_impl(action: str, args: Dict[str, Any]) -> envelope.
     if action == "get_histogram":
         coerce._require(args, "texture_id")
         subresource = {"mip": coerce._as_int(args.get("mip"), 0), "slice": coerce._as_int(args.get("slice"), 0), "sample": coerce._as_int(args.get("sample"), 0)}
-        arr, stats, resolved_event_id, _ = await read_array(args["texture_id"], subresource, event_id=args.get("event_id"))
-        if arr.ndim != 3:
-            return envelope.failure("Texture format cannot be decoded into channels", code="texture_layout_unsupported")
         channels = str(args.get("channels", "r")).lower()
         bins = coerce._as_int(args.get("bins"), 256)
         rng = coerce._as_dict(args.get("range"), default={})
+        if channels and (bins <= 0 or any(channel not in "rgba" for channel in channels)):
+            message = "Histogram requires nonempty samples and positive bins" if bins <= 0 else "Invalid histogram channel"
+            return envelope.failure(message, code="validation_error", category="validation",
+                details={"session_id": session_id, "failure_stage": "validate_histogram",
+                         "effects_attempted": False, "context_preserved": True})
+        arr, stats, resolved_event_id, _ = await read_array(args["texture_id"], subresource, event_id=args.get("event_id"))
+        if arr.ndim != 3:
+            return envelope.failure("Texture format cannot be decoded into channels", code="texture_layout_unsupported")
         out: Dict[str, Any] = {}
         mapping = {"r": 0, "g": 1, "b": 2, "a": 3}
         for c in channels:
@@ -317,6 +306,8 @@ async def _dispatch_texture_impl(action: str, args: Dict[str, Any]) -> envelope.
 
     if action == "render_overlay":
         event_id = coerce._as_int(args.get("event_id"), replay_access._active_event(session_id))
+        if args.get("event_id") is not None and event_id > 0:
+            await replay_access._validate_action_events(session_id, [event_id])
         if event_id <= 0:
             event_id = await replay_access._ensure_event(session_id, None)
         explicit_texture_id = args.get("texture_id")
@@ -414,6 +405,15 @@ async def _dispatch_texture_impl(action: str, args: Dict[str, Any]) -> envelope.
             coerce._require(args, "tex_a", "tex_b")
             tex_a = coerce._as_dict(args["tex_a"])
             tex_b = coerce._as_dict(args["tex_b"])
+            requested_metrics = args.get("metric", ["mse", "max_abs", "psnr"])
+            if not isinstance(requested_metrics, list) or any(m not in {"mse", "max_abs", "psnr"} for m in requested_metrics):
+                return envelope.failure("Invalid texture diff metric", code="validation_error", category="validation",
+                    details={"session_id": session_id, "failure_stage": "validate_diff_metric",
+                             "effects_attempted": False, "context_preserved": True})
+            await replay_access._validate_action_events(session_id, [
+                tex_a.get("event_id", args.get("event_id")),
+                tex_b.get("event_id", args.get("event_id")),
+            ])
             arr_a, _, event_a, _ = await read_array(tex_a.get("texture_id"), coerce._as_dict(tex_a.get("subresource"), default={}), event_id=tex_a.get("event_id", args.get("event_id")))
             arr_b, _, event_b, _ = await read_array(tex_b.get("texture_id"), coerce._as_dict(tex_b.get("subresource"), default={}), event_id=tex_b.get("event_id", args.get("event_id")))
             if arr_a.ndim != 3 or arr_b.ndim != 3 or not arr_a.size or not arr_b.size:
@@ -430,18 +430,17 @@ async def _dispatch_texture_impl(action: str, args: Dict[str, Any]) -> envelope.
             psnr = float(20 * np.log10(1.0 / np.sqrt(mse))) if mse > 0 else None
             metrics = {"mse": mse, "max_abs": max_abs, "psnr": psnr, "identical": mse == 0,
                        "psnr_peak": 1.0, "psnr_status": "infinite" if mse == 0 else "finite"}
-            requested_metrics = args.get("metric", ["mse", "max_abs", "psnr"])
-            if not isinstance(requested_metrics, list) or any(m not in {"mse", "max_abs", "psnr"} for m in requested_metrics):
-                return envelope.failure("Invalid texture diff metric", code="validation_error")
             return envelope.success(diff={key: value for key, value in metrics.items() if key in requested_metrics or key in {"identical", "psnr_peak", "psnr_status"}}, event_a=int(event_a), event_b=int(event_b))
         coerce._require(args, "texture_id")
+        stride = coerce._as_int(args.get("stride"), 1)
+        if stride < 1:
+            return envelope.failure("Statistics stride must be positive", code="validation_error", category="validation",
+                details={"session_id": session_id, "failure_stage": "validate_statistics_stride",
+                         "effects_attempted": False, "context_preserved": True})
         arr, stats, resolved_event_id, resolved_texture_id = await read_array(
             args.get("texture_id"), {"mip": coerce._as_int(args.get("mip"), 0), "slice": coerce._as_int(args.get("slice"), 0), "sample": coerce._as_int(args.get("sample"), 0)}, event_id=args.get("event_id"))
         if arr.ndim != 3 or not arr.size:
             return envelope.failure("Texture channel layout unavailable", code="texture_layout_unsupported")
-        stride = coerce._as_int(args.get("stride"), 1)
-        if stride < 1:
-            return envelope.failure("Statistics stride must be positive", code="validation_error")
         arr = arr[::stride, ::stride]
         stats = texture_export._sampled_texture_stats(arr, stats, stride)
         truth_meta = await truth_matrix._event_truth_metadata(session_id, int(resolved_event_id))

@@ -25,6 +25,7 @@ from rdc_tool.utils.artifact_store import ArtifactStore
 
 logger = logging.getLogger("rdc_tool.runtime")
 _CURRENT_REPLAY_HEALTH_SCOPE: contextvars.ContextVar[Dict[str, Any] | None] = contextvars.ContextVar("rdc_tool_replay_health_scope", default=None)
+_CURRENT_EVENT_REJECTION_SCOPE: contextvars.ContextVar[Dict[str, Any] | None] = contextvars.ContextVar("rdc_tool_event_rejection_scope", default=None)
 _CURRENT_CONTEXT_ID: contextvars.ContextVar[str | None] = contextvars.ContextVar('rdc_tool_current_context_id', default=None)
 _CURRENT_PROGRESS_REPORTER: contextvars.ContextVar[ProgressReporter | None] = contextvars.ContextVar(
     "rdc_tool_current_progress_reporter",

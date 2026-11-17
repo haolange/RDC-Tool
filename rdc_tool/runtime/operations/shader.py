@@ -39,11 +39,13 @@ async def _disassembly_target_metadata(controller: Any) -> Dict[str, Any]:
             result["available_targets"] = [str(item) for item in await renderdoc_api._offload(native_targets, True)]
             result["available_targets_status"] = "complete"
         except Exception as exc:
+            replay_access._event_effect_attempted()
             result["available_targets_status"] = "unavailable"
             result["available_targets_error"] = str(exc)
     return result
 
 
+@replay_access._guard_rejection
 async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
     if "stage" in args:
         requested_stage = str(args["stage"]).strip()
@@ -60,6 +62,27 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
                     "context_preserved": True,
                 },
             )
+    if action == "debug_start":
+        coerce._require(args, "params")
+        mode = str(args.get("mode", "pixel")).lower()
+        if mode != "pixel":
+            return envelope.failure(
+                f"Unsupported shader debug mode: {mode}", code="validation_error", category="validation",
+                details={"failure_stage": "mode_validation", "failure_reason": "debug_mode_unsupported",
+                         "requested_mode": mode, "supported_modes": ["pixel"],
+                         "effects_attempted": False, "context_preserved": True})
+        params = coerce._as_dict(args.get("params"))
+        x = coerce._as_int(params.get("x"), 0)
+        y = coerce._as_int(params.get("y"), 0)
+        target = coerce._parse_target_like(params.get("target"))
+        sample_raw = params.get("sample")
+        view_raw = params.get("view")
+        primitive_raw = params.get("primitive")
+        sample_override = coerce._as_int(sample_raw, 0) if sample_raw is not None else None
+        view_override = coerce._as_int(view_raw, 0) if view_raw is not None else None
+        primitive_override = coerce._as_int(primitive_raw, -1) if primitive_raw is not None else None
+        if primitive_override is not None and primitive_override < 0:
+            primitive_override = None
     if action == "compile":
         session_id = str(args.get("session_id") or context_records._context_snapshot().get("runtime", {}).get("session_id") or "").strip()
         if not session_id:
@@ -75,6 +98,8 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
                 category="validation",
                 details={"session_id": session_id},
             )
+        if args.get("event_id") is not None:
+            await replay_access._validate_action_events(session_id, [args["event_id"]])
         controller = await replay_access._get_controller(session_id)
         rd = renderdoc_api._get_rd()
         try:
@@ -394,34 +419,6 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
         return resolved_stage, resolved_shader_id, reflection
 
     if action == "debug_start":
-        coerce._require(args, "params")
-        mode = str(args.get("mode", "pixel")).lower()
-        params = coerce._as_dict(args.get("params"))
-        if mode != "pixel":
-            return envelope.failure(
-                f"Unsupported shader debug mode: {mode}",
-                code="validation_error",
-                category="validation",
-                details={
-                    "failure_stage": "mode_validation",
-                    "failure_reason": "debug_mode_unsupported",
-                    "requested_mode": mode,
-                    "supported_modes": ["pixel"],
-                },
-            )
-
-        x = coerce._as_int(params.get("x"), 0)
-        y = coerce._as_int(params.get("y"), 0)
-        target = coerce._parse_target_like(params.get("target"))
-        sample_raw = params.get("sample")
-        view_raw = params.get("view")
-        primitive_raw = params.get("primitive")
-        sample_override = coerce._as_int(sample_raw, 0) if sample_raw is not None else None
-        view_override = coerce._as_int(view_raw, 0) if view_raw is not None else None
-        primitive_override = coerce._as_int(primitive_raw, -1) if primitive_raw is not None else None
-        if primitive_override is not None and primitive_override < 0:
-            primitive_override = None
-
         rd = renderdoc_api._get_rd()
         remote_capability_matrix = await renderdoc_api._offload(
             truth_matrix._session_remote_capability_matrix, session_id, controller=controller, context_id=live_state._runtime_context_id(),

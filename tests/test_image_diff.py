@@ -7,7 +7,7 @@ import numpy as np
 from PIL import Image
 import pytest
 
-from rdc_tool.runtime import envelope
+from rdc_tool.runtime import envelope, live_state
 from rdc_tool.runtime.operations import util as util_ops
 
 
@@ -23,6 +23,15 @@ def compare(tmp_path: Path, a: np.ndarray, b: np.ndarray, metrics=None) -> envel
 
 
 def test_missing_image_dependency_is_reported_before_read_or_write(monkeypatch, tmp_path):
+    monkeypatch.setattr(live_state._runtime, 'captures', {
+        'capture': live_state.CaptureFileHandle(capture_file_id='capture', file_path='fixture.rdc', read_only=True),
+    })
+    monkeypatch.setattr(live_state._runtime, 'replays', {
+        'session': live_state.ReplayHandle(session_id='session', capture_file_id='capture', active_event_id=1),
+    })
+    monkeypatch.setattr(live_state._runtime, 'context_states', {
+        live_state._runtime_context_id(): {'current_session_id': 'session', 'sessions': {}},
+    })
     import builtins
     original_import = builtins.__import__
     def reject_pillow(name, *args, **kwargs):
@@ -34,7 +43,7 @@ def test_missing_image_dependency_is_reported_before_read_or_write(monkeypatch, 
         'output_path': str(tmp_path / 'output.png')}))
     assert not result.ok
     assert result.code == 'image_diff_dependency_unavailable'
-    assert result.category == 'capability'
+    assert result.category == 'validation'
     assert result.details['effects_attempted'] is False
     assert result.details['context_preserved'] is True
     assert not (tmp_path / 'output.png').exists()

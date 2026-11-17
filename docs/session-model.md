@@ -62,6 +62,8 @@ worker 跨请求保留一个 event loop 与 replay executor，以保持原生线
 
 session context 包含 `preview` 状态。preview 几何必须描述完整 framebuffer，并区分 viewport / scissor 与 preview 窗口适配。`preview.display` 是 framebuffer 尺寸、viewport 矩形、窗口矩形、适配模式与屏幕上限设置的稳定观察面。
 
+不自行管理 preview 的操作在成功后自动同步启用的 preview；失败不会由分发器额外触发同步。拒绝时的保全证明见[公共契约](public-contract.md#rejection-proof)。
+
 原生 preview 窗口只在 Windows 提供；其他主机上 `rd.session.open_preview` 返回 `preview_unsupported_platform`，`rd.core.get_capabilities` 报告 `preview_window.available=false`。`rd.session.open_preview`、`rd.session.close_preview` 与 `preview.display` 保持独立的 CLI 窗口契约与几何 smoke 覆盖；无窗口观察见下一节。
 
 <a id="embedded-replay-observations"></a>

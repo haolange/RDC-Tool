@@ -818,6 +818,7 @@ async def _auto_sync_preview_if_enabled(context_id: Optional[str] = None) -> Non
     preview = _preview_state_value(ctx)
     if not preview.get("enabled"):
         return
+    replay_access._event_effect_attempted()
     try:
         await _sync_context_preview(ctx, strict=False)
     except Exception as exc:  # noqa: BLE001

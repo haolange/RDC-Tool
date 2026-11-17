@@ -30,9 +30,17 @@ from rdc_tool.runtime import (
 from rdc_tool.runtime_state import list_context_ids
 
 
+@replay_access._guard_rejection
 async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
     if action in {"get_replay_events", "observe"}:
-        return await observation.handle(action, args)
+        outcome = await observation.handle(action, args)
+        if action == "observe" and isinstance(outcome, envelope.Failure) and outcome.code == "observation_event_invalid":
+            scope = live_state._CURRENT_EVENT_REJECTION_SCOPE.get()
+            if scope is not None:
+                return replay_access._event_rejection_failure(
+                    CoreError(code=outcome.code, message=outcome.message, category="validation",
+                              details=dict(outcome.details)), scope, scope["session_id"])
+        return outcome
     context_id = normalize_context_id(args.get("context_id") or live_state._runtime_context_id())
 
     if action == "get_context":

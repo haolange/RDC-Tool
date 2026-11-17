@@ -8,6 +8,7 @@ from rdc_tool.core.errors import CoreError
 from rdc_tool.runtime import coerce, context_records, envelope, live_state, renderdoc_api, replay_access
 
 
+@replay_access._guard_rejection
 async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
     coerce._require(args, "session_id")
     session_id = str(args["session_id"])

@@ -7,9 +7,10 @@ from typing import Any, Dict
 
 import numpy as np
 
-from rdc_tool.runtime import coerce, envelope, live_state
+from rdc_tool.runtime import coerce, envelope, live_state, replay_access
 
 
+@replay_access._guard_rejection
 async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
 
 

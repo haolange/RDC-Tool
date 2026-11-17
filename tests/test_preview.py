@@ -16,6 +16,14 @@ from rdc_tool.runtime.operations import export as export_ops
 from rdc_tool.runtime.operations import texture as texture_ops
 
 
+@pytest.fixture
+def known_screenshot_events(monkeypatch):
+    async def index(session_id, **kwargs):
+        assert session_id == "sess-preview"
+        return [], [], {103: object()}
+    monkeypatch.setattr(replay_access, "_load_action_index", index)
+
+
 @pytest.fixture(autouse=True)
 def _reset_preview_runtime() -> None:
     original_snapshots = dict(live_state._runtime.context_snapshots)
@@ -716,6 +724,7 @@ def test_export_screenshot_defaults_to_swapchain_present_target(
     assert payload.data['summary_degraded'] is False
 
 
+@pytest.mark.usefixtures("known_screenshot_events")
 def test_export_screenshot_falls_back_when_swapchain_target_is_unavailable(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -790,6 +799,7 @@ def test_export_screenshot_falls_back_when_swapchain_target_is_unavailable(
     assert "swapchain_target_unavailable" in payload.data['summary_degraded_reasons']
 
 
+@pytest.mark.usefixtures("known_screenshot_events")
 def test_export_screenshot_fails_when_swapchain_and_event_target_are_unavailable(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -831,6 +841,7 @@ def test_export_screenshot_fails_when_swapchain_and_event_target_are_unavailable
     assert not output.exists()
 
 
+@pytest.mark.usefixtures("known_screenshot_events")
 def test_export_screenshot_event_output_semantic_preserves_visual_selection(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -896,6 +907,7 @@ def test_export_screenshot_event_output_semantic_preserves_visual_selection(
     assert payload.data['requested_semantic'] == "event_output"
 
 
+@pytest.mark.usefixtures("known_screenshot_events")
 def test_export_screenshot_preserves_event_binding_target_source(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -961,6 +973,7 @@ def test_export_screenshot_preserves_event_binding_target_source(
     assert payload.data['saved_path'] == str(saved_path)
 
 
+@pytest.mark.usefixtures("known_screenshot_events")
 def test_export_screenshot_returns_structured_save_texture_failure(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1273,6 +1286,7 @@ def test_preview_docs_and_catalog_are_synchronized() -> None:
     "original_event, restore_fails, expected_proof",
     [(11, False, True), (11, True, False), (0, False, False)],
 )
+@pytest.mark.usefixtures("known_screenshot_events")
 def test_export_screenshot_target_failure_restores_original_event(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

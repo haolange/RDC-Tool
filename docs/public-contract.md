@@ -10,7 +10,8 @@
 
 所有命令与操作都返回 canonical JSON 信封（`schema_version` 为 `3.0.0`）：`tool_version`、`result_kind`、`ok`、`data`、`artifacts`、`error`（`code`、`category`、`message`、`details`）、`meta` 与 `projections`。操作集变化时信封保持不变。
 
-在有证明的前置拒绝中，`details.effects_attempted=false` 与 `context_preserved=true` 表明请求没有执行其效果且回放身份未改变；消费者仍须核验自己的 context 与 lease。事件索引查询仅在同一 replay、事件及 replacement 身份保持不变时提供该证明。超时、原生故障或清理结果不明不能推断为已保全。
+<a id="rejection-proof"></a>
+前置拒绝只有在本次请求未尝试任何原生副作用，且入口与失败时的 replay 对象、当前事件、shader replacement 和该操作涉及的其他记录逐项相同时，才返回 `category=validation` 和完整的证明字段：`details.failure_stage`、`effects_attempted=false`、`context_preserved=true`。会话恢复、preview 同步、事件应用、替换或导出写盘已尝试，或任一状态无法核验时，不发放该证明，拒绝归类为 `runtime`；单独的 `failure_stage` 仍可用于诊断，不构成无效果证明。消费者仍须核验自己的 context、session 和 lease；超时、原生故障或清理结果不明不能推断为保全。副作用后的独立恢复回执不属于无副作用证明，只有调用方核验其适用范围、恢复后的状态和所属身份后才能继续使用回放。
 
 canonical JSON 不输出非标准裸数值 `NaN`、`Infinity`、`-Infinity`。原生着色器或 capture 数据中的非有限浮点值保留为字符串 `"NaN"`、`"Infinity"`、`"-Infinity"`，有限值仍是数字。这些标记描述观察到的原生值，不是替代的零值或成功测量；解读数值数组时须把它们当作非有限数据。
 
@@ -46,9 +47,9 @@ canonical JSON 不输出非标准裸数值 `NaN`、`Infinity`、`-Infinity`。�
 
 ## 回放与主机能力
 
-`rd.capture.open_replay` 在创建本地回放前检查 capture 的 `LocalReplaySupport`。本主机运行库不能回放该 capture 的图形 API（例如 Linux 上的 D3D capture）时返回 `local_replay_unsupported`（category `capability`，details 含 `capture_api`、`host_target`、`recovery_hint`），不会创建回放；恢复方式是先 `rd.remote.connect`，再通过 `options.remote_id` 远端回放。同 context 同 capture 的会话复用见 [session-model.md](session-model.md)。
+`rd.capture.open_replay` 在创建本地回放前检查 capture 的 `LocalReplaySupport`。本主机运行库不能回放该 capture 的图形 API（例如 Linux 上的 D3D capture）时返回 `local_replay_unsupported`（details 含 `capture_api`、`host_target`、`recovery_hint`），不会创建回放；分类与证明遵循[统一规则](#rejection-proof)。恢复方式是先 `rd.remote.connect`，再通过 `options.remote_id` 远端回放。同 context 同 capture 的会话复用见 [session-model.md](session-model.md)。
 
-原生 preview 窗口只在 Windows 提供。其他主机上 `rd.session.open_preview` 返回 `preview_unsupported_platform`（category `capability`），`rd.core.get_capabilities` 报告 `preview_window.available=false`；无窗口的 `rd.session.observe` 在所有主机可用。
+原生 preview 窗口只在 Windows 提供。其他主机上 `rd.session.open_preview` 返回 `preview_unsupported_platform`，`rd.core.get_capabilities` 报告 `preview_window.available=false`；无窗口的 `rd.session.observe` 在所有主机可用。
 
 `rd.core.get_capabilities(detail_level=summary)` 与普通 context 读取不会恢复 replay controller。`full` 只对所选 session 走常规 session 恢复路径，并在回放线程上探测原生能力。`current_session_probe` 区分 verified、unavailable（带 reason/code）与 not_currently_probed。延迟恢复或探测失败不能证明着色器功能不受支持。持久化的 endpoint 元数据不是 live 连接回执；当前进程已加载的数量不是持久化 session 的数量。没有目标的 Present 事件不能否定在实际 draw 上检查着色器的能力。
 
@@ -60,13 +61,13 @@ canonical JSON 不输出非标准裸数值 `NaN`、`Infinity`、`-Infinity`。�
 
 整帧计时用 GPU timestamp 测量经验证的单队列上的完整回放：不含初始状态重建，包含回放调度间隙。它不是原应用的帧时间、CPU 耗时或事件耗时之和。结果附带方法、范围、单位、采样条件与各次样本；后端不支持或队列覆盖不完整时不能产生有效测量。
 
-`rd.perf.get_frame_timing` 需要 RenderDoc 原生 `FrameGPUDuration` counter。运行时枚举缺少它或当前回放未枚举它时返回 `frame_timing_unavailable`（category `capability`）；原生 counter 采样失败或不完整返回 `frame_timing_sample_failed`（category `runtime`）。details 标明 counter 与原因并附恢复提示。该操作从不以事件耗时之和或 CPU 时间代替。
+`rd.perf.get_frame_timing` 需要 RenderDoc 原生 `FrameGPUDuration` counter。运行时枚举缺少它或当前回放未枚举它时返回 `frame_timing_unavailable`；原生 counter 采样失败或不完整返回 `frame_timing_sample_failed`。details 标明 counter 与原因并附恢复提示。该操作从不以事件耗时之和或 CPU 时间代替。
 
 ## 捕获、资源与管线数据
 
 capture 缩略图读取嵌入的 capture 数据，不需要回放。结构化 API 查询提供捕获的 chunk、类型化字段与有界续读，不是完整的进程 API trace。资源详情提供记录的初始化 chunk 与关系；descriptor store 提供有界范围，包括空槽与未访问的 descriptor。
 
-资源身份对原生 ID、十进制字符串与 `ResourceId::<decimal>` 字符串使用同一精确匹配，不做浮点转换或子串匹配。资源详情复用已完成的 texture/buffer/descriptor-store/description 清单。清单中确实没有时，在绑定补全之前返回 `validation/resource_not_found`，附 `effects_attempted=false`、`context_preserved=true` 与 `failure_stage=resolve_resource`；清单读取失败从不获得这一证明。该错误是拒绝，不是空的成功资源，也不表示资源贡献为零。
+资源身份对原生 ID、十进制字符串与 `ResourceId::<decimal>` 字符串使用同一精确匹配，不做浮点转换或子串匹配。资源详情复用已完成的 texture/buffer/descriptor-store/description 清单。清单中确实没有时，在绑定补全之前返回 `resource_not_found`；分类与证明遵循[统一规则](#rejection-proof)，清单读取失败从不获得无效果证明。该错误是拒绝，不是空的成功资源，也不表示资源贡献为零。
 
 `rd.resource.list_all` 在 `kind=all` 时增加 `identity_inventory`：来自 GetTextures、GetBuffers、GetDescriptorStores 与 GetResources（与资源详情解析相同的四个原生清单）的完整、精确、去重身份普查。只有四项读取都成功后才报告 scope `all_native_resource_identities`、`complete=true`、`resource_ids`、`count` 与各自的 `source_counts`。ID 始终是字符串，包括大于 2^53 的值。现有 `resources` 行及其表格投影只描述 texture、buffer 与 descriptor store，不在其中不代表不在完整原生普查中。带过滤的 `kind` 不声明全局身份完整性。原生清单读取失败是错误，绝不是空的完整普查或状态保持证明。普查只确立身份归属，不说明像素使用、因果或渲染贡献。
 
@@ -76,13 +77,15 @@ capture 缩略图读取嵌入的 capture 数据，不需要回放。结构化 AP
 
 请求的管线 section 保留 viewport/scissor 与输出槽索引及原生事实。限定只作用于请求的 section：未采集的模型默认值不会降低已返回绑定的限定，也不暗示省略的着色器/输出状态已被检查；请求的事实确实缺失时保留降级限定。API 不适用、数据缺失与失败相互区分；capture 中没有的动态声明仍为未知。
 
-按阶段的管线查询不区分大小写地接受 VS/HS/DS/GS/PS/CS/MS/AS。未知名称返回 `validation/invalid_shader_stage`；可识别但不支持的 RT 阶段或原生运行库没有的阶段返回 `capability/shader_stage_unsupported`。这些拒绝发生在访问回放之前，附 `effects_attempted=false`、`context_preserved=true` 与 `failure_stage=validate_stage`。不会回退到 Pixel 或 Compute 却保留另一阶段的标签。
+按阶段的管线查询不区分大小写地接受 VS/HS/DS/GS/PS/CS/MS/AS。未知名称使用 `invalid_shader_stage`；可识别但不支持的 RT 阶段或原生运行库没有的阶段使用 `shader_stage_unsupported`。拒绝分类和保全证明遵循[统一规则](#rejection-proof)。不会回退到 Pixel 或 Compute 却保留另一阶段的标签。
 
 ## 事件、VFS 与网格
 
-`rd.event.search_actions` 的 `flags_include` / `flags_exclude` 接受原生 RenderDoc ActionFlags 成员名（如 `Drawcall`、`Dispatch`、`Present`），不接受 `is_draw` 等投影字段。无效 flag 名或数组形状在获取 controller 或加载 action 索引之前被拒绝，返回 canonical `validation_error` 并附 `effects_attempted: false`、`context_preserved: true`；其他失败不继承这一证明。
+`rd.event.search_actions` 的 `flags_include` / `flags_exclude` 接受原生 RenderDoc ActionFlags 成员名（如 `Drawcall`、`Dispatch`、`Present`），不接受 `is_draw` 等投影字段。无效 flag、范围边界或正则在获取 controller 或加载 action 索引之前被拒绝；事件范围的边界不要求本身是 action。保全证明遵循[统一规则](#rejection-proof)。
 
 VFS `/draws` 节点把 canonical `rd.event.get_action_tree` 的分页原样保留为 `node.pagination`（树根为 `tree.pagination`），与现有 action 根 `data` 和导航 `entries` 并列。`ls`（含表格投影）、`cat` 与 `resolve` 暴露同样的来源覆盖事实；有界列表不是完整的 action 清单。树结果合并上游分页截断与自身的输出节点预算（包括 `depth=0`）：仅上游截断时报告 `upstream_pagination_truncated`；VFS 预算超限报告 `max_nodes_exceeded`，两者同时出现时以后者为准，节点的来源分页仍可读取。仅请求深度本身不标记截断。导航从不绕过 canonical 深度、分页或节点上限来拼出完整视图；显式分页与事件选择请用 canonical action tree 工具。
+
+对显式 `/draws/<event>` 路径，VFS 在访问该事件前校验 action 是否存在；拒绝分类与证明遵循[统一规则](#rejection-proof)，嵌套操作的效果也计入外层请求。
 
 顶点输入查询在原始着色器输入坐标中解码声明的格式、偏移、绑定、索引与实例率；值保留语义名称，未知或含糊的语义映射保持不支持。归一化整数 NORMAL 数据不自动是几何法线。变换后的签名输出使用独立验证的原生打包，从不以输入属性代替。D3D11/12 stream-zero float 输出打包与 Vulkan VS 逐顶点 stream-zero float32 std430 打包是不同的 API 布局。Vulkan 要求唯一的前导 float4 Position、唯一的显式 varying location 且与原生 stride 完全一致；其按 API/阶段标记的布局提供原生 location/builtin、变量名、分量掩码（不可用时为 null）、标量类型、字节偏移与分量数，逐行键为 `location:N` / `builtin:Name`。其他 Vulkan 阶段、类型、速率、含糊 location 或不匹配的布局保持明确不支持；原始字节不完整时失败，解码出的非有限值为 null。仅有原生分量掩码不能证明光栅接口上的分量或插值映射；顶点输出可用也不代表光栅插值、sample/primitive 覆盖或像素着色器操作数已确立。OBJ 法线/UV 导出需要显式的 VS 输入空间与匹配的 float 属性；VS 之后的 OBJ 只含位置。
 
@@ -120,11 +123,11 @@ Pixel History 保留原生报告的值，不承诺可执行的逐片元混合账
 
 `rd.shader.compile` 通过 `source_text` 或 `source_path` 接受原始 SPIR-V ASM。原生声明了 ASM 编码时使用它；在只接受二进制 SPIR-V 的后端上，使用与 PatchEngine 相同的本地 `spirv-as` 汇编路径，再把生成的模块交给 `BuildTargetShader`。它从不替换资源。结果区分请求的 `source_encoding` 与实际的 `build_encoding`；`build_input` 标识原生构建接受的确切字节，并附 `device_binary_observed: false`。汇编得到的 SPIR-V 导出为 `artifact_kind: assembled-spirv-build-input`，它就是该模块，不是设备代码或原生读回；其他原生读回导出标为 `native-shader-readback`。输入/编码拒绝与本地汇编失败发生在原生构建之前，明确返回 `effects_attempted: false` 与 `context_preserved: true`；`BuildTargetShader` 开始后的异常或失败不获得这些保证，应用继续隔离不确定的原生结果。汇编/反汇编临时文件使用配置的 intermediate 运行目录，成功、拒绝与超时时都会释放。
 
-整源替换时，即使捕获源码不可用，`edit_plan` 仍保留引擎已验证的 `user_full_source` 编码/构建能力。`original_shader_hash` 对 `rd.shader.get_source` 选出的捕获入口源码（第一个原生调试源文件）求哈希，从不对提供的替换文本、include、主机文件内容或着色器二进制求哈希；无法读取入口源码时为现有的未知值 `""`，结果消息说明原因，整源编译仍可继续。`rd.shader.edit_and_replace.expected_source_hash` 绑定打补丁前当前绑定的**原始**源码，与整份替换文件/文本的哈希不同；不匹配或来源不可用时在编译或替换之前以校验错误拒绝，附 `replacement_attempted=false` 与 `context_preserved=true`，消费者保留原有的身份与无变更证明检查。`applied_to_shader_hash` 描述提供的替换源码，构建输入来源描述实际的编译器字节。
+整源替换时，即使捕获源码不可用，`edit_plan` 仍保留引擎已验证的 `user_full_source` 编码/构建能力。`original_shader_hash` 对 `rd.shader.get_source` 选出的捕获入口源码（第一个原生调试源文件）求哈希，从不对提供的替换文本、include、主机文件内容或着色器二进制求哈希；无法读取入口源码时为现有的未知值 `""`，结果消息说明原因，整源编译仍可继续。`rd.shader.edit_and_replace.expected_source_hash` 绑定打补丁前当前绑定的**原始**源码，与整份替换文件/文本的哈希不同；不匹配或来源不可用时在编译或替换之前拒绝。`replacement_attempted=false` 只说明未尝试替换，不证明回放事件或其他现场未改变。`applied_to_shader_hash` 描述提供的替换源码，构建输入来源描述实际的编译器字节。
 
 成功的 `rd.shader.edit_and_replace` 结果保留 `replacement.compile.build_input`：本次调用传给 `BuildTargetShader` 的确切字节、其 SHA-256 与大小、编码、原着色器 ID，以及返回并传给 `ReplaceResource` 的目标着色器 ID。这是构建输入来源，不是着色器读回或设备 ISA 证明（`device_binary_observed: false`）。对二进制 SPIR-V 输入，只有存在完整、对齐、可识别的文件头时，`spirv_header` 才暴露实际的头字（含 `id_bound`），且不校验指令语义；文本输入、畸形文件头与空操作构建不会合成二进制 bound。构建失败不报告已应用目标的证明。前后源码哈希与构建输入字节哈希相互独立。请求 patch artifact 时，同一字节序列保存为 `artifacts.build_input`（SPIR-V 模块输入为 .spv，源码输入为 .txt），否则不额外写字节 artifact；原始字节不进入普通模型 JSON 序列化。没有该来源信息的历史结果不会被追认。事件绑定的 `extract_binary` 继续检查绑定的反射，不会静默选择替换目标。
 
-`rd.shader.edit_and_replace` 的 diff 被拒绝时仍是 `shader_patch_diff_failed` 校验失败。文本 diff 在编译或替换之前应用失败时，Tool 明确报告 `failure_stage: apply_patch`、`replacement_attempted: false` 与 `context_preserved: true`。回放可能已导航到请求的事件，因此这不是无副作用声明，也不是恢复证明、干预或回滚。未知、原生或替换失败不继承这一证明；消费者在允许下一个请求前仍要核验冻结的所属 lease。
+`rd.shader.edit_and_replace` 的文本 diff 在编译或替换之前应用失败时，错误码为 `shader_patch_diff_failed`，可报告 `failure_stage: apply_patch` 与 `replacement_attempted: false`。回放可能已导航到请求的事件，因此该信息不是[无副作用证明](#rejection-proof)，也不是恢复证明、干预或回滚。
 
 源码文本 artifact 以 UTF-8 字节同时写入保存路径与 artifact store，不按主机换行规则转换。文件审计对实际字节求哈希；源码语义哈希与构建输入字节哈希仍分别解释，不用文本归一化代替文件审计。
 

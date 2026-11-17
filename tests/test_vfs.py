@@ -4,8 +4,17 @@ import asyncio
 
 import pytest
 
-from rdc_tool.runtime import dispatch
+from rdc_tool.runtime import dispatch, replay_access
 from rdc_tool.runtime.operations import vfs as vfs_ops
+
+
+@pytest.fixture
+def draw_42_exists(monkeypatch):
+    async def action_index(session_id):
+        assert session_id == "sess_demo"
+        return [], [], {42: object()}
+
+    monkeypatch.setattr(replay_access, "_load_action_index", action_index)
 
 
 @pytest.mark.unit
@@ -43,7 +52,7 @@ def test_vfs_cat_context_uses_context_snapshot(monkeypatch) -> None:
 
 
 @pytest.mark.unit
-def test_vfs_draw_shader_path_routes_through_pipeline_tools(monkeypatch) -> None:
+def test_vfs_draw_shader_path_routes_through_pipeline_tools(monkeypatch, draw_42_exists) -> None:
     calls: list[tuple[str, dict[str, object]]] = []
 
     async def _fake_dispatch(tool_name: str, args: dict[str, object], **_: object) -> dict[str, object]:
@@ -87,7 +96,7 @@ def test_vfs_draw_shader_path_routes_through_pipeline_tools(monkeypatch) -> None
 
 
 @pytest.mark.unit
-def test_vfs_shader_not_bound_becomes_unavailable_node(monkeypatch) -> None:
+def test_vfs_shader_not_bound_becomes_unavailable_node(monkeypatch, draw_42_exists) -> None:
     async def _fake_dispatch(tool_name: str, args: dict[str, object], **_: object) -> dict[str, object]:
         if tool_name == "rd.pipeline.get_state":
             return {

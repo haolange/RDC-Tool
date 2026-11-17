@@ -18,6 +18,14 @@ from rdc_tool.runtime.operations import texture as texture_ops
 pytestmark = pytest.mark.usefixtures("fake_renderdoc")
 
 
+@pytest.fixture
+def known_sample_events(monkeypatch):
+    async def index(session_id, **kwargs):
+        assert session_id == "sess_demo"
+        return [], [], {41: object(), 42: object()}
+    monkeypatch.setattr(replay_access, "_load_action_index", index)
+
+
 class _FakeShaderPipe:
     def GetShader(self, stage: object) -> str:
         if stage == "ps":
@@ -67,6 +75,7 @@ def _restore_runtime_services() -> None:
 
 
 @pytest.mark.parametrize("texture_size", [(800, 600), (0, 0)])
+@pytest.mark.usefixtures("known_sample_events")
 def test_render_overlay_reports_native_to_image_mapping(
     monkeypatch: pytest.MonkeyPatch, texture_size: tuple[int, int],
 ) -> None:
@@ -256,6 +265,7 @@ def test_region_values_stats_describe_exported_stride_samples(monkeypatch: pytes
     assert payload.data['stats']["min"] == payload.data['stats']["max"] == payload.data['stats']["mean"] == 0.5
 
 
+@pytest.mark.usefixtures("known_sample_events")
 def test_texture_histogram_and_diff_reuse_memory_readback_without_artifacts(monkeypatch: pytest.MonkeyPatch) -> None:
     read_calls: list[tuple[int, str]] = []
 
@@ -500,8 +510,9 @@ def test_pixel_history_rejects_invalid_vulkan_attachment_and_restores_entry(monk
         "session_id": "replay", "texture_id": "texture", "event_id": 5, "x": 1, "y": 2,
     }))
     assert payload.ok is False
-    assert payload.category == "capability"
+    assert payload.category == "runtime"
     assert payload.code == "pixel_history_unsupported_input_attachment"
+    assert "context_preserved" not in payload.details
     assert payload.details["replay_state_restored"] is True
     assert payload.details["restored_event_id"] == active["event"] == 19
     assert payload.details["usage_event_id"] == 7
