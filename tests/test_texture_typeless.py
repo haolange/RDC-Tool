@@ -138,6 +138,9 @@ def test_texture_decode_failure_restores_event_and_returns_qualified_error(monke
     result = asyncio.run(texture_ops.dispatch(action, {
         "session_id": "session", "event_id": 42, **extra}))
     assert result.code == "texture_readback_decode_failed"
+    assert result.category == "capability"
     assert result.details == {"context_id": "context", "session_id": "session",
-        "failure_stage": "decode_texture_readback", "replay_state_restored": True, "restored_event_id": 11}
+        "failure_stage": "decode_texture_readback", "replay_state_restored": True, "restored_event_id": 11,
+        "suggested_operations": ["rd.texture.get_pixel_value", "rd.export.texture"],
+        "suggestion": "Try a single pixel read or export an image and inspect it; support depends on the format and subresource."}
     assert active["event"] == 11

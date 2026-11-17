@@ -11,7 +11,7 @@
 所有命令与操作都返回 canonical JSON 信封（`schema_version` 为 `3.0.0`）：`tool_version`、`result_kind`、`ok`、`data`、`artifacts`、`error`（`code`、`category`、`message`、`details`）、`meta` 与 `projections`。操作集变化时信封保持不变。
 
 <a id="rejection-proof"></a>
-前置拒绝只有在本次请求未尝试任何原生副作用，且入口与失败时的 replay 对象、当前事件、shader replacement 和该操作涉及的其他记录逐项相同时，才返回 `category=validation` 和完整的证明字段：`details.failure_stage`、`effects_attempted=false`、`context_preserved=true`。会话恢复、preview 同步、事件应用、替换或导出写盘已尝试，或任一状态无法核验时，不发放该证明，拒绝归类为 `runtime`；单独的 `failure_stage` 仍可用于诊断，不构成无效果证明。消费者仍须核验自己的 context、session 和 lease；超时、原生故障或清理结果不明不能推断为保全。副作用后的独立恢复回执不属于无副作用证明，只有调用方核验其适用范围、恢复后的状态和所属身份后才能继续使用回放。
+前置拒绝只有在本次请求未尝试任何原生副作用，且入口与失败时的 replay 对象、当前事件、shader replacement 和该操作涉及的其他记录逐项相同时，才返回 `category=validation` 和完整的证明字段：`details.failure_stage`、`effects_attempted=false`、`context_preserved=true`。会话恢复、preview 同步、事件应用、替换或导出写盘已尝试，或任一状态无法核验时，不发放该证明，拒绝归类为 `runtime`；单独的 `failure_stage` 仍可用于诊断，不构成无效果证明。消费者仍须核验自己的 context、session 和 lease；超时、原生故障或清理结果不明不能推断为保全。副作用后的独立恢复回执不属于无副作用证明，只有调用方核验其适用范围、恢复后的状态和所属身份后才能继续使用回放。纹理格式可识别但数值解码不受支持时，恢复原事件后返回 `texture_readback_decode_failed`、`category=capability` 和可尝试的读取操作；恢复失败仍为 `runtime`。该恢复证明不等于未尝试效果，调用方仍须独立核验现场。
 
 canonical JSON 不输出非标准裸数值 `NaN`、`Infinity`、`-Infinity`。原生着色器或 capture 数据中的非有限浮点值保留为字符串 `"NaN"`、`"Infinity"`、`"-Infinity"`，有限值仍是数字。这些标记描述观察到的原生值，不是替代的零值或成功测量；解读数值数组时须把它们当作非有限数据。
 

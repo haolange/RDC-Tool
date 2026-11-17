@@ -30,14 +30,13 @@ from rdc_tool.runtime import (
 )
 
 
-@replay_access._guard_rejection
 async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
     if action not in {"get_data", "get_region_values", "get_histogram", "compute_stats", "diff"}:
-        return await _dispatch_texture_impl(action, args)
+        return await _guarded_texture_dispatch(action, args)
     session_id = str(args.get("session_id", ""))
     original_event = replay_access._active_event(session_id)
     try:
-        return await _dispatch_texture_impl(action, args)
+        return await _guarded_texture_dispatch(action, args)
     except TextureDecodeError as exc:
         details = {"context_id": live_state._runtime_context_id(), "session_id": session_id,
                    "failure_stage": "decode_texture_readback"}
@@ -49,8 +48,15 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
             return envelope.failure(f"Texture readback failed; replay restoration failed: {restore_error}",
                         code="texture_readback_restore_failed", category="runtime",
                         details={**details, "replay_state_restored": False})
-        return envelope.failure(str(exc), code="texture_readback_decode_failed", category="validation",
-                    details={**details, "replay_state_restored": True, "restored_event_id": original_event})
+        return envelope.failure(str(exc), code="texture_readback_decode_failed", category="capability",
+                    details={**details, "replay_state_restored": True, "restored_event_id": original_event,
+                             "suggested_operations": ["rd.texture.get_pixel_value", "rd.export.texture"],
+                             "suggestion": "Try a single pixel read or export an image and inspect it; support depends on the format and subresource."})
+
+
+@replay_access._guard_rejection
+async def _guarded_texture_dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
+    return await _dispatch_texture_impl(action, args)
 
 
 async def _dispatch_texture_impl(action: str, args: Dict[str, Any]) -> envelope.Outcome:
