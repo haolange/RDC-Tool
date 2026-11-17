@@ -11,8 +11,9 @@ import pytest
 
 from rdc_tool.context_snapshot import clear_context_snapshot
 from rdc_tool.core import pipeline_service as pipeline_module
+from rdc_tool.core.errors import CoreError
 from rdc_tool.models import ShaderStage
-from rdc_tool.runtime import artifact_payloads, context_records, dispatch, envelope, live_state, renderdoc_api, replay_access, shader_values, texture_export, texture_naming, truth_matrix, visual_target
+from rdc_tool.runtime import artifact_payloads, context_records, dispatch, envelope, live_state, preview_sync, renderdoc_api, replay_access, shader_values, texture_export, texture_naming, truth_matrix, visual_target
 from rdc_tool.runtime.operations import capture as capture_ops
 from rdc_tool.runtime.operations import event as event_ops
 from rdc_tool.runtime.operations import export as export_ops
@@ -21,6 +22,7 @@ from rdc_tool.runtime.operations import pipeline as pipeline_ops
 from rdc_tool.runtime.operations import resource as resource_ops
 from rdc_tool.runtime.operations import shader as shader_ops
 from rdc_tool.runtime.operations import texture as texture_ops
+from rdc_tool.runtime.operations import vfs as vfs_ops
 
 
 def _execute_routed(operation, args):
@@ -275,12 +277,15 @@ def test_event_set_active_validates_before_mutating_state(monkeypatch: pytest.Mo
     _install_common_env(monkeypatch, controller)
     _seed_capture()
     _seed_session(202)
+    monkeypatch.setattr(live_state._runtime, "hydrated_contexts", {live_state._runtime_context_id()})
+    monkeypatch.setattr(live_state, "_runtime_bootstrapped", True)
 
     invalid = asyncio.run(dispatch.dispatch_operation("rd.event.set_active", {"session_id": "sess_demo", "event_id": 53}, transport="test"))
     assert invalid["ok"] is False
     assert invalid["error"]["code"] == "event_not_found"
-    assert invalid["error"]["category"] == "not_found"
-    assert invalid["error"]["details"] == {"session_id": "sess_demo", "event_id": 53}
+    assert invalid["error"]["category"] == "validation"
+    assert invalid["error"]["details"] == {"session_id": "sess_demo", "event_id": 53, "failure_stage": "validate_event",
+                                             "effects_attempted": False, "context_preserved": True}
     assert controller.set_frame_calls == []
     assert live_state._runtime.replays["sess_demo"].active_event_id == 202
     assert context_records._context_snapshot()["runtime"]["active_event_id"] == 202
@@ -321,7 +326,190 @@ def test_missing_action_does_not_claim_preservation_after_session_recovery(monke
     assert not result.details.get('context_preserved')
 
 
+@pytest.mark.parametrize("operation", ["set_active", "pipeline", "texture_readback"])
+def test_invalid_event_proves_no_effect_before_operation(monkeypatch, operation):
+    controller = _FakeController(roots=[_FakeAction(101)], resources=[SimpleNamespace(resourceId="texture")])
+    _install_common_env(monkeypatch, controller)
+    _seed_capture()
+    _seed_session(101)
+    monkeypatch.setattr(live_state, "_render_service", SimpleNamespace())
+    if operation == "set_active":
+        result = asyncio.run(event_ops.dispatch("set_active", {"session_id": "sess_demo", "event_id": 999}))
+    elif operation == "pipeline":
+        result = asyncio.run(pipeline_ops.dispatch("get_state", {"session_id": "sess_demo", "event_id": 999}))
+    else:
+        result = asyncio.run(texture_ops.dispatch("get_data", {
+            "session_id": "sess_demo", "event_id": 999, "texture_id": "texture",
+        }))
+    assert isinstance(result, envelope.Failure)
+    assert result.code == "event_not_found"
+    assert result.category == "validation"
+    assert result.details["failure_stage"] == "validate_event"
+    assert result.details["effects_attempted"] is False
+    assert result.details["context_preserved"] is True
+    assert controller.set_frame_calls == []
+    assert live_state._runtime.replays["sess_demo"].active_event_id == 101
+
+
+def test_invalid_event_after_attempted_effect_has_no_preservation_proof(monkeypatch):
+    controller = _FakeController(roots=[_FakeAction(101)])
+    _install_common_env(monkeypatch, controller)
+    _seed_capture()
+    _seed_session(101)
+    original = replay_access._load_action_index
+
+    async def after_attempt(session_id, **kwargs):
+        replay_access._event_effect_attempted()
+        return await original(session_id, **kwargs)
+
+    monkeypatch.setattr(replay_access, "_load_action_index", after_attempt)
+    result = asyncio.run(pipeline_ops.dispatch("get_state", {"session_id": "sess_demo", "event_id": 999}))
+    assert isinstance(result, envelope.Failure)
+    assert result.code == "event_not_found"
+    assert result.category == "runtime"
+    assert "effects_attempted" not in result.details
+    assert "context_preserved" not in result.details
+    assert "failure_stage" not in result.details
+    assert controller.set_frame_calls == []
+
+
+@pytest.mark.parametrize("action", ["ls", "cat", "resolve", "tree"])
+def test_vfs_missing_draw_event_is_proved_before_native_effects(monkeypatch, action):
+    controller = _FakeController(roots=[_FakeAction(101)])
+    _install_common_env(monkeypatch, controller)
+    _seed_capture()
+    _seed_session(101)
+
+    result = asyncio.run(vfs_ops.dispatch(action, {"session_id": "sess_demo", "path": "/draws/999"}))
+
+    assert isinstance(result, envelope.Failure)
+    assert result.code == "event_not_found"
+    assert result.category == "validation"
+    assert result.details["failure_stage"] == "validate_event"
+    assert result.details["effects_attempted"] is False
+    assert result.details["context_preserved"] is True
+    assert controller.set_frame_calls == []
+
+
+def test_vfs_nested_effect_cannot_be_signed_as_outer_no_effect(monkeypatch):
+    controller = _FakeController(roots=[_FakeAction(101)])
+    _install_common_env(monkeypatch, controller)
+    _seed_capture()
+    _seed_session(101)
+    monkeypatch.setattr(live_state._runtime, "hydrated_contexts", {live_state._runtime_context_id()})
+    monkeypatch.setattr(live_state, "_runtime_bootstrapped", True)
+    checked_scopes = []
+    original_failure = replay_access._event_rejection_failure
+
+    def record_scope(exc, scope, session_id):
+        checked_scopes.append(scope["effects_attempted"])
+        return original_failure(exc, scope, session_id)
+
+    class FailingPipeline:
+        async def snapshot_pipeline(self, **kwargs):
+            raise CoreError(code="event_not_found", category="not_found", message="missing action",
+                            details={"session_id": "sess_demo", "event_id": 999})
+
+    monkeypatch.setattr(replay_access, "_event_rejection_failure", record_scope)
+    monkeypatch.setattr(live_state, "_pipeline_service", FailingPipeline())
+    result = asyncio.run(dispatch.dispatch_operation("rd.vfs.cat", {
+        "session_id": "sess_demo", "path": "/draws/101/pipeline",
+    }, transport="test"))
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "event_not_found"
+    assert result["error"]["category"] == "runtime"
+    assert not {"failure_stage", "effects_attempted", "context_preserved"} & result["error"]["details"].keys()
+    assert controller.set_frame_calls == [101]
+    assert checked_scopes == [True, True]
+
+
+@pytest.mark.parametrize("mutation", ["replay", "event", "replacement", "session", "capture", "preview"])
+def test_event_rejection_does_not_claim_changed_entry_snapshot(monkeypatch, mutation):
+    controller = _FakeController(roots=[_FakeAction(101)])
+    _install_common_env(monkeypatch, controller)
+    _seed_capture()
+    _seed_session(101)
+    monkeypatch.setattr(live_state._runtime, "shader_replacements", {"sess_demo": []})
+    monkeypatch.setattr(live_state._runtime, "previews", {
+        live_state._runtime_context_id(): SimpleNamespace(bound_event_id=101, display={}),
+    })
+    original = replay_access._load_action_index
+
+    async def changed(session_id, **kwargs):
+        if mutation == "replay":
+            live_state._runtime.replays[session_id] = live_state.ReplayHandle(
+                session_id=session_id, capture_file_id="capf_demo", active_event_id=101)
+        elif mutation == "event":
+            live_state._runtime.replays[session_id].active_event_id = 202
+        elif mutation == "replacement":
+            live_state._runtime.shader_replacements[session_id].append({"replacement_id": "changed"})
+        elif mutation == "session":
+            context_records._context_state()["sessions"][session_id]["last_error"] = "changed"
+        elif mutation == "capture":
+            live_state._runtime.captures["capf_demo"].file_path = "changed.rdc"
+        else:
+            live_state._runtime.previews[live_state._runtime_context_id()].bound_event_id = 202
+        return await original(session_id, **kwargs)
+
+    monkeypatch.setattr(replay_access, "_load_action_index", changed)
+    result = asyncio.run(pipeline_ops.dispatch("get_state", {"session_id": "sess_demo", "event_id": 999}))
+    assert isinstance(result, envelope.Failure)
+    assert result.code == "event_not_found"
+    assert result.category == "runtime"
+    assert not {"failure_stage", "effects_attempted", "context_preserved"} & result.details.keys()
+    assert controller.set_frame_calls == []
+
+
+def test_texture_diff_validates_both_events_before_first_read(monkeypatch):
+    controller = _FakeController(roots=[_FakeAction(101)])
+    _install_common_env(monkeypatch, controller)
+    _seed_capture()
+    _seed_session(101)
+    monkeypatch.setattr(live_state, "_render_service", SimpleNamespace())
+    result = asyncio.run(texture_ops.dispatch("diff", {"session_id": "sess_demo",
+        "tex_a": {"texture_id": "a", "event_id": 101}, "tex_b": {"texture_id": "b", "event_id": 999}}))
+    assert isinstance(result, envelope.Failure)
+    assert result.code == "event_not_found"
+    assert result.category == "validation"
+    assert result.details["effects_attempted"] is False
+    assert result.details["context_preserved"] is True
+    assert controller.set_frame_calls == []
+
+
+def test_pipeline_rejection_precedes_preview_and_success_syncs_after_event(monkeypatch):
+    controller = _FakeController(roots=[_FakeAction(101)])
+    _install_common_env(monkeypatch, controller)
+    _seed_capture()
+    _seed_session(101)
+    monkeypatch.setattr(live_state._runtime, "hydrated_contexts", {live_state._runtime_context_id()})
+    monkeypatch.setattr(live_state, "_runtime_bootstrapped", True)
+    monkeypatch.setattr(live_state, "_pipeline_service", _FakePipelineService())
+    monkeypatch.setattr(truth_matrix, "_pipeline_truth_metadata", lambda *_: {})
+    synced = []
+
+    async def sync(_context_id):
+        synced.append(list(controller.set_frame_calls))
+
+    monkeypatch.setattr(preview_sync, "_auto_sync_preview_if_enabled", sync)
+    rejected = asyncio.run(dispatch.dispatch_operation("rd.pipeline.get_state",
+        {"session_id": "sess_demo", "event_id": 999, "sections": ["topology"]}, transport="test"))
+    assert rejected["error"]["category"] == "validation"
+    assert rejected["error"]["details"]["effects_attempted"] is False
+    assert rejected["error"]["details"]["context_preserved"] is True
+    assert synced == []
+    assert controller.set_frame_calls == []
+
+    succeeded = asyncio.run(dispatch.dispatch_operation("rd.pipeline.get_state",
+        {"session_id": "sess_demo", "event_id": 101, "sections": ["topology"]}, transport="test"))
+    assert succeeded["ok"] is True
+    assert controller.set_frame_calls == [101]
+    assert synced == [[101]]
+
+
 def test_invalid_screenshot_format_is_rejected_before_target_resolution(monkeypatch):
+    _seed_capture()
+    _seed_session(101, session_id="session")
     async def forbidden(*args, **kwargs):
         pytest.fail('format rejection must precede replay access')
     monkeypatch.setattr(visual_target, '_resolve_visual_target_for_event', forbidden)
@@ -413,13 +601,16 @@ def test_search_actions_filters_flags_before_result_limit(monkeypatch: pytest.Mo
 @pytest.mark.parametrize("query", [
     {"flags_include": ["is_draw"]}, {"flags_exclude": ["NotAFlag"]},
     {"flags_include": "Drawcall"}, {"flags_exclude": [None]},
-    {"flags_include": [""]},
+    {"flags_include": [""]}, {"event_id_min": "invalid"},
+    {"event_id_max": []}, {"name_regex": "["},
 ])
-def test_search_actions_rejects_invalid_flags_before_controller(monkeypatch: pytest.MonkeyPatch, query: dict) -> None:
+def test_search_actions_rejects_invalid_query_before_controller(monkeypatch: pytest.MonkeyPatch, query: dict) -> None:
     controller = _FakeController(roots=[])
     _install_common_env(monkeypatch, controller)
     _seed_capture()
     _seed_session(202)
+    monkeypatch.setattr(live_state._runtime, "hydrated_contexts", {live_state._runtime_context_id()})
+    monkeypatch.setattr(live_state, "_runtime_bootstrapped", True)
 
     async def unexpected_controller(session_id: str) -> None:
         raise AssertionError("validation must precede controller acquisition")
@@ -1279,6 +1470,10 @@ def test_shader_bundle_does_not_substitute_a_different_explicit_target(monkeypat
 def test_export_screenshot_forwards_requested_event(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     seen_calls: list[dict[str, object]] = []
 
+    async def _action_index(session_id: str, **kwargs):
+        assert session_id == "sess_demo"
+        return [], [], {202: _FakeAction(202)}
+
     async def _fake_ensure_event(session_id: str, event_id: int | None) -> int:
         assert session_id == "sess_demo"
         return int(event_id or 0)
@@ -1306,6 +1501,7 @@ def test_export_screenshot_forwards_requested_event(monkeypatch: pytest.MonkeyPa
         }
 
     monkeypatch.setattr(replay_access, "_ensure_event", _fake_ensure_event)
+    monkeypatch.setattr(replay_access, "_load_action_index", _action_index)
     monkeypatch.setattr(replay_access, "_output_target_resource_ids", _fake_output_target_resource_ids)
     monkeypatch.setattr(replay_access, "_get_texture_descriptor", _fake_get_texture_descriptor)
     monkeypatch.setattr(truth_matrix, "_event_truth_metadata", _fake_event_truth_metadata)
@@ -1388,11 +1584,13 @@ def test_export_shader_bundle_returns_runtime_error_when_event_has_no_bound_shad
 
 @pytest.mark.parametrize("action", ["get_stage_state", "get_shader", "get_resource_bindings", "get_constant_buffers"])
 @pytest.mark.parametrize("stage,code,category", [
-    ("RT", "shader_stage_unsupported", "capability"),
+    ("RT", "shader_stage_unsupported", "validation"),
     ("not-a-stage", "invalid_shader_stage", "validation"),
     ("", "invalid_shader_stage", "validation"),
 ])
 def test_pipeline_stage_rejection_precedes_native_and_event_access(monkeypatch, action, stage, code, category):
+    _seed_capture()
+    _seed_session(101, session_id="not-opened")
     def forbidden(*args, **kwargs):
         pytest.fail("stage rejection must precede native/controller/event access")
 
@@ -1411,12 +1609,14 @@ def test_pipeline_stage_rejection_precedes_native_and_event_access(monkeypatch, 
 
 @pytest.mark.parametrize("action", ["get_stage_state", "get_shader", "get_resource_bindings", "get_constant_buffers"])
 @pytest.mark.parametrize("stage,code,category", [
-    ("RT", "shader_stage_unsupported", "capability"),
-    (" rT ", "shader_stage_unsupported", "capability"),
+    ("RT", "shader_stage_unsupported", "validation"),
+    (" rT ", "shader_stage_unsupported", "validation"),
     ("not-a-stage", "invalid_shader_stage", "validation"),
     ("", "invalid_shader_stage", "validation"),
 ])
 def test_catalog_routed_stage_rejection_preserves_canonical_proof(monkeypatch, action, stage, code, category):
+    _seed_capture()
+    _seed_session(101, session_id="not-opened")
 
     def forbidden(*args, **kwargs):
         pytest.fail("catalog-routed stage rejection must precede native/controller/event access")
@@ -1523,6 +1723,10 @@ def test_pipeline_get_stage_state_reports_degraded_binding_truth(monkeypatch: py
     assert state["unavailable_reason"] == "binding_degraded"
 
 def test_export_texture_explicit_hdr_fails_when_encoder_falls_back_to_png(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    async def _action_index(session_id: str, **kwargs):
+        assert session_id == "sess_demo"
+        return [], [], {9: _FakeAction(9)}
+
     async def _fake_ensure_event(session_id: str, event_id: int | None) -> int:
         return int(event_id or 9)
 
@@ -1535,6 +1739,7 @@ def test_export_texture_explicit_hdr_fails_when_encoder_falls_back_to_png(monkey
             return SimpleNamespace(sha256="png-sha"), {"format": "png"}, str(tmp_path / "fake.png")
 
     monkeypatch.setattr(replay_access, "_ensure_event", _fake_ensure_event)
+    monkeypatch.setattr(replay_access, "_load_action_index", _action_index)
     monkeypatch.setattr(replay_access, "_get_texture_descriptor", _fake_get_texture_descriptor)
     monkeypatch.setattr(replay_access, "_binding_name_index_for_event", lambda session_id, event_id: asyncio.sleep(0, result={}))
     monkeypatch.setattr(texture_naming, "_recommend_formats_for_texture", lambda texture_desc, name_info, for_screenshot=False: ["png"])

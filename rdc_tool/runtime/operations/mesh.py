@@ -9,6 +9,7 @@ from rdc_tool.runtime import coerce, envelope, live_state, renderdoc_api, replay
 from rdc_tool.runtime.operations import buffer as buffer_ops
 
 
+@replay_access._guard_rejection
 async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
     if action == "get_drawcall_mesh_config":
         coerce._require(args, "session_id")

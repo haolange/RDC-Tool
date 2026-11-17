@@ -34,7 +34,7 @@ worker 退出后的 `requires_restart` 会话只有在旧 worker 退出身份可
 
 `rd.capture.open_replay` 复用同一 context 中同一 capture 的 live session。重开前用 `rd.capture.close_replay` 释放回放资源。daemon 超时后，先查看 `rdc-tool context status --json` 与操作历史，再决定是否清除或停止 context。过期清理失败时返回 `stale_session_requires_restart` 与恢复命令。
 
-`rd.capture.open_replay` 返回 `local_replay_unsupported`（category `capability`）：本主机的 RenderDoc 运行库不能在本地回放该 capture 的图形 API（例如 Linux 上的 D3D11/D3D12 capture），请求在创建任何回放之前就被拒绝。`details.capture_api` 与 `details.host_target` 给出具体组合。改在支持该 API 的主机上回放，或先 `rd.remote.connect`，再通过 `options.remote_id` 远端回放。
+`rd.capture.open_replay` 返回 `local_replay_unsupported`：本主机的 RenderDoc 运行库不能在本地回放该 capture 的图形 API（例如 Linux 上的 D3D11/D3D12 capture），请求在创建任何回放之前就被拒绝。`details.capture_api` 与 `details.host_target` 给出具体组合，分类见[公共契约](public-contract.md)。改在支持该 API 的主机上回放，或先 `rd.remote.connect`，再通过 `options.remote_id` 远端回放。
 
 `rd.remote.connect` 之后远端回放失败：查看状态是否为 `remote_handle_consumed`。它表示句柄已被 `rd.capture.open_replay` 消费，应经远端工作流重连或恢复，不要复用旧句柄。
 

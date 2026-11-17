@@ -2,7 +2,17 @@
 
 本页只记录当前一轮工作的任务、依赖、状态与阻塞；已发布版本的事实见 [CHANGELOG](../CHANGELOG.md) 与 [发布说明](release-notes.md)，稳定规则见 [AGENTS.md](../AGENTS.md) 与 [ARCHITECTURE.md](../ARCHITECTURE.md)。状态取值：`待执行 / 执行中 / 待验证 / 通过 / 阻塞`。
 
-## 本轮目标：RDC-Agent 对接问题修复
+## 本轮目标：拒绝请求的无副作用证明
+
+| 任务 | 依赖 | 状态 | 交付与验收 |
+|---|---|---|---|
+| 事件路径与既有证明盘点 | 无 | 通过 | 核对 55 个事件寻址操作及共享调用路径；逐项结果和原始信封放入 PR |
+| 产品修复前复现 | 无 | 通过 | 隔离的 Agent 生产执行路径中，无效 set_active 与 pipeline 均为 not_found、无证明、lease 隔离；原始 envelope 保留在 PR |
+| Tool 证明与契约收敛 | 盘点、修复前复现 | 通过 | 操作入口共同核验回放和记录；事件、多事件及可提前检查的参数先校验；catalog、文档及 Windows 全量测试 1339 passed、12 skipped、2 subtests passed |
+| Agent 消费与指南同步 | Tool 契约 | 通过 | 无效果判断与 category/错误码解耦；恢复另核验进程出生身份和 replacement；129 操作、catalog 与三份指南一致；门禁、RDC 测试和类型检查通过 |
+| 实机复验、门禁与交付 | Tool、Agent 修改 | 通过 | PC 真实回放及独立 preview 验证通过；[Tool PR CI](https://github.com/haolange/RDC-Tool/actions/runs/44022509927) 的 Windows、Linux、doctor 和发行包验证通过 |
+
+## 上轮：RDC-Agent 对接问题修复
 
 | 任务 | 依赖 | 状态 | 交付与验收 |
 |---|---|---|---|

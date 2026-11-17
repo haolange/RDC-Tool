@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from rdc_tool.runtime import coerce, envelope
+from rdc_tool.runtime import coerce, envelope, replay_access
 from rdc_tool.runtime.operations import pipeline as pipeline_ops
 
 
+@replay_access._guard_rejection
 async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
     coerce._require(args, "session_id")
     session_id = str(args["session_id"])

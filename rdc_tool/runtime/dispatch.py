@@ -17,6 +17,7 @@ from rdc_tool.runtime import (
     live_state,
     oplog,
     preview_sync,
+    replay_access,
     routing,
     runtime_lifecycle,
     session_recovery,
@@ -59,13 +60,16 @@ async def dispatch_operation(
                            transport, remote, operation, ctx.trace_id, arg_keys)
     context_token = live_state._CURRENT_CONTEXT_ID.set(chosen_context_id)
     progress_token = live_state._CURRENT_PROGRESS_REPORTER.set(ctx.progress_reporter)
+    parent_rejection_scope = live_state._CURRENT_EVENT_REJECTION_SCOPE.get()
+    rejection_scope = replay_access._event_rejection_snapshot(str(call_args.get("session_id") or ""))
+    rejection_token = live_state._CURRENT_EVENT_REJECTION_SCOPE.set(rejection_scope)
     try:
         oplog._record_operation_start(chosen_context_id, trace_id=ctx.trace_id, operation=operation,
                                       transport=transport, args=call_args)
         try:
+            if chosen_context_id not in live_state._runtime.hydrated_contexts:
+                replay_access._event_effect_attempted()
             await session_recovery.ensure_context_ready(chosen_context_id)
-            if operation not in _PREVIEW_MANAGED_OPERATIONS:
-                await preview_sync._auto_sync_preview_if_enabled(chosen_context_id)
             payload = await _execute(operation, call_args, ctx)
             context_records._postprocess_context_snapshot(operation, call_args, payload, ctx)
         except Exception as exc:  # noqa: BLE001
@@ -73,7 +77,14 @@ async def dispatch_operation(
             payload = canonical_error(result_kind=str(operation), code=core_exc.code, category=core_exc.category,
                                       message=core_exc.message, details=core_exc.details, trace_id=ctx.trace_id,
                                       transport=ctx.transport)
-        if operation not in _PREVIEW_MANAGED_OPERATIONS:
+        if not payload.get("ok") and isinstance(payload.get("error"), dict):
+            error = payload["error"]
+            checked = replay_access._qualify_claimed_preservation(
+                envelope.failure(error.get("message", ""), code=error.get("code", "runtime_error"),
+                                 category=error.get("category", "runtime"), details=error.get("details") or {}),
+                rejection_scope, rejection_scope.get("session_id", ""))
+            error.update(code=checked.code, category=checked.category, message=checked.message, details=checked.details)
+        if operation not in _PREVIEW_MANAGED_OPERATIONS and payload.get("ok"):
             await preview_sync._auto_sync_preview_if_enabled(chosen_context_id)
         oplog._record_operation_finish(chosen_context_id, trace_id=ctx.trace_id, payload=payload)
         meta = payload.setdefault("meta", {})
@@ -82,6 +93,9 @@ async def dispatch_operation(
                                str(meta.get("trace_id") or ctx.trace_id), bool(payload.get("ok")), meta.get("duration_ms"))
         return payload
     finally:
+        if parent_rejection_scope is not None and rejection_scope.get("effects_attempted"):
+            parent_rejection_scope["effects_attempted"] = True
+        live_state._CURRENT_EVENT_REJECTION_SCOPE.reset(rejection_token)
         live_state._CURRENT_PROGRESS_REPORTER.reset(progress_token)
         live_state._CURRENT_CONTEXT_ID.reset(context_token)
 

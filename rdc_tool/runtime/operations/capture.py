@@ -24,6 +24,7 @@ from rdc_tool.runtime import (
 )
 
 
+@replay_access._guard_rejection
 async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
     if action == "open_file":
         coerce._require(args, "file_path")

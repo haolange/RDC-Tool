@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-from copy import deepcopy
 from typing import Any, Dict, List, Sequence
 
 from rdc_tool.runtime import (
@@ -18,6 +17,7 @@ from rdc_tool.runtime import (
 )
 
 
+@replay_access._guard_rejection
 async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
     if action == "get_api_calls":
         from rdc_tool.core.capture_queries import query_calls
@@ -25,6 +25,14 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
         if (args.get("event_id") is None) == (args.get("chunk_indices") is None):
             return envelope.failure("Specify exactly one of event_id and chunk_indices", code="validation_error")
         controller = await replay_access._get_controller(str(args["session_id"]))
+        if args.get("event_id") is not None:
+            event_id = int(args["event_id"])
+            _, flat, by_event = await replay_access._load_action_index(str(args["session_id"]), controller=controller)
+            if event_id not in by_event and not any(
+                int(getattr(item, "eventId", 0)) == event_id
+                for action_obj in flat for item in (getattr(action_obj, "events", None) or ())
+            ):
+                replay_access._raise_event_not_found(str(args["session_id"]), event_id)
         return envelope.success(**(await renderdoc_api._offload(query_calls, renderdoc_api._get_rd(), controller,
             event_id=args.get("event_id"), chunk_indices=args.get("chunk_indices"),
             offset=int(args.get("offset", 0)), limit=int(args.get("limit", 50)),
@@ -37,6 +45,14 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
         query = coerce._parse_query_like(args.get("query"))
         validation_details = {"session_id": session_id, "failure_stage": "validate_query",
                               "effects_attempted": False, "context_preserved": True}
+        try:
+            event_id_min = int(query["event_id_min"]) if query.get("event_id_min") is not None else None
+            event_id_max = int(query["event_id_max"]) if query.get("event_id_max") is not None else None
+            name_regex = query.get("name_regex")
+            pattern = re.compile(str(name_regex)) if name_regex else None
+        except (TypeError, ValueError, OverflowError, re.error) as exc:
+            return envelope.failure(f"Invalid action search query: {exc}", code="validation_error",
+                                    category="validation", details=validation_details)
         action_flags = renderdoc_api._get_rd().ActionFlags
         for filter_name in ("flags_include", "flags_exclude"):
             requested = query.get(filter_name, [])
@@ -49,22 +65,9 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
                     return envelope.failure(f"Unknown ActionFlags name in {filter_name}: {name}", code="validation_error", category="validation", details=validation_details)
                 members.append(member)
             flag_filters[filter_name] = members
-    replay_before = live_state._runtime.replays.get(session_id)
-    event_before = replay_before.active_event_id if replay_before is not None else None
-    replacements_before = deepcopy(live_state._runtime.shader_replacements.get(session_id, []))
     controller = await replay_access._get_controller(session_id)
 
     roots, flat, by_event = await replay_access._load_action_index(session_id, controller=controller)
-
-    def _missing_event(event_id: int) -> envelope.Failure:
-        preserved = (replay_before is not None and live_state._runtime.replays.get(session_id) is replay_before
-                     and replay_before.active_event_id == event_before
-                     and live_state._runtime.shader_replacements.get(session_id, []) == replacements_before)
-        details = {"session_id": session_id, "event_id": event_id}
-        if preserved:
-            details.update({"failure_stage": "validate_event", "effects_attempted": False, "context_preserved": True})
-        return envelope.failure(f"Event not found: {event_id}", code="event_not_found",
-                                category="validation" if preserved else "runtime", details=details)
 
     def _parent_chain(event_id: int) -> List[Any]:
         chain: List[Any] = []
@@ -107,7 +110,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
         if requested is not None:
             node = by_event.get(int(requested))
             if node is None:
-                return _missing_event(int(requested))
+                replay_access._raise_event_not_found(session_id, int(requested))
             source = [node]
         include_markers = coerce._as_bool(args.get("include_markers"), True)
         include_drawcalls = coerce._as_bool(args.get("include_drawcalls"), True)
@@ -151,7 +154,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
         event_id = coerce._as_int(args["event_id"])
         action_obj = by_event.get(event_id)
         if action_obj is None:
-            return _missing_event(event_id)
+            replay_access._raise_event_not_found(session_id, event_id)
         payload = action_index._action_to_dict(action_obj, include_children=True)
         payload["parent_chain"] = [{"event_id": int(item.eventId), "name": action_index._action_name(item)} for item in _parent_chain(event_id)[:-1]]
         payload["marker_path"] = [str(item.customName) for item in _parent_chain(event_id) if getattr(item, "customName", "") and action_index._map_action_flags(item.flags).get("is_marker")] or None
@@ -163,6 +166,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
     if action == "get_parent_chain":
         coerce._require(args, "event_id")
         event_id = coerce._as_int(args["event_id"])
+        replay_access._require_action_event(session_id, event_id, by_event)
         chain = _parent_chain(event_id)
         out = [
             {
@@ -176,11 +180,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
 
     if action == "search_actions":
         max_results = coerce._as_int(args.get("max_results"), 200)
-        name_regex = query.get("name_regex")
-        pattern = re.compile(str(name_regex)) if name_regex else None
         name_contains = str(query.get("name_contains", "")).lower().strip()
-        event_id_min = query.get("event_id_min")
-        event_id_max = query.get("event_id_max")
         matches = []
         for action_obj in flat:
             eid = int(getattr(action_obj, "eventId", 0))
@@ -245,7 +245,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
         event_id = coerce._as_int(args["event_id"])
         action_obj = by_event.get(event_id)
         if action_obj is None:
-            return _missing_event(event_id)
+            replay_access._raise_event_not_found(session_id, event_id)
         callstack = []
         raw = getattr(action_obj, "callstack", None) or []
         for frame in raw:
@@ -264,6 +264,8 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
         coerce._require(args, "event_a", "event_b")
         event_a = coerce._as_int(args["event_a"])
         event_b = coerce._as_int(args["event_b"])
+        replay_access._require_action_event(session_id, event_a, by_event)
+        replay_access._require_action_event(session_id, event_b, by_event)
         snap_a = await live_state._pipeline_service.snapshot_pipeline(session_id, event_a, live_state._session_manager)
         snap_b = await live_state._pipeline_service.snapshot_pipeline(session_id, event_b, live_state._session_manager)
         a = snap_a.model_dump(mode="json")

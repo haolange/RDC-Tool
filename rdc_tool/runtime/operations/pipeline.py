@@ -18,6 +18,7 @@ from rdc_tool.runtime import (
 )
 
 
+@replay_access._guard_rejection
 async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
     coerce._require(args, "session_id")
     session_id = str(args["session_id"])
@@ -28,19 +29,21 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
         except CoreError as exc:
             return envelope.failure(str(exc), code=exc.code, category=exc.category,
                         details={**exc.details, "effects_attempted": False, "context_preserved": True})
+    detail = args.get("detail", "full")
+    sections = args.get("sections")
+    from rdc_tool.core.pipeline_service import PIPELINE_SECTIONS
+    fields = PIPELINE_SECTIONS
+    if action == "get_state" and (detail not in {"summary", "full"} or (sections is not None and
+            (not isinstance(sections, list) or any(not isinstance(k, str) or k not in fields for k in sections)))):
+        return envelope.failure("Invalid pipeline detail or sections", code="validation_error", category="validation",
+            details={"session_id": session_id, "failure_stage": "validate_pipeline_selection",
+                     "effects_attempted": False, "context_preserved": True})
     resolved_event_id = await replay_access._ensure_event(session_id, coerce._as_int(args["event_id"]) if args.get("event_id") is not None else None)
     assert live_state._pipeline_service is not None
     snapshot_dict: Dict[str, Any] = {}
     truth_meta: Dict[str, Any] = {}
     visual_target_payload: Dict[str, Any] = {}
-    detail = args.get("detail", "full")
-    sections = args.get("sections")
-    from rdc_tool.core.pipeline_service import PIPELINE_SECTIONS
-    fields = PIPELINE_SECTIONS
     if action == "get_state":
-        if detail not in {"summary", "full"} or (sections is not None and
-                (not isinstance(sections, list) or any(not isinstance(k, str) or k not in fields for k in sections))):
-            return envelope.failure("Invalid pipeline detail or sections", code="validation_error", category="validation")
         selected = sections if sections is not None else (list(fields) if detail == "full" else
             ["shaders", "output_targets", "topology", "viewports_scissors"])
         snapshot = await live_state._pipeline_service.snapshot_pipeline(

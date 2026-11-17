@@ -638,7 +638,8 @@ def _postprocess_context_snapshot(operation: str, args: Dict[str, Any], payload:
     artifacts = payload.get("artifacts") if isinstance(payload, dict) else []
     if isinstance(artifacts, list) and artifacts:
         _append_context_artifacts(artifacts, operation, context_id=context_id)
-    _sync_focus_from_args(operation, args, context_id=context_id)
+    if payload.get("ok"):
+        _sync_focus_from_args(operation, args, context_id=context_id)
 
 
 def _replacement_metadata_entries(session_id: str) -> List[Dict[str, Any]]:

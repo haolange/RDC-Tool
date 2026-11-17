@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from rdc_tool.runtime import coerce, envelope, vfs_tree
+from rdc_tool.runtime import coerce, envelope, replay_access, vfs_tree
 
 
+@replay_access._guard_rejection
 async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
     path = vfs_tree._vfs_normalize_path(args.get("path"))
     if args.get("projection") is not None and action != "ls":
@@ -16,6 +17,11 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
             category="validation",
             details={"tool_name": f"rd.vfs.{action}", "supported_projection": "tabular", "supported_actions": ["ls"]},
         )
+    parts = vfs_tree._vfs_parts(path)
+    if len(parts) > 1 and parts[0] == "draws":
+        session_id = vfs_tree._vfs_require_session_id(path, args)
+        event_id = vfs_tree._vfs_parse_index(parts[1], path=path)
+        await replay_access._validate_action_events(session_id, [event_id])
     if action == "ls":
         node = await vfs_tree._vfs_resolve_node(path, args)
         entries = list(node.get("entries") or [])

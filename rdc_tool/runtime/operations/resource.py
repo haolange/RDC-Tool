@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from rdc_tool.runtime import coerce, envelope, live_state, renderdoc_api, replay_access, texture_naming
 
 
+@replay_access._guard_rejection
 async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
     coerce._require(args, "session_id")
     session_id = str(args["session_id"])
@@ -110,16 +111,21 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
     if action == "get_descriptors":
         from rdc_tool.core.native_values import native_value
         coerce._require(args, "descriptor_store_id")
-        await replay_access._ensure_event(session_id, args.get("event_id"))
+        await replay_access._validate_action_events(session_id, [args.get("event_id")])
         stores = await renderdoc_api._offload(controller.GetDescriptorStores)
         store = next((item for item in stores if str(item.resourceId) == str(args["descriptor_store_id"])), None)
         if store is None:
-            return envelope.failure("Descriptor store not found", code="resource_not_found")
+            return envelope.failure("Descriptor store not found", code="resource_not_found", category="validation",
+                details={"session_id": session_id, "failure_stage": "resolve_descriptor_store",
+                         "effects_attempted": False, "context_preserved": True})
         first, count = int(args.get("first", 0)), int(args.get("count", 64))
         kind = str(args.get("type", "resource"))
         if first < 0 or not 1 <= count <= 1024 or first > store.descriptorCount or kind not in {"resource", "sampler"}:
-            return envelope.failure("Invalid descriptor range or type", code="validation_error")
+            return envelope.failure("Invalid descriptor range or type", code="validation_error", category="validation",
+                details={"session_id": session_id, "failure_stage": "validate_descriptor_range",
+                         "effects_attempted": False, "context_preserved": True})
         count = min(count, store.descriptorCount-first)
+        await replay_access._ensure_event(session_id, args.get("event_id"))
         if count == 0:
             return envelope.success(descriptors=[], total=store.descriptorCount, next_first=None)
         rd = renderdoc_api._get_rd()

@@ -3,7 +3,7 @@ import struct
 import pytest
 from rdc_tool.core.mesh_data import decode_format, vertex_input, input_obj
 from rdc_tool.core.replay_facts import post_transform_outputs
-from rdc_tool.runtime import renderdoc_api, replay_access, texture_export
+from rdc_tool.runtime import live_state, renderdoc_api, replay_access, texture_export
 from rdc_tool.runtime.operations import buffer as buffer_ops
 from rdc_tool.runtime.operations import mesh as mesh_ops
 
@@ -258,6 +258,12 @@ def test_post_transform_restart_candidate_and_nonindexed_rows_are_explicit():
 
 
 def test_buffer_missing_resource_reports_proven_pre_effect_rejection(monkeypatch):
+    monkeypatch.setattr(live_state._runtime, 'captures', {
+        'capture': live_state.CaptureFileHandle(capture_file_id='capture', file_path='fixture.rdc', read_only=True),
+    })
+    monkeypatch.setattr(live_state._runtime, 'replays', {
+        's': live_state.ReplayHandle(session_id='s', capture_file_id='capture', active_event_id=10),
+    })
     import asyncio
     def forbidden(*_): raise AssertionError('No frame mutation or data read before resource resolution')
     controller = NS(GetTextures=lambda: [], GetBuffers=lambda: [], GetResources=lambda: [],
@@ -317,6 +323,12 @@ def test_post_transform_runtime_window_keeps_raw_mapping_and_absolute_vertex_ide
 
 
 def test_post_transform_invalid_window_is_rejected_before_replay_effects(monkeypatch):
+    monkeypatch.setattr(live_state._runtime, 'captures', {
+        'capture': live_state.CaptureFileHandle(capture_file_id='capture', file_path='fixture.rdc', read_only=True),
+    })
+    monkeypatch.setattr(live_state._runtime, 'replays', {
+        's': live_state.ReplayHandle(session_id='s', capture_file_id='capture', active_event_id=10),
+    })
     import asyncio
     async def forbidden(*_): raise AssertionError('Invalid window must not acquire or move replay')
     monkeypatch.setattr(replay_access, '_get_controller', forbidden)
@@ -331,6 +343,12 @@ def test_post_transform_invalid_window_is_rejected_before_replay_effects(monkeyp
 
 @pytest.mark.parametrize('failure,stage', [('not_buffer','resolve_buffer'), ('range','validate_buffer_range'), ('budget','validate_buffer_read_budget')])
 def test_buffer_pre_read_rejections_preserve_context_without_data_read(monkeypatch, failure, stage):
+    monkeypatch.setattr(live_state._runtime, 'captures', {
+        'capture': live_state.CaptureFileHandle(capture_file_id='capture', file_path='fixture.rdc', read_only=True),
+    })
+    monkeypatch.setattr(live_state._runtime, 'replays', {
+        's': live_state.ReplayHandle(session_id='s', capture_file_id='capture', active_event_id=10),
+    })
     import asyncio
     def forbidden(*_): raise AssertionError('No data read or event mutation on pre-read rejection')
     length = 2097152 if failure == 'budget' else 16

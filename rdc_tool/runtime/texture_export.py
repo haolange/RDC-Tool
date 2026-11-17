@@ -163,6 +163,8 @@ async def _export_texture_file(args: Dict[str, Any]) -> envelope.Outcome:
                                 details={"session_id": session_id, "failure_stage": "validate_format",
                                          "effects_attempted": False, "context_preserved": True})
     event_id = coerce._as_int(args.get("event_id"), replay_access._active_event(session_id))
+    if args.get("event_id") is not None and event_id > 0:
+        await replay_access._validate_action_events(session_id, [event_id])
     if event_id <= 0:
         event_id = await replay_access._ensure_event(session_id, None)
     texture_id, texture_desc = await replay_access._get_texture_descriptor(

@@ -144,7 +144,8 @@ def test_debug_start_rejects_unsupported_pixel_history_and_restores_entry(monkey
     }))
     assert payload.ok is False
     assert payload.code == "pixel_history_unsupported_input_attachment"
-    assert payload.category == "capability"
+    assert payload.category == "runtime"
+    assert "context_preserved" not in payload.details
     assert payload.details["usage_event_id"] == 7
     assert payload.details["replay_state_restored"] is True
     assert payload.details["restored_event_id"] == active["event"] == 19
@@ -204,7 +205,8 @@ def test_debug_start_returns_structured_error_details(monkeypatch) -> None:
 
     assert payload.ok is False
     assert payload.code == "shader_debug_event_binding_unavailable"
-    assert payload.category == "capability"
+    assert payload.category == "runtime"
+    assert "context_preserved" not in payload.details
     assert payload.details["capability"] == "shader_debug"
     assert "resolved_context" in payload.details
     assert "pixel_history_summary" in payload.details
@@ -219,6 +221,12 @@ def test_debug_start_returns_structured_error_details(monkeypatch) -> None:
 def test_debug_start_rejects_unsupported_mode_with_structured_validation_error(monkeypatch) -> None:
     controller = _FakeController([])
     _install_debug_env(monkeypatch, controller, [])
+    monkeypatch.setattr(live_state._runtime, "replays", {
+        "sess_test": live_state.ReplayHandle(session_id="sess_test", capture_file_id="capture", active_event_id=11),
+    })
+    monkeypatch.setattr(live_state._runtime, "captures", {
+        "capture": live_state.CaptureFileHandle(capture_file_id="capture", file_path="fixture.rdc", read_only=True),
+    })
 
     payload = asyncio.run(
             shader_ops.dispatch(
@@ -242,6 +250,8 @@ def test_debug_start_rejects_unsupported_mode_with_structured_validation_error(m
     assert payload.ok is False
     assert payload.code == "validation_error"
     assert payload.category == "validation"
+    assert payload.details["effects_attempted"] is False
+    assert payload.details["context_preserved"] is True
     assert payload.details["failure_stage"] == "mode_validation"
     assert payload.details["failure_reason"] == "debug_mode_unsupported"
     assert payload.details["requested_mode"] == "compute"
@@ -573,6 +583,12 @@ def test_shader_compile_rejects_removed_ambiguous_source_parameter() -> None:
 @pytest.mark.parametrize("dispatch,action", [("shader", "get_debug_state"), ("debug", "step")])
 @pytest.mark.parametrize("owner", [None, "another-replay"])
 def test_invalid_debug_handle_rejected_before_any_native_effect(monkeypatch, dispatch, action, owner):
+    monkeypatch.setattr(live_state._runtime, "replays", {
+        "current-replay": live_state.ReplayHandle(session_id="current-replay", capture_file_id="capture", active_event_id=42),
+    })
+    monkeypatch.setattr(live_state._runtime, "captures", {
+        "capture": live_state.CaptureFileHandle(capture_file_id="capture", file_path="fixture.rdc", read_only=True),
+    })
     handles = {} if owner is None else {"trace-old": SimpleNamespace(session_id=owner)}
     monkeypatch.setattr(live_state._runtime, "shader_debugs", handles)
     async def forbidden(*args, **kwargs):

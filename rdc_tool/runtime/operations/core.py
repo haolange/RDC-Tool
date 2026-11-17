@@ -29,6 +29,7 @@ from rdc_tool.runtime_state import read_runtime_logs
 from rdc_tool.utils.artifact_store import ArtifactStore
 
 
+@replay_access._guard_rejection
 async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
     if action == "init":
         global_env = coerce._as_dict(args.get("global_env"), default={})

@@ -15,8 +15,22 @@ from rdc_tool.runtime_bootstrap import bootstrap_renderdoc_runtime
 
 
 async def _offload(fn: Any, *args: Any, **kwargs: Any) -> Any:
+    # Only these controller inventory calls are known to be read-only before
+    # event validation. Unknown calls cannot support a no-effects proof.
+    from rdc_tool.runtime import live_state
+    scope = live_state._CURRENT_EVENT_REJECTION_SCOPE.get()
+    if scope is not None and not getattr(fn, "_rdc_read_only_probe", False) and getattr(fn, "__name__", "") not in {
+        "GetRootActions", "GetTextures", "GetBuffers", "GetResources", "GetDescriptorStores",
+        "GetTargetShaderEncodings", "GetDisassemblyTargets",
+    }:
+        scope["effects_attempted"] = True
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, lambda: fn(*args, **kwargs))
+    try:
+        return await loop.run_in_executor(None, lambda: fn(*args, **kwargs))
+    except BaseException:
+        if scope is not None:
+            scope["effects_attempted"] = True
+        raise
 
 
 def _get_rd() -> Any:

@@ -24,6 +24,7 @@ from rdc_tool.runtime.operations import shader as shader_ops
 from rdc_tool.runtime.operations import texture as texture_ops
 
 
+@replay_access._guard_rejection
 async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
     coerce._require(args, "session_id")
     session_id = str(args["session_id"])
@@ -39,6 +40,8 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
         target = coerce._parse_target_like(args.get("target"))
         original_event = replay_access._active_event(session_id)
         event_id = coerce._as_int(args.get("event_id"), original_event)
+        if args.get("event_id") is not None and event_id > 0:
+            await replay_access._validate_action_events(session_id, [event_id])
         if event_id <= 0:
             event_id = await replay_access._ensure_event(session_id, None)
         explicit_target = target.get("texture_id") or target.get("textureId")

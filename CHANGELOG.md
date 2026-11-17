@@ -2,6 +2,7 @@
 
 ## 待发布 `Unreleased`
 
+- 统一请求拒绝的无副作用证明：事件缺失等前置拒绝仅在未尝试原生效果且入口回放及关联状态逐项不变时返回 `validation` 与保全字段；无法证明时返回 `runtime`。事件不存在的分类由 `not_found` 改为 `validation` 或 `runtime`；仅有未尝试 shader replacement 不再证明整个回放未变。
 - 新增 `rdc_tool/platform/` 平台层（host、locks、process、ipc、native、preview），每个契约一套共享逻辑加 Windows/POSIX 原语；平台包外禁止任何主机判断，由 `tests/test_platform_boundary.py` 守护。此前 HEAD 在 Linux 上无法 import。参考外部 PR #2 重新实现并署名。
 - 锁：进程内 mutex 与文件锁共用一个 monotonic deadline，文件锁只做非阻塞重试；daemon 启动等待 30 秒，持久化 context 状态与 snapshot 等待 10 秒并返回声明错误 `state_lock_timeout`。Windows 不再使用约 10 秒后静默放弃的 `LK_LOCK`。
 - 进程身份 `(pid, birth)` 成为唯一存活依据：PID 复用与僵尸判为已退出，不可读身份为 unknown，永不当作已退出、永不授权终止；POSIX daemon 领导独立进程组，停止时整组回收；内存不可测时报告 `null` 与原因而非固定 0。
@@ -14,7 +15,7 @@
 - `requires-python >=3.14`；CI 新增 ubuntu job；LFS filter 不再作用于捆绑 Python 的 `.pyd`/`.exe` 普通 blob（此前 LFS 检出总显示 105 个文件被修改，并阻塞正式打包的干净源码检查）。
 - 原生构建回执迁出 `binaries/windows/x64/manifest.runtime.json`，成为全目标共享的 `binaries/native_build.json`；`source` 新增必填 `repository` 与 `revision`（fork `haolange/renderdoc@dde8822`，已核验其两个 parent 即原记录的 base/upstream），主机输出角色改为平台中立的 `native_library`／`binding_module`。二进制未变，`receipt_sha256` 随回执内容变化。
 - 回执校验改为“存在即严格、缺席仅报告”：doctor 与发布脚本按场景所需目标（默认本主机 + 两个 Android helper）判定，结果新增 `targets` 与 `missing_targets`。
-- `rd.capture.open_replay` 在本地回放前检查 `LocalReplaySupport`：本主机运行库不能回放该 capture API 时返回 `local_replay_unsupported`（category `capability`），不再进入原生回放后才失败。
+- `rd.capture.open_replay` 在本地回放前检查 `LocalReplaySupport`：本主机运行库不能回放该 capture API 时返回 `local_replay_unsupported`，不再进入原生回放后才失败。
 - `package_runtime` 跨平台：`--host` 组装本主机运行目录；捆绑 Python 来自 `scripts/python-runtimes.json` 钉住的官方归档（Windows NuGet 3.14.3、Linux python-build-standalone 3.14.6），依赖按哈希锁 `scripts/runtime-dependencies.lock` 安装，不再复制开发机 `.venv`；新增 `--host-tools` 输入；运行目录中无归属的文件直接拒绝。解释器路径改由主机布局声明，manifest 的 `bundled_python` 只记录来源（Windows 清单按既有回执事实补齐，二进制未变）。
 - `bin/rdc-tool` 按主机选择捆绑解释器（Linux x86_64 → `binaries/linux/x64/python/bin/python3.14`，MSYS/Cygwin → Windows 解释器），未知主机与缺失解释器以退出码 2 明确拒绝；两个 launcher 清除 `PYTHONHOME`/`PYTHONPATH`、以 `python -s` 启动，不再导出任何 `RDC_TOOL_*` 变量。preview 几何 smoke 改经公开 launcher 运行，adb 只走主机工具契约，删除 PATH/SDK 搜索。
 - daemon 与 worker 子进程以 `python -P -m` 启动：工作目录里同名的 `rdc_tool` 包不再遮蔽安装本身（Linux 候选真实运行发现）。

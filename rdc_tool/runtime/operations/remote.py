@@ -21,10 +21,12 @@ from rdc_tool.runtime import (
     remote_session,
     remote_target,
     renderdoc_api,
+    replay_access,
 )
 from rdc_tool.timeout_policy import remote_connect_timeout_ms
 
 
+@replay_access._guard_rejection
 async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
     if action == "inspect_installation":
         if live_state._runtime_context_id() == "default":

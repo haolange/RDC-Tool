@@ -29,7 +29,7 @@ rdc-tool vfs tree --path /draws --depth 2 --max-nodes 2000 --format json
 
 JSON 是稳定协议。TSV 只是列表/导航输出的表格投影；嵌套的 context、管线、shader 与 preview 数据始终是 JSON。
 
-`rd.session.open_preview` 经 daemon 背后的 CLI 运行时打开 preview 窗口；`preview.display` 由 context/session 状态返回，用于检查几何。原生 preview 窗口只在 Windows 上提供；其他主机返回结构化错误 `preview_unsupported_platform`（`rd.core.get_capabilities` 报告 `preview_window.available=false`），无窗口观察 `rd.session.observe` 在所有主机可用。
+`rd.session.open_preview` 经 daemon 背后的 CLI 运行时打开 preview 窗口；`preview.display` 由 context/session 状态返回，用于检查几何，同步行为见[会话模型](session-model.md)。原生 preview 窗口只在 Windows 上提供；其他主机返回结构化错误 `preview_unsupported_platform`（`rd.core.get_capabilities` 报告 `preview_window.available=false`），无窗口观察 `rd.session.observe` 在所有主机可用。
 
 生成的参考文档是 [tool-reference.md](tool-reference.md)。高频 facade 命令有 `rdc-tool event`、`rdc-tool pipeline`、`rdc-tool shader`、`rdc-tool export`、`rdc-tool pixel` 与 `rdc-tool resource`，它们都分派到 canonical `rd.*` 工具，默认输出 JSON。
 

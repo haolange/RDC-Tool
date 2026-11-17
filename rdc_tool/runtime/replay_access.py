@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from copy import deepcopy
+from functools import wraps
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from rdc_tool.core.errors import CoreError
@@ -12,11 +14,173 @@ from rdc_tool.runtime import (
     action_index,
     coerce,
     context_records,
+    envelope,
     live_state,
     renderdoc_api,
     session_recovery,
     texture_naming,
 )
+
+
+def _debug_record_state() -> Dict[str, Any]:
+    return {
+        key: (id(handle), id(getattr(handle, "trace", None)), id(getattr(handle, "debugger", None)),
+              id(getattr(handle, "current_state", None)), deepcopy(getattr(handle, "variables", None)),
+              deepcopy(getattr(handle, "breakpoints", None)), getattr(handle, "stopped_reason", None))
+        for key, handle in live_state._runtime.shader_debugs.items()
+    }
+
+
+def _remote_record_state(handle: Any) -> Any:
+    if handle is None:
+        return None
+    return (id(handle), getattr(handle, "connected", None), getattr(handle, "host", None),
+            getattr(handle, "port", None), getattr(handle, "leased_session_id", None),
+            deepcopy(getattr(handle, "leased_session_ids", None)),
+            id(getattr(handle, "remote_server", None)), deepcopy(getattr(handle, "bootstrap", None)))
+
+
+def _capture_record_state(handle: Any) -> Any:
+    if handle is None:
+        return None
+    return (id(handle), getattr(handle, "capture_file_id", None), getattr(handle, "file_path", None),
+            getattr(handle, "read_only", None), getattr(handle, "driver", None),
+            getattr(handle, "opened_at_ms", None))
+
+
+def _preview_record_state(binding: Any) -> Any:
+    if binding is None:
+        return None
+    return (id(binding), id(getattr(binding, "host", None)), id(getattr(binding, "output", None)),
+            getattr(binding, "bound_session_id", None), getattr(binding, "bound_capture_file_id", None),
+            getattr(binding, "bound_event_id", None), getattr(binding, "backend", None),
+            getattr(binding, "last_error", None), deepcopy(getattr(binding, "display", None)))
+
+
+def _event_rejection_snapshot(session_id: str) -> Dict[str, Any]:
+    """Capture the operation's replay identity and its owned records before effects."""
+    ctx = live_state._runtime_context_id()
+    runtime = live_state._runtime
+    state = runtime.context_states.get(ctx) or {}
+    session_id = str(session_id or state.get("current_session_id") or "")
+    replay = runtime.replays.get(session_id)
+    try:
+        return {
+            "session_id": session_id,
+            "context_id": ctx,
+            "replay": replay,
+            "replay_values": (replay.capture_file_id, replay.frame_index, replay.active_event_id) if replay else None,
+            "capture": runtime.captures.get(replay.capture_file_id) if replay else None,
+            "capture_values": _capture_record_state(runtime.captures.get(replay.capture_file_id)) if replay else None,
+            "session": deepcopy((state.get("sessions") or {}).get(session_id)),
+            "current_session_id": state.get("current_session_id"),
+            "sessions": deepcopy(state.get("sessions") or {}),
+            "captures": deepcopy(state.get("captures") or {}),
+            "backend": state.get("backend"),
+            "context_snapshot": deepcopy(runtime.context_snapshots.get(ctx)),
+            "replacements": deepcopy(runtime.shader_replacements.get(session_id, [])),
+            "debug_handles": _debug_record_state(),
+            "remote": _remote_record_state(runtime.session_owned_remotes.get(session_id)),
+            "preview": _preview_record_state(runtime.previews.get(ctx)),
+            "effects_attempted": False,
+        }
+    except Exception:
+        # An unreadable snapshot is never a preservation proof.
+        return {"session_id": session_id, "context_id": ctx, "replay": None, "effects_attempted": True}
+
+
+def _event_rejection_preserved(scope: Dict[str, Any], session_id: str) -> bool:
+    runtime = live_state._runtime
+    replay = scope.get("replay")
+    state = runtime.context_states.get(scope.get("context_id")) or {}
+    try:
+        return bool(
+            replay is not None and not scope.get("effects_attempted")
+            and scope.get("session_id") == str(session_id)
+            and scope.get("context_id") == live_state._runtime_context_id()
+            and runtime.replays.get(session_id) is replay
+            and (replay.capture_file_id, replay.frame_index, replay.active_event_id) == scope["replay_values"]
+            and scope["capture"] is not None
+            and runtime.captures.get(replay.capture_file_id) is scope["capture"]
+            and _capture_record_state(runtime.captures.get(replay.capture_file_id)) == scope["capture_values"]
+            and (state.get("sessions") or {}).get(session_id) == scope["session"]
+            and state.get("current_session_id") == scope["current_session_id"]
+            and (state.get("sessions") or {}) == scope["sessions"]
+            and (state.get("captures") or {}) == scope["captures"]
+            and state.get("backend") == scope["backend"]
+            and runtime.context_snapshots.get(scope["context_id"]) == scope["context_snapshot"]
+            and runtime.shader_replacements.get(session_id, []) == scope["replacements"]
+            and _debug_record_state() == scope["debug_handles"]
+            and _remote_record_state(runtime.session_owned_remotes.get(session_id)) == scope["remote"]
+            and _preview_record_state(runtime.previews.get(scope["context_id"])) == scope["preview"]
+        )
+    except Exception:
+        return False
+
+
+def _event_rejection_failure(exc: CoreError, scope: Dict[str, Any], session_id: str) -> envelope.Failure:
+    details = dict(exc.details)
+    # A nested operation's proof is not proof for its caller, which may have
+    # already attempted an effect before entering the nested operation.
+    for key in ("failure_stage", "effects_attempted", "context_preserved"):
+        details.pop(key, None)
+    preserved = _event_rejection_preserved(scope, session_id)
+    if preserved:
+        details.update(failure_stage="validate_event", effects_attempted=False, context_preserved=True)
+    return envelope.failure(exc.message, code=exc.code, category="validation" if preserved else "runtime", details=details)
+
+
+def _qualify_claimed_preservation(outcome: envelope.Failure, scope: Dict[str, Any], session_id: str) -> envelope.Failure:
+    details = dict(outcome.details)
+    if details.get("effects_attempted") is not False and details.get("context_preserved") is not True:
+        return (outcome if outcome.category == "runtime" else
+                envelope.failure(outcome.message, code=outcome.code, category="runtime", details=details))
+    if (details.get("effects_attempted") is False and details.get("context_preserved") is True
+            and details.get("failure_stage") and _event_rejection_preserved(scope, session_id)):
+        return envelope.failure(outcome.message, code=outcome.code, category="validation", details=details)
+    if details.get("effects_attempted") is False:
+        details.pop("effects_attempted")
+    if details.get("context_preserved") is True:
+        details.pop("context_preserved")
+    return envelope.failure(outcome.message, code=outcome.code, category="runtime", details=details)
+
+
+def _guard_rejection(dispatch):
+    """Let an operation qualify rejection proofs using the shared snapshot."""
+    @wraps(dispatch)
+    async def guarded(action: str, args: Dict[str, Any]) -> envelope.Outcome:
+        scope = live_state._CURRENT_EVENT_REJECTION_SCOPE.get()
+        parent_scope = scope
+        session_id = str(args.get("session_id") or (scope or {}).get("session_id") or "")
+        token = None
+        if scope is None or scope.get("session_id") != session_id:
+            scope = _event_rejection_snapshot(session_id)
+            session_id = scope["session_id"]
+            token = live_state._CURRENT_EVENT_REJECTION_SCOPE.set(scope)
+        try:
+            try:
+                outcome = await dispatch(action, args)
+                if isinstance(outcome, envelope.Failure):
+                    return _qualify_claimed_preservation(outcome, scope, session_id)
+                return outcome
+            except CoreError as exc:
+                if exc.code == "event_not_found":
+                    return _event_rejection_failure(exc, scope, session_id)
+                return _qualify_claimed_preservation(
+                    envelope.failure(exc.message, code=exc.code, category=exc.category, details=exc.details),
+                    scope, session_id)
+        finally:
+            if token is not None:
+                if parent_scope is not None and scope.get("effects_attempted"):
+                    parent_scope["effects_attempted"] = True
+                live_state._CURRENT_EVENT_REJECTION_SCOPE.reset(token)
+    return guarded
+
+
+def _event_effect_attempted() -> None:
+    scope = live_state._CURRENT_EVENT_REJECTION_SCOPE.get()
+    if scope is not None:
+        scope["effects_attempted"] = True
 
 
 async def _ensure_live_session(session_id: str) -> live_state.ReplayHandle:
@@ -33,6 +197,7 @@ async def _ensure_live_session(session_id: str) -> live_state.ReplayHandle:
             return replay
         except SessionError:
             pass
+    _event_effect_attempted()
     await session_recovery._recover_single_session_from_state(live_state._runtime_context_id(), str(session_id))
     replay = live_state._runtime.replays.get(str(session_id))
     if replay is None:
@@ -84,6 +249,7 @@ async def _check_replay_operation_health(controller: Any, session_id: str, opera
             raise RuntimeError("Replay fatal-status probe returned no valid ResultDetails")
         return status, bool(status.OK())
 
+    probe._rdc_read_only_probe = True
     details = {"session_id": session_id, "operation": operation, "failure_stage": stage,
                "source_layer": "renderdoc", "recovery_required": True}
     try:
@@ -145,6 +311,15 @@ def _require_action_event(session_id: str, event_id: int, by_event: Dict[int, An
     return resolved
 
 
+async def _validate_action_events(session_id: str, event_ids: Sequence[Any]) -> None:
+    requested = [int(event_id) for event_id in event_ids if event_id is not None]
+    if not requested:
+        return
+    _, _, by_event = await _load_action_index(session_id)
+    for event_id in requested:
+        _require_action_event(session_id, event_id, by_event)
+
+
 def _store_active_event(session_id: str, event_id: int, *, context_id: Optional[str] = None) -> None:
     resolved = int(event_id or 0)
     if session_id in live_state._runtime.replays:
@@ -177,9 +352,11 @@ async def _ensure_event(session_id: str, event_id: Optional[int]) -> int:
     else:
         resolved_event = _require_action_event(session_id, int(event_id), by_event)
     if resolved_event > 0:
+        _event_effect_attempted()
         await renderdoc_api._offload(controller.SetFrameEvent, resolved_event, True)
         _store_active_event(session_id, resolved_event)
     elif should_repair_state:
+        _event_effect_attempted()
         _store_active_event(session_id, resolved_event)
     return resolved_event
 
