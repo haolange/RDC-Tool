@@ -3512,22 +3512,20 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                    'See input_schema for constraints.',
   'returns_raw': 'ok (bool)<br>data (dict): {source, files[{filename, contents}], source_available, '
                  'source_encoding, entry_point, compile_flags, source_debug_information, fallback_tool?, '
-                 'fallback_args?, edit_plan, failure_stage?, failure_reason?, shader_id, stage, '
-                 'resolved_event_id}; files preserve native order and captured text without reading host paths. '
-                 'source is the first (entry) file contents; source-level debugging availability is independent. '
-                 'Unknown source encoding, source entry and compile flags remain null. '
-                 'When entry source contents are unavailable, returns ok=true '
-                 'with source_available=false and a format-aware fallback. SPIR-V may recommend '
-                 "`rd.shader.get_disassembly` with target='SPIR-V ASM' and "
-                 "source_encoding='spirvasm'; the current edit_plan describes absent source, "
-                 "so inspect the fallback result before editing. DXIL/DXBC recommends read-only disassembly and/or "
-                 '`rd.shader.extract_binary` instead of treating disassembly text as replacement '
-                 'source. For absent captured source, edit_plan.full_source_replacement reports whether the live '
-                 'backend accepts separately supplied full HLSL/GLSL and its requirements; this does not make '
-                 'disassembly editable or establish equivalent shader semantics. '
-                 'Missing native metadata reports shader_source_metadata_unavailable; native read failure '
-                 'reports shader_source_lookup_failed instead of successful source absence. Neither path reads '
-                 'files from the host filesystem.<br>artifacts (list)<br>error (dict|null): invalid_shader_stage is rejected before any replay effect, with effects_attempted=false and context_preserved=true. An unbound shader at the requested event returns shader_binding_lookup_failed; the original replay event is restored and reported as replay_state_restored/restored_event_id only after native restoration succeeds. A failed restoration reports shader_inspection_recovery_failed and requires controlled recovery.<br>meta (dict)<br>projections '
+                 'fallback_args?, edit_plan, failure_stage?, failure_reason?, shader_id, stage, resolved_event_id}. '
+                 'files preserve native order and text; source is the first entry; no host files are read. '
+                 'Source debugging is independent; unknown encoding, entry or flags are null. '
+                 'If source is unavailable, ok=true, source_available=false and fallback is format-aware: '
+                 "SPIR-V may offer `rd.shader.get_disassembly` target='SPIR-V ASM', source_encoding='spirvasm'; "
+                 'inspect its edit_plan. DXIL/DXBC disassembly is read-only; `rd.shader.extract_binary` returns '
+                 'the container. edit_plan.full_source_replacement separately reports support for supplied '
+                 'HLSL/GLSL; it does not imply editable disassembly or matching semantics. '
+                 'Missing metadata: shader_source_metadata_unavailable; native read failure: '
+                 'shader_source_lookup_failed.<br>artifacts (list)<br>error (dict|null): invalid_shader_stage is '
+                 'rejected before replay with effects_attempted=false and context_preserved=true. An unbound '
+                 'shader returns shader_binding_lookup_failed; replay_state_restored/restored_event_id are '
+                 'reported only after native restoration succeeds; failure returns shader_inspection_recovery_failed.'
+                 '<br>meta (dict)<br>projections '
                  '(dict, 可选)'
                  '<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
   'param_names': ['session_id', 'shader_id', 'prefer_original', 'event_id', 'stage'],
