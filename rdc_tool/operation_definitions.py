@@ -3522,7 +3522,10 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                  "source_encoding='spirvasm'; the current edit_plan describes absent source, "
                  "so inspect the fallback result before editing. DXIL/DXBC recommends read-only disassembly and/or "
                  '`rd.shader.extract_binary` instead of treating disassembly text as replacement '
-                 'source. Missing native metadata reports shader_source_metadata_unavailable; native read failure '
+                 'source. For absent captured source, edit_plan.full_source_replacement reports whether the live '
+                 'backend accepts separately supplied full HLSL/GLSL and its requirements; this does not make '
+                 'disassembly editable or establish equivalent shader semantics. '
+                 'Missing native metadata reports shader_source_metadata_unavailable; native read failure '
                  'reports shader_source_lookup_failed instead of successful source absence. Neither path reads '
                  'files from the host filesystem.<br>artifacts (list)<br>error (dict|null): invalid_shader_stage is rejected before any replay effect, with effects_attempted=false and context_preserved=true. An unbound shader at the requested event returns shader_binding_lookup_failed; the original replay event is restored and reported as replay_state_restored/restored_event_id only after native restoration succeeds. A failed restoration reports shader_inspection_recovery_failed and requires controlled recovery.<br>meta (dict)<br>projections '
                  '(dict, 可选)'

@@ -613,6 +613,27 @@ def test_get_source_reports_dxil_readonly_fallback_when_debug_source_unavailable
     assert "rd.shader.extract_binary" in payload.data['edit_plan']["fallback_tools"]
 
 
+def test_missing_captured_dxil_source_distinguishes_full_source_replacement(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Controller(_EncodingController):
+        def GetTargetShaderEncodings(self) -> list[str]:
+            return ["DXIL", "HLSL"]
+
+    _install_shader_replace_env(monkeypatch, Controller("DXIL"))
+    live_state._session_manager = _FakeSessionManager()
+    payload = asyncio.run(shader_ops.dispatch("get_source", {
+        "session_id": "sess_demo", "event_id": 101, "shader_id": "ResourceId::77",
+    }))
+
+    assert payload.ok is True
+    plan = payload.data["edit_plan"]
+    assert plan["can_replace"] is False
+    replacement = plan["full_source_replacement"]
+    assert replacement["available"] is True
+    assert replacement["supported_text_encodings"] == ["hlsl"]
+    assert replacement["allowed_edit_inputs"] == ["source_text", "source_path"]
+    assert "matching semantics" in replacement["note"]
+
+
 def test_remote_replacement_validation_uses_live_outputs_without_recovery(monkeypatch: pytest.MonkeyPatch) -> None:
     class _Controller:
         def __init__(self) -> None:

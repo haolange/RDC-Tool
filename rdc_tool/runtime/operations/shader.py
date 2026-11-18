@@ -1374,6 +1374,31 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
         if source is not None:
             return envelope.success(**common, edit_plan=shader_patches._shader_edit_plan(source_encoding=debug_encoding, source=source))
         edit_plan = shader_patches._shader_edit_plan(source_encoding=source_encoding, source_available=False)
+        replacement_supported, replacement_reason = truth_matrix._session_replace_capability(session_id, controller)
+        try:
+            supported_encodings = await renderdoc_api._offload(truth_matrix._supported_source_encoding_names, controller)
+        except Exception as exc:
+            full_source_replacement = {
+                "available": None,
+                "reason": f"Could not query target shader encodings: {exc}",
+            }
+        else:
+            text_encodings = [name for name in supported_encodings if name in {"hlsl", "glsl"}]
+            full_source_replacement = {
+                "available": bool(replacement_supported and text_encodings),
+                "runtime_replacement_supported": replacement_supported,
+                "runtime_replacement_reason": replacement_reason,
+                "supported_source_encodings": supported_encodings,
+                "supported_text_encodings": text_encodings,
+                "input_kind": "user_full_source",
+                "allowed_edit_inputs": ["source_text", "source_path"],
+                "recommended_next_tool": "rd.shader.edit_and_replace" if replacement_supported and text_encodings else None,
+                "note": (
+                    "Full replacement requires separately supplied source; the captured disassembly remains read-only. "
+                    "A single-contribution comparison requires matching semantics and baseline validation."
+                ),
+            }
+        edit_plan["full_source_replacement"] = full_source_replacement
         fallback_args = shader_patches._shader_source_fallback_args(
             session_id=session_id, event_id=int(event_id), stage=stage_name,
             shader_id=resolved_shader_id, source_encoding=source_encoding,
