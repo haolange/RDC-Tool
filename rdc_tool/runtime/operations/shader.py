@@ -858,6 +858,15 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
         shader_debug_id = _new_id("sdbg")
         resolved_context = dict(last_context)
         resolved_event_id = int(resolved_context.get("event_id") or event_id)
+        try:
+            api_properties = await renderdoc_api._offload(controller.GetAPIProperties)
+            debug_qualification = None
+            if api_properties.pipelineType == rd.GraphicsAPI.D3D12:
+                d3d12_state = await renderdoc_api._offload(controller.GetD3D12PipelineState)
+                debug_qualification = shader_debug._coarse_pixel_debug_qualification(d3d12_state.rasterizer.state)
+        except Exception:
+            await renderdoc_api._offload(controller.FreeTrace, trace)
+            raise
         live_state._runtime.shader_debugs[shader_debug_id] = live_state.ShaderDebugHandle(
             shader_debug_id=shader_debug_id,
             session_id=session_id,
@@ -869,6 +878,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
             resolved_context=resolved_context,
             selected_target_source=last_target_source,
             pixel_history_summary=dict(last_history_summary),
+            debug_qualification=debug_qualification,
         )
         return envelope.success(
             shader_debug_id=shader_debug_id,
@@ -877,6 +887,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
             resolved_event_id=resolved_event_id,
             selected_target_source=last_target_source,
             pixel_history_summary=last_history_summary,
+            **({"debug_qualification": debug_qualification} if debug_qualification else {}),
         )
 
     if action in {"get_debug_state", "list_replacements", "revert_replacement", "edit_and_replace", "get_messages", "extract_binary", "get_source", "list_entry_points", "get_bindpoint_mapping", "get_constant_block_layout", "get_constant_buffer_contents", "get_reflection", "get_disassembly"}:
@@ -892,6 +903,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
             resolved_context=handle.resolved_context,
             selected_target_source=handle.selected_target_source,
             pixel_history_summary=handle.pixel_history_summary,
+            **({"debug_qualification": handle.debug_qualification} if handle.debug_qualification else {}),
         )
 
     if action == "list_replacements":

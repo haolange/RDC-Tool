@@ -1,7 +1,7 @@
 {
   "schema_version": "1",
   "source_path": "rdc_tool/operation_definitions.py",
-  "fingerprint": "20281df5b5f0c62aa3037c1ff3c382ed8ebe685e79533950b4405efe06164298",
+  "fingerprint": "a682aeff0e47a1d903efc3ac0971e85fe08a366952d2a3db0cd227f290532f7e",
   "tool_count": 129,
   "groups": {
     "3.7，缓冲区与网格数据访问 (Buffer & Mesh Data Access)": 6,
@@ -1199,9 +1199,9 @@
     {
       "name": "rd.debug.get_variables",
       "group": "3.9，Shader Debugger 与像素/顶点级调试 (Shader Debugging)",
-      "description": "读取原生 trace 输入和当前调试步的累积可变变量；输入标记 variable_origin=trace_input，可变变量按 before/after 更新。值保留原生类型/数值视图，结构成员可限定展开深度。",
+      "description": "读取原生 trace 输入和当前调试步的累积可变变量；输入标记 variable_origin=trace_input，可变变量按 before/after 更新。值保留原生类型/数值视图，结构成员可限定展开深度。D3D12 请求粗着色时附带 debug_qualification，说明实际调用位置与有效速率未知。",
       "parameter_raw": "session_id (string): session_id (str)<br>shader_debug_id (string): shader_debug_id (str), current owning replay only; stale/foreign handles fail before native effects<br>name_filter (string, optional): name_filter (str, 可选): literal name substring<br>expand_depth (integer, optional): expand_depth (int, 可选, 默认 2)<br>max_variables (integer, optional): max_variables (int, 可选, 默认 2048)",
-      "returns_raw": "ok (bool)<br>data (dict): {variables}<br>artifacts (list)<br>error (dict|null)<br>meta (dict)<br>projections (dict, 可选)",
+      "returns_raw": "ok (bool)<br>data (dict): {variables, debug_qualification?}<br>artifacts (list)<br>error (dict|null)<br>meta (dict)<br>projections (dict, 可选)",
       "param_names": [
         "session_id",
         "shader_debug_id",
@@ -5127,7 +5127,7 @@
       "group": "3.9，Shader Debugger 与像素/顶点级调试 (Shader Debugging)",
       "description": "启动事件绑定的 pixel shader debugger。未指定 target 时按当前 Event 的输出目标查找；目标没有本 Event 的像素历史命中时，不接受 native debugger 句柄为成功。remote replay 会先读取 capability matrix。",
       "parameter_raw": "session_id (string): session_id (str)<br>mode (string, optional): mode (str, 可选, 默认 'pixel'): 当前正式支持 `pixel`；传入其他 mode 会返回结构化 `validation_error`，并在 details 中附带 `supported_modes` / `requested_mode` / `failure_stage` / `failure_reason`<br>event_id (integer, optional): event_id (int, 可选): 缺省为当前 active event<br>params (object): params (dict): pixel 模式下使用 {x, y, sample?, target?, view?, primitive?}；显式 target 只验证该目标，不回退到其他输出；缺省时使用当前 Event 输出，找不到时才尝试默认目标<br>timeout_ms (integer, optional): timeout_ms (int, 可选, 默认 10000)<br>context_id (string, optional): context_id (str, optional): choose the context to use; defaults to the current daemon context",
-      "returns_raw": "ok (bool)<br>data (dict): {shader_debug_id, initial_state, resolved_context, resolved_event_id, pixel_history_summary, selected_target_source, failure_stage, failure_reason, attempts}<br>artifacts (list)<br>error (dict|null): remote backend/session 明确不支持时，优先返回 capability-style 错误，而不是等到 trace 创建后才报 `debugger_handle_missing`. When a target requires an unsupported Vulkan input-attachment Pixel History, returns pixel_history_unsupported_input_attachment after replay position restoration.<br>meta (dict)<br>projections (dict, 可选)<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.",
+      "returns_raw": "ok (bool)<br>data (dict): {shader_debug_id, initial_state, resolved_context, debug_qualification?, resolved_event_id, pixel_history_summary, selected_target_source, failure_stage, failure_reason, attempts}<br>artifacts (list)<br>error (dict|null): remote backend/session 明确不支持时，优先返回 capability-style 错误，而不是等到 trace 创建后才报 `debugger_handle_missing`. When a target requires an unsupported Vulkan input-attachment Pixel History, returns pixel_history_unsupported_input_attachment after replay position restoration.<br>meta (dict)<br>projections (dict, 可选)<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.",
       "param_names": [
         "session_id",
         "mode",
@@ -5671,7 +5671,7 @@
       "group": "3.9，Shader Debugger 与像素/顶点级调试 (Shader Debugging)",
       "description": "获取原生 debugger 状态。PC 为动态 trace stepIndex；next_instruction 为原生下一指令，非 SPIR-V ID。summary 返回原生稀疏位置映射（未知为 null），其 1-based disassembly_line 仅属于 RenderDoc debug disassembly，不等于 raw SPIR-V ASM 行号。full 另含最多64项原生 trace 输入及当前 mutable 变量（成员深度2）和64层原生调用栈及截断计数；输入标记 variable_origin=trace_input；不伪造寄存器、SSA 或未暴露变量。",
       "parameter_raw": "session_id (string): session_id (str)<br>shader_debug_id (string): shader_debug_id (str), current owning replay only; stale/foreign handles fail before native effects<br>detail_level (string, optional): detail_level (str, 可选, 默认 'full'): 'summary' | 'full'<br>event_id (integer, optional): Replay event; omitted uses the owning session current event.",
-      "returns_raw": "ok (bool)<br>data (dict): {state}<br>artifacts (list)<br>error (dict|null)<br>meta (dict)<br>projections (dict, 可选)<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.",
+      "returns_raw": "ok (bool)<br>data (dict): {state, debug_qualification?}<br>artifacts (list)<br>error (dict|null)<br>meta (dict)<br>projections (dict, 可选)<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.",
       "param_names": [
         "session_id",
         "shader_debug_id",

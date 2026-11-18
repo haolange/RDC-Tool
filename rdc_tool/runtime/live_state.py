@@ -128,6 +128,7 @@ class ShaderDebugHandle:
     resolved_context: Dict[str, Any] = field(default_factory=dict)
     selected_target_source: str = ""
     pixel_history_summary: Dict[str, Any] = field(default_factory=dict)
+    debug_qualification: Optional[Dict[str, Any]] = None
     pending_states: deque[Any] = field(default_factory=deque)
     variables: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     breakpoints: List[Dict[str, Any]] = field(default_factory=list)

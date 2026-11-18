@@ -49,6 +49,9 @@ class _FakeController:
     def GetPipelineState(self) -> object:
         return object()
 
+    def GetAPIProperties(self) -> object:
+        return SimpleNamespace(pipelineType="other")
+
     def DebugPixel(self, x: int, y: int, inputs: object) -> _FakeTrace | None:
         self.debug_calls.append(
             {
@@ -116,9 +119,33 @@ def _install_debug_env(monkeypatch, controller: _FakeController, history_items: 
     monkeypatch.setattr(replay_facts, "pixel_history_input_attachment_conflict", lambda *args: None)
     monkeypatch.setattr(replay_access, "_output_target_resource_ids", lambda session_id, event_id: asyncio.sleep(0, result=[]))
     monkeypatch.setattr(pixel_trace, "_refresh_pixel_context", lambda session_id, x, y: asyncio.sleep(0))
-    monkeypatch.setattr(renderdoc_api, "_get_rd", lambda: SimpleNamespace(DebugPixelInputs=_FakeDebugInputs))
+    monkeypatch.setattr(renderdoc_api, "_get_rd", lambda: SimpleNamespace(
+        DebugPixelInputs=_FakeDebugInputs, GraphicsAPI=SimpleNamespace(D3D12="d3d12")))
     monkeypatch.setattr(live_state, "_session_manager", SimpleNamespace(get_output=lambda session_id: _FakeOutput()))
     live_state._runtime.shader_debugs.clear()
+
+
+def test_coarse_d3d12_pixel_debug_results_carry_native_trace_qualification(monkeypatch) -> None:
+    controller = _FakeController([_FakeTrace(debugger=object())])
+    _install_debug_env(monkeypatch, controller, [_FakeHistoryItem(11, 9)])
+    controller.GetAPIProperties = lambda: SimpleNamespace(pipelineType="d3d12")
+    controller.GetD3D12PipelineState = lambda: SimpleNamespace(
+        rasterizer=SimpleNamespace(state=SimpleNamespace(baseShadingRate=(2, 2))))
+
+    started = asyncio.run(shader_ops.dispatch("debug_start", {
+        "session_id": "sess_test", "event_id": 11,
+        "params": {"x": 3, "y": 4, "primitive": 9, "target": {"texture_id": "ResourceId::77"}},
+    }))
+    assert started.ok is True
+    qualification = started.data["debug_qualification"]
+    assert qualification["requested_base_shading_rate"] == [2, 2]
+    assert qualification["effective_shading_rate"] is None
+    assert "Pixel History" in qualification["reason"]
+    variables = asyncio.run(debug_ops.dispatch("get_variables", {
+        "session_id": "sess_test", "shader_debug_id": started.data["shader_debug_id"],
+    }))
+    assert variables.ok is True
+    assert variables.data["debug_qualification"] == qualification
 
 
 def test_debug_start_rejects_unsupported_pixel_history_and_restores_entry(monkeypatch) -> None:

@@ -127,7 +127,8 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
 
         variables = [shader_debug._bounded_debug_variable(variable, expand_depth)
                      for name, variable in shader_debug._shader_debug_variable_snapshot(handle).items() if name_filter in name]
-        return envelope.success(variables=variables[:max_variables], truncated=len(variables) > max_variables)
+        return envelope.success(variables=variables[:max_variables], truncated=len(variables) > max_variables,
+                                **({"debug_qualification": handle.debug_qualification} if handle.debug_qualification else {}))
     if action == "evaluate_expression":
         coerce._require(args, "expression")
         expr = str(args["expression"])

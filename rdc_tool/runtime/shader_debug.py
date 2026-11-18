@@ -8,6 +8,23 @@ from rdc_tool.core.errors import CoreError
 from rdc_tool.runtime import live_state, shader_values
 
 
+def _coarse_pixel_debug_qualification(rasterizer: Any) -> Optional[Dict[str, Any]]:
+    rate = [int(component) for component in rasterizer.baseShadingRate]
+    if max(rate) <= 1:
+        return None
+    return {
+        "status": "unverified",
+        "requested_base_shading_rate": rate,
+        "effective_shading_rate": None,
+        "reason": (
+            "D3D12 requests coarse shading. Native pixel-debug inputs can be pixel-centred and "
+            "the debug output can differ from the fragment recorded by Pixel History. "
+            "The effective rate and actual invocation position are not established; compare "
+            "the completed debug output with Pixel History before attributing trace values."
+        ),
+    }
+
+
 def _require_shader_debug_handle(session_id: str, debug_id: str) -> live_state.ShaderDebugHandle:
     handle = live_state._runtime.shader_debugs.get(debug_id)
     reason = "unknown_handle" if handle is None else "session_mismatch" if handle.session_id != session_id else ""

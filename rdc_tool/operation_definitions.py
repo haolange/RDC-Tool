@@ -729,13 +729,13 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'path_inputs': []},
  {'name': 'rd.debug.get_variables',
   'group': '3.9，Shader Debugger 与像素/顶点级调试 (Shader Debugging)',
-  'description': '读取原生 trace 输入和当前调试步的累积可变变量；输入标记 variable_origin=trace_input，可变变量按 before/after 更新。值保留原生类型/数值视图，结构成员可限定展开深度。',
+  'description': '读取原生 trace 输入和当前调试步的累积可变变量；输入标记 variable_origin=trace_input，可变变量按 before/after 更新。值保留原生类型/数值视图，结构成员可限定展开深度。D3D12 请求粗着色时附带 debug_qualification，说明实际调用位置与有效速率未知。',
   'parameter_raw': 'session_id (string): session_id (str)<br>shader_debug_id (string): '
                    'shader_debug_id (str), current owning replay only; stale/foreign handles fail before native effects<br>name_filter (string, optional): name_filter (str, '
                    '可选): literal name substring<br>expand_depth (integer, optional): expand_depth (int, '
                    '可选, 默认 2)<br>max_variables (integer, optional): max_variables (int, 可选, 默认 '
                    '2048)',
-  'returns_raw': 'ok (bool)<br>data (dict): {variables}<br>artifacts (list)<br>error '
+  'returns_raw': 'ok (bool)<br>data (dict): {variables, debug_qualification?}<br>artifacts (list)<br>error '
                  '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
   'param_names': ['session_id', 'shader_debug_id', 'name_filter', 'expand_depth', 'max_variables'],
   'prerequisites': [{'requires': 'session_id',
@@ -3000,7 +3000,7 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                    'target?, view?, primitive?}；显式 target 只验证该目标，不回退到其他输出；缺省时使用当前 Event 输出，找不到时才尝试默认目标<br>timeout_ms (integer, optional): timeout_ms '
                    '(int, 可选, 默认 10000)<br>context_id (string, optional): context_id (str, '
                    'optional): choose the context to use; defaults to the current daemon context',
-  'returns_raw': 'ok (bool)<br>data (dict): {shader_debug_id, initial_state, resolved_context, '
+  'returns_raw': 'ok (bool)<br>data (dict): {shader_debug_id, initial_state, resolved_context, debug_qualification?, '
                  'resolved_event_id, pixel_history_summary, selected_target_source, failure_stage, '
                  'failure_reason, attempts}<br>artifacts (list)<br>error (dict|null): remote '
                  'backend/session 明确不支持时，优先返回 capability-style 错误，而不是等到 trace 创建后才报 '
@@ -3332,7 +3332,7 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                    'shader_debug_id (str), current owning replay only; stale/foreign handles fail before native effects<br>detail_level (string, optional): detail_level (str, '
                    "可选, 默认 'full'): 'summary' | 'full'<br>event_id (integer, optional): Replay "
                    'event; omitted uses the owning session current event.',
-  'returns_raw': 'ok (bool)<br>data (dict): {state}<br>artifacts (list)<br>error '
+  'returns_raw': 'ok (bool)<br>data (dict): {state, debug_qualification?}<br>artifacts (list)<br>error '
                  '(dict|null)<br>meta (dict)<br>projections (dict, 可选)'
                  '<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
   'param_names': ['session_id', 'shader_debug_id', 'detail_level', 'event_id'],
