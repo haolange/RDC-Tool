@@ -329,7 +329,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
                         "context_preserved": True,
                     },
                 )
-    inspection_original_event = replay_access._active_event(session_id) if action in {"get_source", "get_constant_buffer_contents", "debug_start"} else 0
+    inspection_original_event = replay_access._active_event(session_id) if action in {"get_source", "get_constant_buffer_contents", "debug_start", "edit_and_replace"} else 0
     event_id = await replay_access._ensure_event(session_id, args.get("event_id"))
     pipe = await renderdoc_api._offload(controller.GetPipelineState)
 
@@ -1068,6 +1068,25 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
             }
             if patch_result.error_details:
                 error_details.update(dict(patch_result.error_details))
+            if (patch_result.error_code == "shader_patch_op_unsupported_for_encoding"
+                    and error_details.get("failure_stage") == "validate_edit_plan"
+                    and error_details.get("failure_reason") == "source_encoding_not_safely_replaceable"
+                    and error_details.get("replacement_attempted") is False
+                    and inspection_original_event > 0):
+                error_details.pop("context_preserved", None)
+                try:
+                    restored_event = await replay_access._ensure_event(session_id, inspection_original_event)
+                    if restored_event != inspection_original_event or replay_access._active_event(session_id) != inspection_original_event:
+                        raise RuntimeError("Replay event did not match the original event after restoration")
+                except Exception as restore_error:
+                    return envelope.failure(
+                        f"Failed to restore replay after shader edit was rejected: {restore_error}",
+                        code="shader_edit_recovery_failed", category="runtime",
+                        details={**error_details, "context_id": live_state._runtime_context_id(),
+                                 "original_error_code": patch_result.error_code, "replay_state_restored": False},
+                    )
+                error_details.update(context_id=live_state._runtime_context_id(), replay_state_restored=True,
+                                     restored_event_id=inspection_original_event)
             return envelope.failure(
                 patch_result.error_message or "Shader replacement failed",
                 code=patch_result.error_code or "shader_replace_failed",

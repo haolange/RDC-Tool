@@ -89,13 +89,19 @@ def _event_rejection_snapshot(session_id: str) -> Dict[str, Any]:
         return {"session_id": session_id, "context_id": ctx, "replay": None, "effects_attempted": True}
 
 
-def _event_rejection_preserved(scope: Dict[str, Any], session_id: str) -> bool:
+def _event_rejection_preserved(scope: Dict[str, Any], session_id: str, *, restored_event: bool = False) -> bool:
     runtime = live_state._runtime
     replay = scope.get("replay")
     state = runtime.context_states.get(scope.get("context_id")) or {}
+    def material(record: Any) -> Any:
+        if restored_event and isinstance(record, dict):
+            return {key: value for key, value in record.items() if key != "updated_at_ms"}
+        return record
     try:
+        sessions = state.get("sessions") or {}
+        original_sessions = scope["sessions"]
         return bool(
-            replay is not None and not scope.get("effects_attempted")
+            replay is not None and (restored_event or not scope.get("effects_attempted"))
             and scope.get("session_id") == str(session_id)
             and scope.get("context_id") == live_state._runtime_context_id()
             and runtime.replays.get(session_id) is replay
@@ -103,12 +109,14 @@ def _event_rejection_preserved(scope: Dict[str, Any], session_id: str) -> bool:
             and scope["capture"] is not None
             and runtime.captures.get(replay.capture_file_id) is scope["capture"]
             and _capture_record_state(runtime.captures.get(replay.capture_file_id)) == scope["capture_values"]
-            and (state.get("sessions") or {}).get(session_id) == scope["session"]
+            and material(sessions.get(session_id)) == material(scope["session"])
             and state.get("current_session_id") == scope["current_session_id"]
-            and (state.get("sessions") or {}) == scope["sessions"]
+            and sessions.keys() == original_sessions.keys()
+            and all(material(value) == material(original_sessions[key]) if key == session_id
+                    else value == original_sessions[key] for key, value in sessions.items())
             and (state.get("captures") or {}) == scope["captures"]
             and state.get("backend") == scope["backend"]
-            and runtime.context_snapshots.get(scope["context_id"]) == scope["context_snapshot"]
+            and material(runtime.context_snapshots.get(scope["context_id"])) == material(scope["context_snapshot"])
             and runtime.shader_replacements.get(session_id, []) == scope["replacements"]
             and _debug_record_state() == scope["debug_handles"]
             and _remote_record_state(runtime.session_owned_remotes.get(session_id)) == scope["remote"]
@@ -132,6 +140,16 @@ def _event_rejection_failure(exc: CoreError, scope: Dict[str, Any], session_id: 
 
 def _qualify_claimed_preservation(outcome: envelope.Failure, scope: Dict[str, Any], session_id: str) -> envelope.Failure:
     details = dict(outcome.details)
+    if (outcome.code == "shader_patch_op_unsupported_for_encoding"
+            and details.get("failure_stage") == "validate_edit_plan"
+            and details.get("failure_reason") == "source_encoding_not_safely_replaceable"
+            and details.get("replacement_attempted") is False
+            and details.get("replay_state_restored") is True
+            and details.get("context_id") == scope.get("context_id")
+            and details.get("session_id") == session_id
+            and details.get("restored_event_id") == (scope.get("replay_values") or (None, None, None))[2]
+            and _event_rejection_preserved(scope, session_id, restored_event=True)):
+        return envelope.failure(outcome.message, code=outcome.code, category="validation", details=details)
     if details.get("effects_attempted") is not False and details.get("context_preserved") is not True:
         return (outcome if outcome.category == "runtime" else
                 envelope.failure(outcome.message, code=outcome.code, category="runtime", details=details))

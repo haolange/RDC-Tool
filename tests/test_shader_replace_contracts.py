@@ -509,6 +509,72 @@ def test_edit_and_replace_preserves_patch_engine_error_details(monkeypatch: pyte
     assert payload.details["compiler_output"] == "compile error"
 
 
+@pytest.mark.parametrize("restore_ok", [True, False])
+def test_rejected_encoding_restores_entry_event_before_returning(monkeypatch: pytest.MonkeyPatch, restore_ok: bool) -> None:
+    _install_shader_replace_env(monkeypatch, _SupportedController())
+    monkeypatch.setattr(live_state._runtime, "replays", {
+        "sess_demo": live_state.ReplayHandle(session_id="sess_demo", capture_file_id="capture", active_event_id=11),
+    })
+    monkeypatch.setattr(live_state._runtime, "captures", {
+        "capture": live_state.CaptureFileHandle(capture_file_id="capture", file_path="fixture.rdc", read_only=True),
+    })
+    context_id = live_state._runtime_context_id()
+    monkeypatch.setattr(live_state._runtime, "context_states", {context_id: {
+        "current_session_id": "sess_demo", "backend": "local", "captures": {},
+        "sessions": {"sess_demo": {"active_event_id": 11, "updated_at_ms": 1}},
+    }})
+    monkeypatch.setattr(live_state._runtime, "context_snapshots", {context_id: {
+        "runtime": {"active_event_id": 11}, "updated_at_ms": 1,
+    }})
+    live_state._patch_engine = _FakePatchEngine(
+        success=False, error_code="shader_patch_op_unsupported_for_encoding", error_category="validation",
+        error_details={"failure_stage": "validate_edit_plan", "failure_reason": "source_encoding_not_safely_replaceable",
+                       "replacement_attempted": False, "context_preserved": True},
+    )
+    live_state._session_manager = _FakeSessionManager()
+    events = []
+
+    async def set_event(session_id: str, event_id: int | None) -> int:
+        event = int(event_id or 0)
+        events.append(event)
+        replay_access._event_effect_attempted()
+        if event == 11 and not restore_ok:
+            raise RuntimeError("replay connection lost")
+        live_state._runtime.replays[session_id].active_event_id = event
+        record = live_state._runtime.context_states[context_id]["sessions"][session_id]
+        record.update(active_event_id=event, updated_at_ms=record["updated_at_ms"] + 1)
+        snapshot = live_state._runtime.context_snapshots[context_id]
+        snapshot["runtime"]["active_event_id"] = event
+        snapshot["updated_at_ms"] += 1
+        return event
+
+    monkeypatch.setattr(replay_access, "_ensure_event", set_event)
+    scope = replay_access._event_rejection_snapshot("sess_demo")
+    token = live_state._CURRENT_EVENT_REJECTION_SCOPE.set(scope)
+    try:
+        payload = asyncio.run(shader_ops.dispatch("edit_and_replace", {
+            "session_id": "sess_demo", "event_id": 101, "stage": "ps",
+            "ops": [{"op": "force_full_precision", "variables": []}],
+        }))
+        payload = replay_access._qualify_claimed_preservation(payload, scope, "sess_demo")
+    finally:
+        live_state._CURRENT_EVENT_REJECTION_SCOPE.reset(token)
+
+    assert events == [101, 11]
+    assert payload.ok is False
+    assert payload.details["replacement_attempted"] is False
+    if restore_ok:
+        assert payload.code == "shader_patch_op_unsupported_for_encoding"
+        assert payload.category == "validation"
+        assert payload.details["replay_state_restored"] is True
+        assert payload.details["restored_event_id"] == 11
+        assert live_state._runtime.replays["sess_demo"].active_event_id == 11
+    else:
+        assert payload.code == "shader_edit_recovery_failed"
+        assert payload.category == "runtime"
+        assert payload.details["replay_state_restored"] is False
+
+
 def test_get_source_reports_ir_fallback_when_debug_source_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_shader_replace_env(monkeypatch, _EncodingController("SPIRV"))
     live_state._session_manager = _FakeSessionManager()
