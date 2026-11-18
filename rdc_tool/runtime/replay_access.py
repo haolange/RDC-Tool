@@ -165,7 +165,7 @@ def _qualify_claimed_preservation(outcome: envelope.Failure, scope: Dict[str, An
     if (details.get("effects_attempted") is False and details.get("context_preserved") is True
             and details.get("failure_stage") and _event_rejection_preserved(scope, session_id)):
         return envelope.failure(outcome.message, code=outcome.code,
-                                category="capability" if outcome.category == "capability" else "validation", details=details)
+                                category="capability" if outcome.code == "host_tool_unavailable" else "validation", details=details)
     if details.get("effects_attempted") is False:
         details.pop("effects_attempted")
     if details.get("context_preserved") is True:

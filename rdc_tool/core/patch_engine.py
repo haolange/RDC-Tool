@@ -1995,7 +1995,7 @@ class PatchEngine:
                 "blocked_reason": "",
             }
         if normalized in {"dxil", "dxbc"} or "dxil" in target_key or "dxbc" in target_key:
-            container = "dxil" if normalized == "dxil" or "dxil" in target_key else "dxbc"
+            container = normalized if normalized in {"dxil", "dxbc"} else "dxil" if "dxil" in target_key else "dxbc"
             return {
                 "shader_format": {
                     "source_encoding": normalized or container,

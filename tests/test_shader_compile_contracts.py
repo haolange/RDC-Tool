@@ -15,10 +15,12 @@ class Encoding(IntEnum):
     GLSL = 2
     SPIRV = 3
     SPIRVAsm = 4
+    DXIL = 6
 
 
 MODULE = bytes.fromhex("0302230700000100000000000200000000000000")
 ASM = "OpCapability Shader\nOpMemoryModel Logical GLSL450\n"
+DXIL_ASM = "define void @Main() {\n  %x = call float @dx.op.unary.f32(i32 7, float 1.000000e+00)\n  ret void\n}\n"
 
 
 @pytest.fixture
@@ -66,6 +68,40 @@ def test_raw_asm_compiles_as_native_spirv_build_input(compile_env, tmp_path):
     assert result.data['build_encoding'] == "spirv"
     assert result.data['artifact_kind'] == "assembled-spirv-build-input"
     assert result.data['build_input']["device_binary_observed"] is False
+
+
+@pytest.mark.parametrize("stage", ["assembly", "validation"])
+def test_dxil_prebuild_failure_reports_native_diagnostics_and_preserves_replay(compile_env, monkeypatch, stage):
+    from rdc_tool.platform.dxc import DxcError
+    controller, calls = compile_env
+    controller.GetTargetShaderEncodings = lambda: [Encoding.DXIL]
+    def fail(*args):
+        raise DxcError(stage, "native diagnostic with line 2", line=2)
+    monkeypatch.setattr(patch_engine.PatchEngine, "_source_bytes_for_build", fail)
+    result = asyncio.run(shader_ops.dispatch("compile", {
+        "session_id": "live", "stage": "ps", "source_encoding": "dxilasm", "source_text": DXIL_ASM,
+    }))
+    assert result.ok is False and result.code == f"shader_{stage}_failed"
+    assert result.category == "validation" and not calls
+    assert result.details["diagnostics"] == "native diagnostic with line 2"
+    assert result.details["line"] == 2
+    assert result.details["effects_attempted"] is False and result.details["context_preserved"] is True
+
+
+def test_dxil_missing_toolchain_is_capability_failure_without_replay_effects(compile_env, monkeypatch):
+    from rdc_tool.host_tools import HostToolUnavailableError
+    controller, calls = compile_env
+    controller.GetTargetShaderEncodings = lambda: [Encoding.DXIL]
+    def missing(*args):
+        raise HostToolUnavailableError("dxcompiler.dll not found in selected directory")
+    monkeypatch.setattr(patch_engine.PatchEngine, "_source_bytes_for_build", missing)
+    result = asyncio.run(shader_ops.dispatch("compile", {
+        "session_id": "live", "stage": "ps", "source_encoding": "dxilasm", "source_text": DXIL_ASM,
+    }))
+    assert result.ok is False and result.code == "host_tool_unavailable"
+    assert result.category == "capability" and not calls
+    assert "dxcompiler.dll" in result.details["diagnostics"]
+    assert result.details["effects_attempted"] is False and result.details["context_preserved"] is True
 
 
 def test_native_asm_encoding_uses_text_without_local_assembly(compile_env, monkeypatch):

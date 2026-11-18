@@ -13,6 +13,12 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.fixture(autouse=True)
+def _selected_installation(request, monkeypatch):
+    # The existing fixture-root option also lets launcher checks exercise a candidate installation.
+    monkeypatch.setitem(globals(), "ROOT", Path(request.config.getoption("--fixture-root")).resolve())
+
+
 def _extract_json(text: str) -> dict:
     start = text.find("{")
     end = text.rfind("}")
