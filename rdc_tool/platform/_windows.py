@@ -7,10 +7,13 @@ import errno
 import msvcrt
 import os
 import subprocess
+import uuid
 from ctypes import wintypes
 from functools import cache
 from pathlib import Path
 from typing import Any
+
+from rdc_tool.platform.dxc import DxcError
 
 _ERROR_LOCK_VIOLATION = 33
 
@@ -174,3 +177,111 @@ def raw_command_line() -> str | None:
 def launcher_argv(launcher: str) -> list[str]:
     system_root = os.environ.get("SystemRoot") or os.environ.get("WINDIR") or r"C:\Windows"
     return [str(Path(system_root) / "System32" / "cmd.exe"), "/c", launcher]
+
+
+class _Guid(ctypes.Structure):
+    _fields_ = [("data1", ctypes.c_uint32), ("data2", ctypes.c_uint16),
+                ("data3", ctypes.c_uint16), ("data4", ctypes.c_ubyte * 8)]
+
+
+def _guid(value: str) -> _Guid:
+    return _Guid.from_buffer_copy(uuid.UUID(value).bytes_le)
+
+
+def _method(obj: ctypes.c_void_p, slot: int, result: object, *args: object) -> object:
+    table = ctypes.cast(obj, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))).contents
+    return ctypes.WINFUNCTYPE(result, ctypes.c_void_p, *args)(table[slot])
+
+
+def _diagnostic_line(source: str, diagnostics: str) -> int | None:
+    # DXC's IR parser often returns the source line and caret, but no line number.
+    lines = diagnostics.splitlines()
+    for index in range(1, len(lines)):
+        if lines[index].strip().startswith("^"):
+            matches = [number for number, value in enumerate(source.splitlines(), 1)
+                       if value == lines[index - 1]]
+            if len(matches) == 1:
+                return matches[0]
+    return None
+
+
+def assemble_and_validate_dxil(library: Path, source: str) -> bytes:
+    dll = ctypes.WinDLL(str(library))
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.GetModuleFileNameW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_uint]
+    kernel.GetModuleFileNameW.restype = ctypes.c_uint
+    loaded = ctypes.create_unicode_buffer(32768)
+    if not kernel.GetModuleFileNameW(dll._handle, loaded, len(loaded)) or Path(loaded.value).resolve() != library.resolve():
+        raise OSError(f"Loaded DXC library does not match the selected path: {loaded.value}")
+    create = dll.DxcCreateInstance
+    create.argtypes = [ctypes.POINTER(_Guid), ctypes.POINTER(_Guid), ctypes.POINTER(ctypes.c_void_p)]
+    create.restype = ctypes.c_int32
+    owned: list[ctypes.c_void_p] = []
+
+    def check(stage: str, status: int) -> None:
+        if status < 0:
+            raise DxcError(stage, f"{stage} HRESULT=0x{status & 0xffffffff:08x}")
+
+    def new(stage: str, clsid: str, iid: str) -> ctypes.c_void_p:
+        a, b, obj = _guid(clsid), _guid(iid), ctypes.c_void_p()
+        check(stage, create(ctypes.byref(a), ctypes.byref(b), ctypes.byref(obj)))
+        if not obj.value:
+            raise DxcError(stage, "DXC returned a null interface")
+        owned.append(obj)
+        return obj
+
+    def blob_bytes(obj: ctypes.c_void_p) -> bytes:
+        ptr = _method(obj, 3, ctypes.c_void_p)(obj)
+        size = _method(obj, 4, ctypes.c_size_t)(obj)
+        return ctypes.string_at(ptr, size) if size else b""
+
+    def result_blob(stage: str, result: ctypes.c_void_p) -> ctypes.c_void_p:
+        status = ctypes.c_int32()
+        check(stage, _method(result, 3, ctypes.c_int32, ctypes.POINTER(ctypes.c_int32))(
+            result, ctypes.byref(status)))
+        errors = ctypes.c_void_p()
+        check(stage, _method(result, 5, ctypes.c_int32, ctypes.POINTER(ctypes.c_void_p))(
+            result, ctypes.byref(errors)))
+        diagnostics = ""
+        if errors.value:
+            owned.append(errors)
+            diagnostics = blob_bytes(errors).decode("utf-8", errors="replace").rstrip("\0")
+        if status.value < 0:
+            raise DxcError(stage, diagnostics or f"DXC failed: 0x{status.value & 0xffffffff:08x}",
+                           _diagnostic_line(source, diagnostics) if stage == "assembly" else None)
+        blob = ctypes.c_void_p()
+        check(stage, _method(result, 4, ctypes.c_int32, ctypes.POINTER(ctypes.c_void_p))(
+            result, ctypes.byref(blob)))
+        if not blob.value:
+            raise DxcError(stage, "DXC returned no output")
+        owned.append(blob)
+        return blob
+
+    try:
+        utils = new("assembly", "6245D6AF-66E0-48FD-80B4-4D271796748C", "4605C4CB-2019-492A-ADA4-65F20BB7D67F")
+        assembler = new("assembly", "D728DB68-F903-4F80-94CD-DCCF76EC7151", "091f7a26-1c1f-4948-904b-e6e3a8a771d5")
+        validator = new("validation", "8CA3E215-F728-4CF3-8CDD-88AF917587A1", "A6E82BD2-1FD7-4826-9811-2857E797F49A")
+        raw = source.encode("utf-8")
+        buf = ctypes.create_string_buffer(raw)
+        input_blob = ctypes.c_void_p()
+        check("assembly", _method(utils, 6, ctypes.c_int32, ctypes.c_void_p, ctypes.c_uint32,
+                                  ctypes.c_uint32, ctypes.POINTER(ctypes.c_void_p))(
+                                      utils, buf, len(raw), 65001, ctypes.byref(input_blob)))
+        owned.append(input_blob)
+        assembled = ctypes.c_void_p()
+        check("assembly", _method(assembler, 3, ctypes.c_int32, ctypes.c_void_p,
+                                   ctypes.POINTER(ctypes.c_void_p))(assembler, input_blob, ctypes.byref(assembled)))
+        owned.append(assembled)
+        module = result_blob("assembly", assembled)
+        validated = ctypes.c_void_p()
+        check("validation", _method(validator, 3, ctypes.c_int32, ctypes.c_void_p, ctypes.c_uint32,
+                                    ctypes.POINTER(ctypes.c_void_p))(validator, module, 0, ctypes.byref(validated)))
+        owned.append(validated)
+        output = blob_bytes(result_blob("validation", validated))
+        if len(output) < 20 or output[:4] != b"DXBC" or not any(output[4:20]):
+            raise DxcError("validation", "DXC validator returned an unsigned container")
+        return output
+    finally:
+        for obj in reversed(owned):
+            if obj.value:
+                _method(obj, 2, ctypes.c_uint32)(obj)

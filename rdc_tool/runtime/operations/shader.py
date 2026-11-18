@@ -11,6 +11,8 @@ from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 
 from rdc_tool import timeout_policy
+from rdc_tool.host_tools import HostToolUnavailableError
+from rdc_tool.platform import dxc
 from rdc_tool.core.errors import CoreError, RuntimeToolError
 from rdc_tool.core.patch_engine import PatchEngine, _compiler_output_is_fatal, _shader_build_input_provenance
 from rdc_tool.models import PatchSpec, ShaderStage, _new_id
@@ -138,6 +140,8 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
         build_encoding = PatchEngine._find_requested_encoding(supported_encodings, requested_encoding_name)
         if build_encoding is None and requested_encoding_name in {"spirvasm", "spirv_asm"}:
             build_encoding = PatchEngine._find_requested_encoding(supported_encodings, "spirv")
+        if build_encoding is None and requested_encoding_name in {"dxilasm", "dxil_asm"}:
+            build_encoding = PatchEngine._find_requested_encoding(supported_encodings, "dxil")
         replacement_supported, replacement_reason = truth_matrix._session_replace_capability(session_id, controller)
         edit_plan = shader_patches._shader_edit_plan(
             source_encoding=requested_encoding_name,
@@ -190,7 +194,18 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
         build_encoding_name = shader_patches._shader_encoding_name(build_encoding)
         try:
             build_bytes = await renderdoc_api._offload(
-                PatchEngine._source_bytes_for_build, source, build_encoding_name, "SPIR-V ASM"
+                PatchEngine._source_bytes_for_build, source, build_encoding_name,
+                "DXIL ASM" if requested_encoding_name in {"dxilasm", "dxil_asm"} else "SPIR-V ASM"
+            )
+        except (HostToolUnavailableError, dxc.DxcError) as exc:
+            missing = isinstance(exc, HostToolUnavailableError)
+            stage_name = getattr(exc, "stage", "toolchain")
+            return envelope.failure(
+                str(exc), code="host_tool_unavailable" if missing else f"shader_{stage_name}_failed",
+                category="capability" if missing else "validation",
+                details={"requested_source_encoding": requested_encoding_name, **source_details, **prebuild_proof,
+                         "failure_stage": stage_name, "diagnostics": getattr(exc, "diagnostics", str(exc)),
+                         "line": getattr(exc, "line", None)},
             )
         except (OSError, ValueError, RuntimeError) as exc:
             return envelope.failure(
@@ -256,7 +271,10 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
             build_encoding_name in {"spirv", "openglspirv"}
             and PatchEngine._looks_like_raw_spirv_asm(source)
         )
-        if assembled_input:
+        if build_encoding_name == "dxil" and requested_encoding_name in {"dxilasm", "dxil_asm"}:
+            raw_bytes = build_bytes
+            artifact_kind = "validated-dxil-build-input"
+        elif assembled_input:
             # Publish the exact accepted module as build input, never inferred device code.
             raw_bytes = build_bytes
             artifact_kind = "assembled-spirv-build-input"
@@ -304,7 +322,9 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
     if action == "get_disassembly":
         requested_target = str(args.get("target", "auto")).strip()
         requested_encoding = str(args.get("source_encoding") or "")
-        if requested_target and requested_target.lower() != "auto" and not PatchEngine._is_raw_spirv_asm_request(requested_target, requested_encoding):
+        if (requested_target and requested_target.lower() != "auto"
+                and not PatchEngine._is_raw_spirv_asm_request(requested_target, requested_encoding)
+                and not PatchEngine._is_raw_dxil_asm_request(requested_target, requested_encoding)):
             target_discovery = await _disassembly_target_metadata(controller)
             if target_discovery["available_targets_status"] != "complete":
                 return envelope.failure(
@@ -329,7 +349,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
                         "context_preserved": True,
                     },
                 )
-    inspection_original_event = replay_access._active_event(session_id) if action in {"get_source", "get_constant_buffer_contents", "debug_start", "edit_and_replace"} else 0
+    inspection_original_event = replay_access._active_event(session_id) if action in {"get_source", "get_disassembly", "get_constant_buffer_contents", "debug_start", "edit_and_replace"} else 0
     event_id = await replay_access._ensure_event(session_id, args.get("event_id"))
     pipe = await renderdoc_api._offload(controller.GetPipelineState)
 
@@ -1068,10 +1088,13 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
             }
             if patch_result.error_details:
                 error_details.update(dict(patch_result.error_details))
-            if (patch_result.error_code == "shader_patch_op_unsupported_for_encoding"
+            recoverable_prebuild = (
+                patch_result.error_code in {"host_tool_unavailable", "shader_assembly_failed", "shader_validation_failed", "shader_source_mismatch"}
+                or (patch_result.error_code == "shader_patch_op_unsupported_for_encoding"
                     and error_details.get("failure_stage") == "validate_edit_plan"
-                    and error_details.get("failure_reason") == "source_encoding_not_safely_replaceable"
-                    and error_details.get("replacement_attempted") is False
+                    and error_details.get("failure_reason") == "source_encoding_not_safely_replaceable")
+            )
+            if (recoverable_prebuild and error_details.get("replacement_attempted") is False
                     and inspection_original_event > 0):
                 error_details.pop("context_preserved", None)
                 try:
@@ -1413,7 +1436,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
                 "allowed_edit_inputs": ["source_text", "source_path"],
                 "recommended_next_tool": "rd.shader.edit_and_replace" if replacement_supported and text_encodings else None,
                 "note": (
-                    "Full replacement requires separately supplied source; the captured disassembly remains read-only. "
+                    "Full replacement requires separately supplied source; native disassembly remains read-only. "
                     "A single-contribution comparison requires matching semantics and baseline validation."
                 ),
             }
@@ -1607,6 +1630,11 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
                     requested_target=requested_target if requested_target != "auto" else "",
                     requested_encoding=requested_encoding,
                 )
+            except HostToolUnavailableError as exc:
+                return await _inspection_error(
+                    str(exc), "host_tool_unavailable",
+                    {"failure_stage": "disassembly", "replacement_attempted": False,
+                     "effects_attempted": False, "context_preserved": True}, category="capability")
             except RuntimeError as exc:
                 return envelope.failure(
                     str(exc),
@@ -1626,6 +1654,8 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
             source_encoding_name = shader_patches._shader_encoding_name(resolved_encoding)
             if PatchEngine._is_raw_spirv_asm_request(requested_target, requested_encoding) or bool(is_raw_spirv_asm):
                 source_encoding_name = "spirvasm"
+            elif PatchEngine._is_raw_dxil_asm_request(requested_target, requested_encoding):
+                source_encoding_name = "dxilasm"
             edit_plan = shader_patches._shader_edit_plan(
                 source_encoding=source_encoding_name,
                 disassembly_target=str(resolved_target or ""),

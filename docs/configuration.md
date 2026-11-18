@@ -10,6 +10,7 @@
 |---|---|
 | `RDC_TOOL_ANDROID_ADB_PATH` | 使用指定的 `adb` 可执行文件（绝对路径），替代安装包自带的 adb；路径无效时报错，不回退 |
 | `RDC_TOOL_SPIRV_TOOLS_PATH` | 使用指定目录下的 `spirv-as` / `spirv-dis`（绝对路径），替代自带版本；无效时报错，不回退 |
+| `RDC_TOOL_DXC_TOOLS_PATH` | Windows 上使用指定目录下的 `dxc.exe` 和 `dxcompiler.dll`（绝对路径），替代自带版本；无效时报错，不回退 |
 | `ANDROID_ADB_SERVER_ADDRESS`、`ANDROID_ADB_SERVER_PORT`、`ADB_SERVER_SOCKET` | adb 标准变量，指定要连接的 adb server（仅支持 TCP） |
 | `RDC_TOOL_LOG_LEVEL` | 运行时日志级别（默认 `WARNING`/`INFO`） |
 

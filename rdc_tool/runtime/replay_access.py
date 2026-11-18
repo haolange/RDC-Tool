@@ -140,6 +140,15 @@ def _event_rejection_failure(exc: CoreError, scope: Dict[str, Any], session_id: 
 
 def _qualify_claimed_preservation(outcome: envelope.Failure, scope: Dict[str, Any], session_id: str) -> envelope.Failure:
     details = dict(outcome.details)
+    if (outcome.code in {"host_tool_unavailable", "shader_assembly_failed", "shader_validation_failed", "shader_source_mismatch"}
+            and details.get("replacement_attempted") is False
+            and details.get("replay_state_restored") is True
+            and details.get("context_id") == scope.get("context_id")
+            and details.get("session_id") == session_id
+            and details.get("restored_event_id") == (scope.get("replay_values") or (None, None, None))[2]
+            and _event_rejection_preserved(scope, session_id, restored_event=True)):
+        details.update(effects_attempted=False, context_preserved=True)
+        return envelope.failure(outcome.message, code=outcome.code, category=outcome.category, details=details)
     if (outcome.code == "shader_patch_op_unsupported_for_encoding"
             and details.get("failure_stage") == "validate_edit_plan"
             and details.get("failure_reason") == "source_encoding_not_safely_replaceable"
@@ -155,7 +164,8 @@ def _qualify_claimed_preservation(outcome: envelope.Failure, scope: Dict[str, An
                 envelope.failure(outcome.message, code=outcome.code, category="runtime", details=details))
     if (details.get("effects_attempted") is False and details.get("context_preserved") is True
             and details.get("failure_stage") and _event_rejection_preserved(scope, session_id)):
-        return envelope.failure(outcome.message, code=outcome.code, category="validation", details=details)
+        return envelope.failure(outcome.message, code=outcome.code,
+                                category="capability" if outcome.category == "capability" else "validation", details=details)
     if details.get("effects_attempted") is False:
         details.pop("effects_attempted")
     if details.get("context_preserved") is True:

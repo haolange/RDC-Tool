@@ -44,9 +44,10 @@ HOST_LAYOUTS: Mapping[str, HostLayout] = MappingProxyType({
         }),
         launcher="bin/rdc-tool.cmd",
         host_tools=MappingProxyType({"adb": "adb/adb.exe", "spirv_as": "spirv-tools/spirv-as.exe",
-                                     "spirv_dis": "spirv-tools/spirv-dis.exe"}),
+                                     "spirv_dis": "spirv-tools/spirv-dis.exe", "dxc": "dxc/dxc.exe",
+                                     "dxcompiler": "dxc/dxcompiler.dll"}),
         host_tool_files=("adb/AdbWinApi.dll", "adb/AdbWinUsbApi.dll", "adb/NOTICE.txt", "adb/source.properties",
-                         "spirv-tools/LICENSE.txt", "spirv-tools/SPIRV-Headers-LICENSE.txt"),
+                         "spirv-tools/LICENSE.txt", "spirv-tools/SPIRV-Headers-LICENSE.txt", "dxc/LICENSE-LLVM.txt"),
     ),
     "linux-x64": HostLayout(
         runtime_dir="binaries/linux/x64",

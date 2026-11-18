@@ -1358,7 +1358,7 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'parameter_raw': 'session_id (string): session_id (str)<br>event_id (integer, optional): '
                    'event_id (int, 可选)<br>output_dir (string): output_dir '
                    '(str)<br>disassembly_target (string, optional): auto（默认）或当前支持的精确反汇编 target；'
-                   '可装配的 raw SPIR-V 工作文件使用 SPIR-V ASM，显式 target 失败不会改用展示视图。'
+                   '可装配的 raw 工作文件使用 SPIR-V ASM 或 DXIL ASM，显式 target 失败不会改用展示视图。'
                    '<br>include_binaries (boolean, optional): include_binaries (bool, 可选, 默认 '
                    'true)<br>include_reflection (boolean, optional): include_reflection (bool, 可选, '
                    '默认 true)<br>include_disassembly (boolean, optional): include_disassembly '
@@ -1388,7 +1388,7 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                                                'minimum': 0},
                                   'output_dir': {'description': 'output_dir (str)',
                                                  'type': 'string'},
-                                  'disassembly_target': {'description': 'auto（默认）或精确反汇编 target；raw 可装配文件用 SPIR-V ASM，不静默替换 target', 'type': 'string'},
+                                  'disassembly_target': {'description': 'auto（默认）或精确反汇编 target；raw 可装配文件用 SPIR-V ASM 或 DXIL ASM，不静默替换 target', 'type': 'string'},
                                   'include_binaries': {'description': 'include_binaries (bool, 可选, '
                                                                       '默认 true)',
                                                        'type': 'boolean'},
@@ -2908,13 +2908,13 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'path_inputs': []},
  {'name': 'rd.shader.compile',
   'group': '3.8，Shader 探查、反射与替换 (Shader Inspection & Replacement)',
-  'description': '通过当前 replay controller 的 BuildTargetShader 独立构建 shader，不替换资源；raw SPIR-V ASM 在二进制后端复用 spirv-as 装配。返回原生构建 ID 与明确区分的构建输入/读回制品。',
+  'description': '通过当前 replay controller 的 BuildTargetShader 独立构建 shader，不替换资源；raw SPIR-V ASM 使用 spirv-as，DXIL ASM 使用 DXC 装配并校验签名。返回原生构建 ID 与明确区分的构建输入/读回制品。',
   'parameter_raw': 'source_text (string, optional): source_text (str, 可选): inline HLSL/GLSL/SPIR-V ASM '
                    'source text<br>source_path (string, optional): source_path (str, 可选): shader '
                    'source file path; file directory is added to include_dirs<br>stage (string): '
                    'stage (str)<br>entry (string): entry (str)<br>target (string): target (str): '
                    "e.g. 'vs_6_6'/'ps_6_6' or 'spirv1.6'<br>source_encoding (string, optional): "
-                   'source_encoding (str, 可选): hlsl/glsl/spirvasm; DXIL/DXBC text is not accepted '
+                   'source_encoding (str, 可选): hlsl/glsl/spirvasm/dxilasm; native DXIL/DXBC text is not accepted '
                    'as source<br>defines (object, optional): defines (dict, 可选)<br>include_dirs '
                    '(array, optional): include_dirs (list[str], 可选)<br>additional_args (array, '
                    'optional): additional_args (list[str], 可选)<br>output_path (string, optional): '
@@ -2928,8 +2928,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                  'artifact_path?, byte_size?, artifact_kind?}<br>artifacts (list)<br>error (dict|null): compile '
                  'validation/build failures include source_kind, resolved_source_path, '
                  'include_dirs, entry, target, and failure_stage. Unsupported source encoding '
-                 'returns shader_compile_encoding_unsupported. Prebuild rejection/assembly failure returns effects_attempted=false, context_preserved=true; native build failures do not. Assembled SPIR-V artifact_kind is assembled-spirv-build-input, not device code. DXIL/DXBC captured disassembly text '
-                 'is not accepted as editable source.<br>meta (dict)<br>projections (dict, 可选)'
+                 'returns shader_compile_encoding_unsupported. Prebuild rejection/assembly failure returns effects_attempted=false, context_preserved=true; native build failures do not. Assembled SPIR-V and validated DXIL artifacts are build inputs, not device code. '
+                 'Native DXIL/DXBC disassembly remains read-only.<br>meta (dict)<br>projections (dict, 可选)'
                  '<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
   'param_names': ['source_text',
                   'source_path',
@@ -2961,8 +2961,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                                                             "or 'spirv1.6'",
                                              'type': 'string'},
                                   'source_encoding': {'description': 'source_encoding (str, 可选): '
-                                                                     'hlsl/glsl/spirvasm; '
-                                                                     'DXIL/DXBC text is not '
+                                                                     'hlsl/glsl/spirvasm/dxilasm; '
+                                                                     'native DXIL/DXBC text is not '
                                                                      'accepted as source',
                                                       'type': 'string'},
                                   'defines': {'description': 'defines (dict, 可选)',
@@ -3059,7 +3059,7 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                    'for full HLSL/GLSL replacement unless reflection provides it)<br>target '
                    '(string, optional): target (str, required for full HLSL/GLSL replacement, e.g. '
                    'ps_6_6)<br>source_encoding (string, optional): source_encoding (str, 可选, e.g. '
-                   'hlsl/glsl/spirvasm)<br>diff_text (string, optional): diff_text (str, '
+                   'hlsl/glsl/spirvasm/dxilasm)<br>diff_text (string, optional): diff_text (str, '
                    '可选)<br>emit_patch_artifacts (boolean, optional): emit_patch_artifacts (bool, '
                    '可选)<br>output_dir (string, optional): output_dir (str, '
                    '可选)<br>expected_source_hash (string, optional): See input_schema for '
@@ -3083,8 +3083,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                  'emit_patch_artifacts=true or output_dir is provided, includes before/after/diff text '
                  'and exact build-input bytes when a build occurred (.spv for SPIR-V modules, .txt '
                  'for source text); no artifact request causes no extra persistence<br>error '
-                 '(dict|null): DXIL/DXBC disassembly remains read-only '
-                 '(captured_source_editable=false), but user-provided HLSL/GLSL full replacement '
+                 '(dict|null): native DXIL/DXBC disassembly remains read-only; DXIL ASM accepts source_text/diff_text '
+                 'with expected_source_hash and no structured ops. User-provided HLSL/GLSL full replacement '
                  'can compile then ReplaceResource when runtime_full_replace_supported=true. Build '
                  'failures do not call ReplaceResource. Replace failures include '
                  'replacement_attempted, cleanup_attempted, context_preserved, failure_stage, and '
@@ -3146,7 +3146,7 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                                                             'HLSL/GLSL replacement, e.g. ps_6_6)',
                                              'type': 'string'},
                                   'source_encoding': {'description': 'source_encoding (str, 可选, '
-                                                                     'e.g. hlsl/glsl/spirvasm)',
+                                                                     'e.g. hlsl/glsl/spirvasm/dxilasm)',
                                                       'type': 'string'},
                                   'diff_text': {'description': 'diff_text (str, 可选)',
                                                 'type': 'string'},
@@ -3155,7 +3155,7 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                                                            'type': 'boolean'},
                                   'output_dir': {'description': 'output_dir (str, 可选)',
                                                  'type': 'string'},
-                                  'expected_source_hash': {'type': 'string', 'description': 'SHA-256 of the currently bound original shader source before applying this patch, not the replacement source_text/source_path file hash. A mismatch rejects before compilation or replacement.'},
+                                  'expected_source_hash': {'type': 'string', 'description': 'SHA-256 of the currently bound original shader source before applying this patch, not the replacement source_text/source_path file hash. Required for DXIL ASM; a mismatch rejects before compilation or replacement.'},
                                   'include_dirs': {'type': 'array', 'items': {'type': 'string'}},
                                   'intent': {'type': 'string'},
                                   'max_diff_ops': {'type': 'integer', 'minimum': 0},
@@ -3365,7 +3365,8 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                  '使用同一套绑定逻辑。',
   'parameter_raw': 'session_id (string): session_id (str)<br>shader_id (string, optional): '
                    'shader_id (str)<br>target (string, optional): auto（默认）或当前 replay 支持的精确 '
-                   'disassembly target 名称；raw SPIR-V ASM 用 SPIR-V ASM，不能把 encoding 名 spirv 当成 target。'
+                   'disassembly target 名称；raw 使用 SPIR-V ASM 或 DXIL ASM，不能把 encoding 名当成 target。'
+                   '<br>source_encoding (string, optional): spirvasm 或 dxilasm。'
                    '<br>event_id (integer, optional): Replay event; omitted uses the owning '
                    'session current event.<br>stage (string, optional): See input_schema for '
                    'constraints.',
@@ -3378,14 +3379,14 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                  'allowed_edit_inputs, allowed_ops, recommended_next_tool, and blocked_reason. allowed_edit_inputs lists independent input forms (full source_text, diff_text, or structured ops); allowed_ops only names supported structured ops and does not restrict source_text or diff_text edits. '
                  "The default RenderDoc SPIR-V view is read-only; request target='SPIR-V ASM' "
                  'and inspect that result edit_plan before attempting replacement. '
-                 'DXIL/DXBC disassembly is read-only unless edit_plan reports a buildable source '
-                 'path.<br>artifacts (list)<br>error (dict|null): 绑定失败显式返回 '
+                 "Native DXIL/DXBC disassembly is read-only; target='DXIL ASM' is editable DXIL LLVM IR."
+                 '<br>artifacts (list)<br>error (dict|null): 绑定失败显式返回 '
                  '`shader_binding_lookup_failed` / `shader_stage_mismatch`；当请求 target '
                  '不存在或源码不可取时，显式返回 `shader_disassembly_unavailable` 并带 `failure_stage` / '
                  '`failure_reason`；未知 target 在应用 replay event 前拒绝，返回 available_targets 与 '
                  'effects_attempted=false / context_preserved=true<br>meta (dict)<br>projections (dict, 可选)'
                  '<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
-  'param_names': ['session_id', 'shader_id', 'target', 'event_id', 'stage'],
+  'param_names': ['session_id', 'shader_id', 'target', 'source_encoding', 'event_id', 'stage'],
   'prerequisites': [{'requires': 'session_id',
                      'via_tools': ['rd.capture.open_file', 'rd.capture.open_replay'],
                      'reason': 'This tool operates on a live replay session.'}],
@@ -3394,8 +3395,9 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                    'properties': {'session_id': {'description': 'session_id (str)',
                                                  'type': 'string'},
                                   'shader_id': {'description': 'shader_id (str)', 'type': 'string'},
-                                  'target': {'description': 'auto（默认）或当前 replay 支持的精确 disassembly target；raw SPIR-V ASM 用 SPIR-V ASM',
+                                  'target': {'description': 'auto（默认）或当前 replay 支持的精确 disassembly target；raw 用 SPIR-V ASM 或 DXIL ASM',
                                              'type': 'string'},
+                                  'source_encoding': {'description': 'raw source encoding: spirvasm or dxilasm', 'type': 'string'},
                                   'event_id': {'type': 'integer',
                                                'minimum': 0,
                                                'description': 'Replay event; omitted uses the '
@@ -3517,7 +3519,7 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                  'Source debugging is independent; unknown encoding, entry or flags are null. '
                  'If source is unavailable, ok=true, source_available=false and fallback is format-aware: '
                  "SPIR-V may offer `rd.shader.get_disassembly` target='SPIR-V ASM', source_encoding='spirvasm'; "
-                 'inspect its edit_plan. DXIL/DXBC disassembly is read-only; `rd.shader.extract_binary` returns '
+                 "DXIL may offer target='DXIL ASM', source_encoding='dxilasm'; inspect its edit_plan. Native DXIL/DXBC disassembly is read-only; `rd.shader.extract_binary` returns "
                  'the container. edit_plan.full_source_replacement separately reports support for supplied '
                  'HLSL/GLSL; it does not imply editable disassembly or matching semantics. '
                  'Missing metadata: shader_source_metadata_unavailable; native read failure: '

@@ -452,24 +452,47 @@ def _host_tool_inputs(root: Path) -> Path:
     return source
 
 
+def _pinned_dxc_fixture(root: Path, monkeypatch) -> Path:
+    archive = root / "dxc.zip"
+    with zipfile.ZipFile(archive, "w") as out:
+        out.writestr("bin/x64/dxc.exe", b"official dxc fixture")
+        out.writestr("bin/x64/dxcompiler.dll", b"official library fixture")
+        out.writestr("LICENSE-LLVM.txt", b"fixture license")
+    monkeypatch.setattr(package_runtime, "DXC_SHA256", hashlib.sha256(archive.read_bytes()).hexdigest())
+    return archive
+
+
 def test_host_tools_input_replaces_tool_files_and_records_provenance(tmp_path, monkeypatch):
     source = _host_tool_inputs(tmp_path)
+    dxc_archive = _pinned_dxc_fixture(tmp_path, monkeypatch)
     old = tmp_path / "binaries/windows/x64"
     _write(old / "adb/adb.exe", b"old adb")
     _write(old / "adb/old-helper.dll", b"stale tool file")
     monkeypatch.setattr(package_runtime, "tools_root", lambda: tmp_path)
-    assert package_runtime.main(["--host-tools", str(source)]) == 0
+    assert package_runtime.main(["--host-tools", str(source), "--dxc-archive", str(dxc_archive)]) == 0
     assert (old / "adb/adb.exe").read_text(encoding="utf-8") == "new adb/adb.exe"
     assert not (old / "adb/old-helper.dll").exists()
     tools = json.loads((old / "manifest.runtime.json").read_text(encoding="utf-8"))["bundled_tools"]
     assert tools["adb"]["path"] == "adb/adb.exe"
     assert tools["adb"]["license_path"] == "binaries/windows/x64/adb/NOTICE.txt"
     assert tools["spirv_dis"]["build"] == "fixture"
+    assert tools["dxc"]["source_sha256"] == package_runtime.DXC_SHA256
+    assert (old / "dxc/dxcompiler.dll").read_bytes() == b"official library fixture"
+
+
+def test_host_tools_reject_unpinned_dxc_archive(tmp_path, monkeypatch):
+    source = _host_tool_inputs(tmp_path)
+    archive = _pinned_dxc_fixture(tmp_path, monkeypatch)
+    archive.write_bytes(archive.read_bytes() + b"changed")
+    monkeypatch.setattr(package_runtime, "tools_root", lambda: tmp_path)
+    assert package_runtime.main(["--host-tools", str(source), "--dxc-archive", str(archive)]) == 1
+    assert not (tmp_path / "binaries").exists()
 
 
 @pytest.mark.parametrize("damage", ["provenance", "license", "file"])
 def test_incomplete_host_tool_input_is_rejected(tmp_path, monkeypatch, damage):
     source = _host_tool_inputs(tmp_path)
+    dxc_archive = _pinned_dxc_fixture(tmp_path, monkeypatch)
     provenance = json.loads((source / "bundled_tools.json").read_text(encoding="utf-8"))
     if damage == "provenance":
         provenance["adb"]["source_sha256"] = ""
@@ -479,7 +502,7 @@ def test_incomplete_host_tool_input_is_rejected(tmp_path, monkeypatch, damage):
         (source / "spirv-tools/spirv-dis.exe").unlink()
     (source / "bundled_tools.json").write_text(json.dumps(provenance), encoding="utf-8")
     monkeypatch.setattr(package_runtime, "tools_root", lambda: tmp_path)
-    assert package_runtime.main(["--host-tools", str(source)]) == 1
+    assert package_runtime.main(["--host-tools", str(source), "--dxc-archive", str(dxc_archive)]) == 1
     assert not (tmp_path / "binaries").exists()
 
 

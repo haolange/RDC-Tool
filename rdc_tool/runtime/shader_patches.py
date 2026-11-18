@@ -135,7 +135,16 @@ def _shader_edit_plan(
         "allowed_edit_inputs": [], "allowed_ops": [], "build_input_kind": "unsupported", "requires_toolchain": [],
     })
     encoding_key = str(source_encoding or "").strip().lower().replace("_", "")
-    if encoding_key in {"dxil", "dxbc"}:
+    if encoding_key == "dxil":
+        plan["input_kind"] = "source_unavailable"
+        plan["recommended_next_tool"] = "rd.shader.get_disassembly"
+        plan["fallback_tools"] = ["rd.shader.get_disassembly", "rd.shader.extract_binary"]
+        plan["blocked_reason"] = (
+            "DXIL debug source is unavailable. Request target='DXIL ASM' from "
+            "rd.shader.get_disassembly and inspect its edit_plan before replacement."
+        )
+        return plan
+    if encoding_key == "dxbc":
         plan["input_kind"] = "renderdoc_disassembly"
         plan["recommended_next_tool"] = "rd.shader.get_disassembly"
         plan["fallback_tools"] = ["rd.shader.get_disassembly", "rd.shader.extract_binary"]
@@ -180,6 +189,9 @@ def _shader_source_fallback_args(
     if encoding_key in {"spirv", "spirvasm", "openglspirv", "openglspirvasm"}:
         args["target"] = "SPIR-V ASM"
         args["source_encoding"] = "spirvasm"
+    elif encoding_key == "dxil":
+        args["target"] = "DXIL ASM"
+        args["source_encoding"] = "dxilasm"
     return args
 
 

@@ -29,6 +29,8 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 from rdc_tool.platform import process
+from rdc_tool.platform import dxc
+from rdc_tool.host_tools import HostToolUnavailableError, resolve_host_tool
 from rdc_tool.core.session_manager import SessionManager
 from rdc_tool.runtime_paths import cli_runtime_dir
 from rdc_tool.models import (
@@ -138,6 +140,7 @@ def _shader_build_input_provenance(
     """Identify the exact BuildTargetShader input, never inferred device code."""
     normalized = str(encoding).strip().lower().replace("_", "")
     is_spirv = normalized in {"spirv", "openglspirv"}
+    is_dxil = normalized == "dxil" and data[:4] == b"DXBC"
     header: Dict[str, Any] = {
         "status": "unavailable", "reason": "Build input is source text, not a SPIR-V module."
     }
@@ -156,7 +159,7 @@ def _shader_build_input_provenance(
         "original_shader_id": _shader_id_str(original_shader_id),
         "target_shader_id": _shader_id_str(target_shader_id),
         "sha256": hashlib.sha256(data).hexdigest(), "byte_size": len(data),
-        "byte_kind": "spirv-module" if is_spirv else "source-text", "spirv_header": header,
+        "byte_kind": "spirv-module" if is_spirv else "dxil-container" if is_dxil else "source-text", "spirv_header": header,
         "device_binary_observed": False,
     }
 
@@ -373,6 +376,14 @@ class PatchEngine:
                     requested_target=str(patch_spec.source_target or ""),
                     requested_encoding=str(patch_spec.source_encoding or ""),
                 )
+            except HostToolUnavailableError as exc:
+                return PatchResult(
+                    patch_id=patch_spec.patch_id, success=False, error_message=str(exc),
+                    error_code="host_tool_unavailable", error_category="capability",
+                    error_details={"event_id": int(event_id), "session_id": str(session_id),
+                                   "failure_stage": "disassembly", "replacement_attempted": False,
+                                   "effects_attempted": False, "context_preserved": True},
+                )
             except RuntimeError as exc:
                 return PatchResult(
                     patch_id=patch_spec.patch_id,
@@ -463,6 +474,15 @@ class PatchEngine:
                     entry_point=str(getattr(refl, "entryPoint", "") or "main"),
                 )
             messages: List[str] = []
+            if (self._is_raw_dxil_asm_request(str(disasm_target), str(patch_spec.source_encoding or ""))
+                    and not patch_spec.expected_source_hash):
+                return PatchResult(
+                    patch_id=patch_spec.patch_id, original_shader_hash=original_hash, success=False,
+                    error_message="DXIL ASM replacement requires expected_source_hash from the current disassembly",
+                    error_code="shader_source_mismatch", error_category="validation",
+                    error_details={"failure_stage": "validate_source", "failure_reason": "expected_source_hash_missing",
+                                   "replacement_attempted": False, "effects_attempted": False, "context_preserved": True},
+                )
             if patch_spec.expected_source_hash and patch_spec.expected_source_hash != original_hash:
                 return PatchResult(
                     patch_id=patch_spec.patch_id,
@@ -650,7 +670,8 @@ class PatchEngine:
                             )
                     modified = self._apply_op(modified, encoding_name, op)
 
-            if modified == source:
+            if modified == source and not (self._is_raw_dxil_asm_request(str(disasm_target), "")
+                                           and (patch_spec.source_text or patch_spec.diff_text)):
                 logger.warning(
                     "Patch %s: operations produced no changes to the shader "
                     "source (stage=%s, event=%d)",
@@ -681,6 +702,21 @@ class PatchEngine:
                     modified,
                     encoding_name,
                     str(disasm_target),
+                )
+            except (HostToolUnavailableError, dxc.DxcError) as exc:
+                missing = isinstance(exc, HostToolUnavailableError)
+                stage_name = getattr(exc, "stage", "toolchain")
+                return PatchResult(
+                    patch_id=patch_spec.patch_id, original_shader_hash=original_hash, success=False,
+                    error_message=str(exc),
+                    error_code="host_tool_unavailable" if missing else f"shader_{stage_name}_failed",
+                    error_category="capability" if missing else "validation",
+                    error_details={"event_id": int(event_id), "stage": stage.value.upper(), "session_id": str(session_id),
+                                   "failure_stage": stage_name, "diagnostics": getattr(exc, "diagnostics", str(exc)),
+                                   "line": getattr(exc, "line", None), "replacement_attempted": False,
+                                   "effects_attempted": False, "context_preserved": True},
+                    source_before_text=source, source_after_text=modified,
+                    disassembly_target=str(disasm_target), encoding=encoding_name, entry_point=str(entry_point),
                 )
             except RuntimeError as exc:
                 return PatchResult(
@@ -1687,6 +1723,17 @@ class PatchEngine:
         targets = [str(t) for t in controller.GetDisassemblyTargets(True)]
         supported_encodings = list(controller.GetTargetShaderEncodings())
 
+        if cls._is_raw_dxil_asm_request(target_name, encoding_name):
+            if cls._encoding_name(getattr(refl, "encoding", "")) != "dxil":
+                raise RuntimeError("DXIL ASM requires a DXIL shader; legacy DXBC remains read-only")
+            encoding = cls._find_requested_encoding(supported_encodings, "dxil")
+            if encoding is None:
+                raise RuntimeError("DXIL ASM replacement requires a replay backend that accepts DXIL")
+            source = cls._disassemble_raw_dxil_bytes(refl)
+            if not cls._looks_like_raw_dxil_asm(source):
+                raise RuntimeError("DXC did not return editable DXIL LLVM IR")
+            return source, encoding, "DXIL ASM", False
+
         if raw_requested:
             encoding = cls._find_requested_encoding(supported_encodings, encoding_name or "spirvasm")
             if encoding is None:
@@ -1743,6 +1790,11 @@ class PatchEngine:
         )
 
     @staticmethod
+    def _is_raw_dxil_asm_request(target: str, encoding: str) -> bool:
+        return (str(target or "").strip().lower().replace("_", " ") == "dxil asm"
+                or str(encoding or "").strip().lower().replace("_", "") == "dxilasm")
+
+    @staticmethod
     def _find_matching_target(targets: List[str], requested_target: str) -> str:
         requested = str(requested_target or "").strip().lower()
         for target in targets:
@@ -1785,6 +1837,32 @@ class PatchEngine:
             return False
         # A header, comment, or diagnostic mentioning SPIR-V is not an instruction.
         return re.search(r"^[ \t]*(?:%[^\s=]+[ \t]*=[ \t]*)?Op[A-Z][A-Za-z0-9_]*\b", text, re.MULTILINE) is not None
+
+    @staticmethod
+    def _looks_like_raw_dxil_asm(source: str) -> bool:
+        text = str(source or "")
+        return (re.search(r"^[ \t]*define\b[^\n]*@[A-Za-z_.$][\w.$]*\s*\(", text, re.MULTILINE) is not None
+                and re.search(r"^[ \t]*(?:%[^\s=]+[ \t]*=[ \t]*)?(?:tail[ \t]+)?call\b[^\n]*@dx\.op\.",
+                              text, re.MULTILINE) is not None)
+
+    @staticmethod
+    def _disassemble_raw_dxil_bytes(refl: Any) -> str:
+        payload = bytes(getattr(refl, "rawBytes", b""))
+        if payload[:4] != b"DXBC":
+            raise RuntimeError("DXIL shader has no original DXBC container bytes")
+        tool = str(resolve_host_tool("dxc"))
+        runtime_dir = cli_runtime_dir() / "patch_engine"
+        runtime_dir.mkdir(parents=True, exist_ok=True)
+        source_path = runtime_dir / f"dxil_{uuid.uuid4().hex[:10]}.dxil"
+        try:
+            source_path.write_bytes(payload)
+            proc = process.run_tool([tool, "-dumpbin", str(source_path)], capture_output=True,
+                                    text=True, timeout=20, check=False)
+            if proc.returncode != 0:
+                raise RuntimeError(f"dxc -dumpbin failed: {(proc.stderr or proc.stdout or '').strip()}")
+            return proc.stdout
+        finally:
+            source_path.unlink(missing_ok=True)
 
     @staticmethod
     def _disassemble_raw_spirv_bytes(refl: Any) -> str:
@@ -1837,6 +1915,12 @@ class PatchEngine:
         disassembly_target: str,
     ) -> bytes:
         normalized = str(encoding_name or "").strip().lower().replace("_", "")
+        if normalized in {"dxil", "dxilasm"} and cls._is_raw_dxil_asm_request(disassembly_target, encoding_name):
+            library = resolve_host_tool("dxcompiler")
+            try:
+                return dxc.assemble_and_validate(library, source)
+            except OSError as exc:
+                raise HostToolUnavailableError(f"Cannot load dxcompiler at {library}: {exc}") from exc
         if normalized in {"spirv", "openglspirv"} and cls._looks_like_raw_spirv_asm(source):
             return cls._assemble_spirv_asm(source)
         return str(source or "").encode("utf-8")
@@ -1856,6 +1940,23 @@ class PatchEngine:
             normalized in {"spirv", "openglspirv", "spirvasm", "openglspirvasm"}
             and cls._looks_like_raw_spirv_asm(source)
         )
+        if (normalized in {"dxil", "dxilasm"} and cls._is_raw_dxil_asm_request(target, normalized)
+                and cls._looks_like_raw_dxil_asm(source)):
+            missing = []
+            for name in ("dxc", "dxcompiler"):
+                try:
+                    resolve_host_tool(name)
+                except HostToolUnavailableError as exc:
+                    missing.append(str(exc))
+            return {
+                "shader_format": {"source_encoding": "dxilasm", "container": "dxil", "disassembly_target": "DXIL ASM"},
+                "input_kind": "text_ir", "can_edit_text": True, "can_build": True, "can_replace": True,
+                "requires_toolchain": ["dxc", "dxcompiler"], "toolchain_available": not missing,
+                "missing_toolchain": missing, "build_input_kind": "binary_dxil",
+                "allowed_edit_inputs": ["source_text", "diff_text"], "allowed_ops": [],
+                "recommended_next_tool": "rd.shader.edit_and_replace",
+                "blocked_reason": "" if not missing else "; ".join(missing),
+            }
         if normalized in {"hlsl", "glsl"}:
             return {
                 "shader_format": {

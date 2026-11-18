@@ -16,6 +16,7 @@ RDC-Tool 不自动跟随上游每个版本；新运行库只有在完成同源�
 
 - `rdc_tool/operation_definitions.py` 是操作契约的唯一真源；`spec/tool_catalog.json` 与 `docs/tool-reference.md` 由它生成。catalog fingerprint 是能力身份，不能用包版本号代替。
 - 每个主机运行目录下的 `manifest.runtime.json` 是该目录捆绑文件集与哈希的真源（含 `bundled_python`、`bundled_tools`）。
+- Windows 主机工具打包固定 DXC `v1.9.2609` 官方 ZIP（SHA-256 `ad31b1fc8443175d204f77a611fdb3ef2ec42759bdc2f1167368de24a4a7e7f1`），可用 `--dxc-archive` 指定同一校验值的离线输入；只捆绑 `dxc.exe`、`dxcompiler.dll` 与 `LICENSE-LLVM.txt`，来源和许可写入运行清单。Linux 不捆绑 DXC。
 - `binaries/native_build.json` 是全目标共享的原生构建回执：一份冻结源码产出的所有目标都记录在这一份文件里。`rdc_tool.runtime_identity.native_manifest_status` 与 `rdc-tool --json doctor` 校验它；实际加载的模块路径与哈希是独立的运行时观察。
 - “最新”指最近一次提交且所声明能力与捆绑运行库都通过必需检查的发布，不代表自动跟随上游 RenderDoc，也不代表支持所有 API、capture、驱动或设备。
 - 能力或行为变更须同步仓库根 `binaries/` 默认运行集、生成的 catalog 与参考文档、受影响文档及 RDC-Agent 消费集成。未受影响且已验证的组件可沿用已记录的身份与证据；本地候选或其他运行目录只是测试证据，不能在发布中代替根运行库。

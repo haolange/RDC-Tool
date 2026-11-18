@@ -65,7 +65,7 @@ Windows 包同时携带 Python、RenderDoc 运行库、Android arm32/arm64 helpe
 
 - **原生集合**：`--source`（本库内本主机的原生暂存目录）与 `--build-receipt` 必须同时提供；receipt 配对了哪些 Android helper，就必须恰好提供对应的 `--arm32-apk`／`--arm64-apk`。receipt 的结构与校验规则见 [发布基线](release-baseline.md#原生构建回执)：`source` 必须恰好包含 `repository`、`revision`、`base_revision`、`upstream_revision` 与 `tree_sha256`，每个目标的 `inputs_sha256` 等于同一 `source.tree_sha256`。主机角色是 `native_library`／`binding_module`，Android 是 `helper_apk`；本机构建的输出路径相对 receipt 所在目录或为绝对路径，其他主机目标只核对已在运行树中的字节。主机 build 的 `runtime_files` 相对原生暂存目录，覆盖原生库、layer JSON 与 `pymodules/` 全部文件，未列入或发生漂移的输入拒绝打包。新集合完整替换旧原生文件，所有记录统一转换为包内路径。
 - **捆绑 Python**：`--python-archive` 必须与 `scripts/python-runtimes.json` 中本主机的 pin（版本、来源 URL、sha256）一致，且解释器在本机实际运行出同一版本。只复制 pin 列出的条目，去掉符号链接别名、缓存、文档及 `test`、`idlelib`、`tkinter`、`ensurepip` 等运行时不用的包；第三方依赖由该解释器自身按 `scripts/runtime-dependencies.lock` 以 `--require-hashes --only-binary=:all: --no-deps` 安装到空的 site-packages，pip 本身不进入运行目录。解释器文件位置由主机布局决定，manifest 的 `bundled_python` 只记录版本、来源与 lock 摘要。
-- **主机工具**：`--host-tools` 目录包含主机布局列出的全部工具文件，以及 `bundled_tools.json`（每个工具的 `version`、`source_url`、`source_sha256`、`license`、`license_path`，可附 `build` 等构建信息）。
+- **主机工具**：`--host-tools` 目录包含 adb 与 SPIR-V 工具文件，以及 `bundled_tools.json`（每个工具的 `version`、`source_url`、`source_sha256`、`license`、`license_path`，可附 `build` 等构建信息）。Windows 的 DXC 由脚本按固定版本和 SHA-256 获取，也可用 `--dxc-archive` 指定相同哈希的本地官方归档；其来源和许可证自动记入清单。
 
 manifest 列出运行目录内全部有归属的文件；不属于这三部分的文件直接拒绝，既不跳过也不认证。
 

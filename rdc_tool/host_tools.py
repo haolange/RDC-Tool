@@ -1,4 +1,4 @@
-"""Host utilities (adb, spirv-as, spirv-dis): bundled per host or explicitly overridden."""
+"""Host utilities: bundled per host or explicitly overridden."""
 from __future__ import annotations
 
 import json
@@ -13,6 +13,8 @@ OVERRIDE_VARIABLES = {
     "adb": "RDC_TOOL_ANDROID_ADB_PATH",
     "spirv_as": "RDC_TOOL_SPIRV_TOOLS_PATH",
     "spirv_dis": "RDC_TOOL_SPIRV_TOOLS_PATH",
+    "dxc": "RDC_TOOL_DXC_TOOLS_PATH",
+    "dxcompiler": "RDC_TOOL_DXC_TOOLS_PATH",
 }
 
 
@@ -27,7 +29,9 @@ def bundled_host_files(layout: HostLayout | None = None) -> tuple[str, ...]:
 
 
 def resolve_host_tool(name: str) -> Path:
-    relative = host_layout().host_tools[name]
+    relative = host_layout().host_tools.get(name)
+    if relative is None:
+        raise HostToolUnavailableError(f"{name} is not bundled or supported on this host.")
     variable = OVERRIDE_VARIABLES[name]
     override = os.environ.get(variable, "").strip()
     if override:
@@ -46,7 +50,8 @@ def resolve_host_tool(name: str) -> Path:
 
 def host_tools_status() -> dict:
     result = {}
-    for name, variable in OVERRIDE_VARIABLES.items():
+    for name in host_layout().host_tools:
+        variable = OVERRIDE_VARIABLES[name]
         entry = {"source": "explicit" if os.environ.get(variable, "").strip() else "bundled", "path": "", "available": False}
         try:
             entry.update(path=str(resolve_host_tool(name)), available=True)
@@ -63,7 +68,7 @@ def validate_bundled_host_tools() -> tuple[bool, list[str]]:
         manifest = json.loads((binaries_root() / "manifest.runtime.json").read_text(encoding="utf-8"))
         records = {entry["path"]: entry for entry in manifest["files"]}
         sources = manifest["bundled_tools"]
-        for name in OVERRIDE_VARIABLES:
+        for name in host_layout().host_tools:
             source = sources[name]
             if not source.get("version") or not source.get("source_url") or not source.get("license"):
                 failures.append(f"incomplete third-party provenance: {name}")

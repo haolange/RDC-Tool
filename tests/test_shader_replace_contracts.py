@@ -652,7 +652,7 @@ def test_get_source_unbound_event_proves_restoration_or_reports_failure(
         assert current_event["value"] == 1248
 
 
-def test_get_source_reports_dxil_readonly_fallback_when_debug_source_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_get_source_reports_editable_dxil_fallback_when_debug_source_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_shader_replace_env(monkeypatch, _EncodingController("DXIL"))
     live_state._session_manager = _FakeSessionManager()
 
@@ -670,10 +670,10 @@ def test_get_source_reports_dxil_readonly_fallback_when_debug_source_unavailable
     assert payload.ok is True
     assert payload.data['source_available'] is False
     assert payload.data['fallback_tool'] == "rd.shader.get_disassembly"
-    assert payload.data['fallback_args']["target"] == "auto"
-    assert "source_encoding" not in payload.data['fallback_args']
+    assert payload.data['fallback_args']["target"] == "DXIL ASM"
+    assert payload.data['fallback_args']["source_encoding"] == "dxilasm"
     assert payload.data['edit_plan']["shader_format"]["container"] == "dxil"
-    assert payload.data['edit_plan']["input_kind"] == "renderdoc_disassembly"
+    assert payload.data['edit_plan']["input_kind"] == "source_unavailable"
     assert payload.data['edit_plan']["can_replace"] is False
     assert payload.data['edit_plan']["allowed_edit_inputs"] == []
     assert "rd.shader.extract_binary" in payload.data['edit_plan']["fallback_tools"]

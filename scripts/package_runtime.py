@@ -16,6 +16,7 @@ import struct
 import sys
 import tarfile
 import tempfile
+import urllib.request
 import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
@@ -37,6 +38,9 @@ PYTHON_PINS = SCRIPT_ROOT / "scripts" / "python-runtimes.json"
 DEPENDENCY_LOCK = SCRIPT_ROOT / "scripts" / "runtime-dependencies.lock"
 MANIFEST = "manifest.runtime.json"
 HOST_TOOL_PROVENANCE = "bundled_tools.json"
+DXC_VERSION = "v1.9.2609"
+DXC_URL = "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2609/dxc_2026_09_29.zip"
+DXC_SHA256 = "ad31b1fc8443175d204f77a611fdb3ef2ec42759bdc2f1167368de24a4a7e7f1"
 DENY_SUFFIXES = {".pdb", ".lib", ".exp", ".ilk", ".h"}
 SKIP_SUFFIXES = {".pyc", ".md", ".rst", ".chm"}
 SKIP_STDLIB_TOP_LEVEL = {"site-packages", "test", "tests", "idlelib", "turtledemo", "ensurepip", "venv", "tkinter", "__pycache__"}
@@ -235,12 +239,15 @@ def _bundle_python(root: Path, out_root: Path, layout: HostLayout, args: argpars
 
 # --- host tools -------------------------------------------------------------
 
-def _install_host_tools(root: Path, out_root: Path, layout: HostLayout, raw: str) -> dict[str, Any]:
+def _install_host_tools(root: Path, out_root: Path, layout: HostLayout, raw: str,
+                        dxc_archive: str = "", work: Path | None = None) -> dict[str, Any]:
     source = _resolve_input_path(root, raw, label="host tools", allow_outside_root=True)
     _reject_links(source)
     provenance = json.loads((source / HOST_TOOL_PROVENANCE).read_text(encoding="utf-8"))
-    if set(provenance) != set(layout.host_tools):
-        raise ValueError(f"Host tool provenance must describe exactly {sorted(layout.host_tools)}")
+    dxc_names = {"dxc", "dxcompiler"} & set(layout.host_tools)
+    required = set(layout.host_tools) - dxc_names
+    if set(provenance) != required:
+        raise ValueError(f"Host tool provenance must describe exactly {sorted(required)}")
     tools: dict[str, Any] = {}
     for name, record in provenance.items():
         if not all(str(record.get(key) or "").strip() for key in ("version", "source_url", "source_sha256", "license")):
@@ -248,7 +255,7 @@ def _install_host_tools(root: Path, out_root: Path, layout: HostLayout, raw: str
         if record.get("license_path") not in layout.host_tool_files:
             raise ValueError(f"{name} license_path must name a bundled license file: {record.get('license_path')}")
         tools[name] = {**record, "license_path": f"{layout.runtime_dir}/{record['license_path']}", "path": layout.host_tools[name]}
-    files = bundled_host_files(layout)
+    files = tuple(relative for relative in bundled_host_files(layout) if not relative.startswith("dxc/"))
     for relative in files:
         if not (source / relative).is_file():
             raise ValueError(f"Missing host tool input: {relative}")
@@ -257,6 +264,27 @@ def _install_host_tools(root: Path, out_root: Path, layout: HostLayout, raw: str
     for relative in files:
         (out_root / relative).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source / relative, out_root / relative)
+    if dxc_names:
+        assert work is not None
+        work.mkdir(parents=True, exist_ok=True)
+        archive = (_resolve_input_path(root, dxc_archive, label="DXC archive", allow_outside_root=True)
+                   if dxc_archive else work / "dxc.zip")
+        if not dxc_archive:
+            urllib.request.urlretrieve(DXC_URL, archive)
+        if sha256_file(archive) != DXC_SHA256:
+            raise ValueError("DXC archive does not match the pinned SHA-256")
+        destination = out_root / "dxc"
+        shutil.rmtree(destination, ignore_errors=True)
+        destination.mkdir(parents=True)
+        with zipfile.ZipFile(archive) as package:
+            for member, name in (("bin/x64/dxc.exe", "dxc.exe"), ("bin/x64/dxcompiler.dll", "dxcompiler.dll"),
+                                 ("LICENSE-LLVM.txt", "LICENSE-LLVM.txt")):
+                with package.open(member) as reader, (destination / name).open("wb") as writer:
+                    shutil.copyfileobj(reader, writer)
+        record = {"version": DXC_VERSION, "source_url": DXC_URL, "source_sha256": DXC_SHA256,
+                  "license": "LICENSE-LLVM", "license_path": f"{layout.runtime_dir}/dxc/LICENSE-LLVM.txt"}
+        for name in dxc_names:
+            tools[name] = {**record, "path": layout.host_tools[name]}
     return tools
 
 
@@ -291,7 +319,8 @@ def _assemble_runtime(root: Path, staged_root: Path, args: argparse.Namespace, w
     previous = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.is_file() else {}
     receipt = _install_native_set(root, staged_root, args) if args.renderdoc_source else None
     bundled_python = _bundle_python(root, out_root, layout, args, work) if args.python_archive else previous.get("bundled_python")
-    bundled_tools = _install_host_tools(root, out_root, layout, args.host_tools) if args.host_tools else previous.get("bundled_tools")
+    bundled_tools = (_install_host_tools(root, out_root, layout, args.host_tools, args.dxc_archive, work)
+                     if args.host_tools else previous.get("bundled_tools"))
 
     files = [{"path": path.relative_to(out_root).as_posix(), "size": path.stat().st_size, "sha256": sha256_file(path)}
              for path in _owned_files(out_root, layout)]
@@ -326,6 +355,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--python-archive", default="", help=f"Interpreter archive pinned in {PYTHON_PINS.name}")
     parser.add_argument("--host-tools", default="",
                         help=f"Directory with the layout's host-tool files and {HOST_TOOL_PROVENANCE}")
+    parser.add_argument("--dxc-archive", default="", help="Use this pinned DXC archive instead of downloading it")
     parser.add_argument("--output-root", default="",
                         help="Assemble a new runtime root under intermediate/ or dist/ without replacing the current runtime")
     return parser.parse_args(argv)
@@ -346,7 +376,7 @@ def main(argv: list[str] | None = None) -> int:
     output = task_directory(root, args.output_root, label="runtime output root", new=True) if args.output_root else None
     destination = output if output is not None else ensure_within_root(root, root / "binaries", label="runtime output")
     if output is not None:
-        for raw in (args.renderdoc_source, args.python_archive, args.host_tools):
+        for raw in (args.renderdoc_source, args.python_archive, args.host_tools, args.dxc_archive):
             if raw:
                 source = resolve_repo_path(root, raw)
                 if source.is_relative_to(output) or output.is_relative_to(source):

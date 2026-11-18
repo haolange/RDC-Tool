@@ -16,7 +16,7 @@
 
 | 脚本 / 数据 | 作用 |
 |---|---|
-| `package_runtime.py` | 在本主机组装本主机运行目录：原生集合（`--source` + `--build-receipt`）、捆绑 Python（`--python-archive`）、主机工具（`--host-tools`），规则见 [docs/install.md](../docs/install.md) |
+| `package_runtime.py` | 在本主机组装本主机运行目录：原生集合（`--source` + `--build-receipt`）、捆绑 Python（`--python-archive`）、主机工具（`--host-tools`）；Windows 可用 `--dxc-archive` 指定已钉哈希的官方 DXC 归档，规则见 [docs/install.md](../docs/install.md) |
 | `python-runtimes.json` | 每个主机布局钉住的官方 Python 归档（版本、来源、sha256、复制条目） |
 | `runtime-dependencies.lock` | 捆绑 Python 的第三方依赖哈希锁（`uv pip compile` 生成） |
 | `native_source_digest.py` | 计算原生构建回执的 `tree_sha256`（按 Git 提交内容），定义见 [docs/release-baseline.md](../docs/release-baseline.md) |

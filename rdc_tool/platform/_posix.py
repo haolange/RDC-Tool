@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+
+def assemble_and_validate_dxil(library, source):
+    raise OSError("The DXIL compiler is unavailable on this host")
+
 import ctypes
 import errno
 import fcntl
