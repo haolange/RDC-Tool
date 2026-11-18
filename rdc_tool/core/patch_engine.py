@@ -348,7 +348,10 @@ class PatchEngine:
             direct_target = str(patch_spec.target or "").strip().lower()
             direct_full_replace = bool(direct_source) and (
                 direct_encoding_name in {"hlsl", "glsl"}
-                or bool(re.match(r"^[a-z]{2}_[0-9]", direct_target))
+                or (
+                    bool(re.match(r"^[a-z]{2}_[0-9]", direct_target))
+                    and not self._is_raw_dxil_asm_request(str(patch_spec.source_target or ""), direct_encoding_name)
+                )
             )
             if direct_full_replace:
                 return self._apply_full_source_replace(

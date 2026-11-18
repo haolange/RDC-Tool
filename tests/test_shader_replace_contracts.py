@@ -1339,6 +1339,40 @@ def test_patch_engine_source_hash_binds_original(monkeypatch: pytest.MonkeyPatch
     assert controller.replace_calls == []
 
 
+def test_dxil_asm_source_with_shader_model_target_uses_original_disassembly_hash(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_rd = SimpleNamespace(
+        ResourceId=lambda: "ResourceId::0",
+        ShaderCompileFlags=_FakeShaderCompileFlags,
+        ShaderCompileFlag=_FakeShaderCompileFlag,
+    )
+    monkeypatch.setattr(patch_engine_mod, "_get_rd", lambda: fake_rd)
+    monkeypatch.setattr(patch_engine_mod, "_to_rd_stage", lambda stage: "ps")
+    original = "define void @Main() {\n  call void @dx.op.test(float 1.0)\n  ret void\n}\n"
+    modified = original.replace("float 1.0", "float 0.0")
+    engine = patch_engine_mod.PatchEngine()
+    monkeypatch.setattr(engine, "_resolve_source", lambda *args, **kwargs: (original, "DXIL", "DXIL ASM", []))
+    monkeypatch.setattr(engine, "_edit_plan_for_source", lambda **kwargs: {"can_replace": True})
+    monkeypatch.setattr(engine, "_source_bytes_for_build", lambda source, encoding, target: b"validated-dxil-container")
+    controller = _PatchEngineController()
+    manager = _PatchEngineSessionManager(controller)
+    spec = PatchSpec(
+        patch_id="repl_demo", target_event_id=314, target_stage=ShaderStage.PS,
+        target_shader_id="ResourceId::77", source_text=modified, source_target="DXIL ASM",
+        source_encoding="dxilasm", target="ps_6_0", expected_source_hash=hashlib.sha256(original.encode()).hexdigest(),
+    )
+    rejected = engine._apply_patch_sync("sess_demo", 314, ShaderStage.PS, manager,
+                                        spec.model_copy(update={"expected_source_hash": "incorrect"}))
+    assert rejected.error_code == "shader_source_mismatch"
+    assert rejected.error_details["replacement_attempted"] is False
+    assert controller.build_calls == [] and controller.replace_calls == []
+
+    result = engine._apply_patch_sync("sess_demo", 314, ShaderStage.PS, manager, spec)
+    assert result.success is True
+    assert result.original_shader_hash == hashlib.sha256(original.encode()).hexdigest()
+    assert controller.build_calls[0][1:3] == ("DXIL", b"validated-dxil-container")
+    assert controller.replace_calls == [("ResourceId::77", "ResourceId::99")]
+
+
 @pytest.mark.parametrize("variables, expected", [
     (["7"], "\nOpDecorate %8 RelaxedPrecision\nOpDecorate %7 Location 0\n%7 = OpLoad %2 %3\n"),
     ([], "\n\nOpDecorate %7 Location 0\n%7 = OpLoad %2 %3\n"),
