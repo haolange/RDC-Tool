@@ -51,7 +51,9 @@ HOST_LAYOUTS: Mapping[str, HostLayout] = MappingProxyType({
     ),
     "linux-x64": HostLayout(
         runtime_dir="binaries/linux/x64",
-        native_library="librenderdoc.so",
+        # The binding's RUNPATH ($ORIGIN/../lib/) resolves this path, so the library loads as the
+        # binding's dependency and RenderDoc initialises in replay mode, not as a capture hook.
+        native_library="lib/librenderdoc.so",
         binding_module="pymodules/renderdoc.so",
         python=MappingProxyType({
             "executable": "python/bin/python3.14",

@@ -17,7 +17,7 @@ import zipfile
 from rdc_tool.android_apk_identity import read_apk_identity
 from rdc_tool.platform import native as platform_native
 from rdc_tool.platform import host as platform_host
-from rdc_tool.runtime_paths import HOST_LAYOUTS, binding_module_name, native_library_name
+from rdc_tool.runtime_paths import HOST_LAYOUTS, binding_module_name, host_layout, native_library_name
 
 
 RECEIPT_PATH = "binaries/native_build.json"
@@ -56,10 +56,11 @@ def native_runtime_files(directory: Path) -> dict[str, Path]:
     """A host runtime's native surface (libraries, layer manifest, binding), apart from Python and host tools."""
     result = {path.name: path for path in directory.iterdir()
               if path.is_file() and path.suffix.lower() in NATIVE_SUFFIXES and path.name != "manifest.runtime.json"}
-    modules = directory / "pymodules"
-    if modules.is_dir():
-        result.update({path.relative_to(directory).as_posix(): path for path in modules.rglob("*")
-                       if path.is_file() and "__pycache__" not in path.parts and path.suffix.lower() != ".pyc"})
+    for subdirectory in ("lib", "pymodules"):
+        nested = directory / subdirectory
+        if nested.is_dir():
+            result.update({path.relative_to(directory).as_posix(): path for path in nested.rglob("*")
+                           if path.is_file() and "__pycache__" not in path.parts and path.suffix.lower() != ".pyc"})
     return result
 
 
@@ -299,7 +300,7 @@ def loaded_runtime_identity(bin_dir: Path, pymod_dir: Path) -> dict[str, Any]:
         if dll is None:
             return {**result, "status": "not_loaded" if module is None else "unavailable",
                     "reason": "native_dll_not_loaded"}
-        matches = dll == (bin_dir / native_library_name()).resolve()
+        matches = dll == (bin_dir / host_layout().native_library).resolve()
         if module is not None:
             matches = matches and pyd == (pymod_dir / binding_module_name()).resolve()
         return {**result, "status": ("observed" if module is not None else "partial") if matches else "mismatch",

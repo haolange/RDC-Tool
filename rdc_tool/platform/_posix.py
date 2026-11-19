@@ -6,7 +6,6 @@ from __future__ import annotations
 def assemble_and_validate_dxil(library, source):
     raise OSError("The DXIL compiler is unavailable on this host")
 
-import ctypes
 import errno
 import fcntl
 import os
@@ -33,24 +32,17 @@ def unlock(fd: int) -> None:
     fcntl.flock(fd, fcntl.LOCK_UN)
 
 
-_PRELOADED: dict[str, Any] = {}
-
-
 def prepare_loader(native_library: Path, binding_dir: Path, report: Any) -> None:
-    # LD_LIBRARY_PATH cannot change after start-up, so the exact library is
-    # preloaded globally and the binding's DT_NEEDED entry resolves to it.
-    key = str(native_library.resolve())
-    if key in _PRELOADED:
-        return
+    # The binding's RUNPATH resolves the library as its DT_NEEDED dependency. Loading the library
+    # first would run RenderDoc's constructor before the binding's replay marker exists, which
+    # makes it install capture hooks and crash during replay, so nothing is preloaded here.
     if not native_library.is_file():
         report.errors.append(f"missing native library: {native_library}")
         return
-    try:
-        _PRELOADED[key] = ctypes.CDLL(key, mode=ctypes.RTLD_GLOBAL)
-    except OSError as exc:
-        report.errors.append(f"{native_library}: {exc}")
+    if not binding_dir.is_dir():
+        report.errors.append(f"missing directory: {binding_dir}")
         return
-    report.prepared.append(key)
+    report.prepared.append(str(native_library.resolve()))
 
 
 def loaded_library_path(file_name: str) -> Path | None:

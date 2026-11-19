@@ -100,7 +100,8 @@ def _install_native_set(root: Path, staged_root: Path, args: argparse.Namespace)
     for old in runtime_identity.native_runtime_files(out_root).values():
         if old.parent == out_root:
             old.unlink()
-    shutil.rmtree(out_root / "pymodules", ignore_errors=True)
+    for subdirectory in ("lib", "pymodules"):
+        shutil.rmtree(out_root / subdirectory, ignore_errors=True)
     (out_root / "pymodules").mkdir()
     for item in files:
         destination = out_root / str(item["path"])
