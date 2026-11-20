@@ -1,5 +1,5 @@
 {
-  "file_count": 2970,
+  "file_count": 3009,
   "files": [
     {
       "path": "adb/adb.exe",
@@ -35,6 +35,21 @@
       "path": "dbghelp.dll",
       "size": 1413072,
       "sha256": "1387a9f99c2f4342dea0d68208081f936b10a0049d28478c896b808c5c13d057"
+    },
+    {
+      "path": "dxc/dxc.exe",
+      "size": 1359640,
+      "sha256": "aa7965b3763d9c710baaa5a28cedcc633449962a75d1391d161a85304a41b3e2"
+    },
+    {
+      "path": "dxc/dxcompiler.dll",
+      "size": 22274872,
+      "sha256": "0689e2fee0a1c9df8662a59680469f24e2a3ad7ce6bbbcc9284f7a83172bfc59"
+    },
+    {
+      "path": "dxc/LICENSE-LLVM.txt",
+      "size": 1979,
+      "sha256": "729615317e28dd03907e46f0fc3b5e88f7853cee61d1a1471d2749335516b46f"
     },
     {
       "path": "pymodules/renderdoc.pyd",
@@ -3082,6 +3097,21 @@
       "sha256": "fa4b0143b31f0f356f6c1955fdfb5805602612a7c0f3a963233331cda65e0252"
     },
     {
+      "path": "python/Lib/site-packages/cffi/_cffi_errors.h",
+      "size": 3908,
+      "sha256": "cd05edeee47f9bc8145be7c8da1260d0aa129091705eff111949040d9d7bedd4"
+    },
+    {
+      "path": "python/Lib/site-packages/cffi/_cffi_include.h",
+      "size": 15055,
+      "sha256": "131866826f6acc75b35a2be37d37b40fb5e9e2b3d4915c5d36ec0684c4cccdbc"
+    },
+    {
+      "path": "python/Lib/site-packages/cffi/_embedding.h",
+      "size": 18786,
+      "sha256": "022df71476e513b5d2a47382a7c90f716c0de7ff41575e0ebcdd0955ae884e9c"
+    },
+    {
       "path": "python/Lib/site-packages/cffi/_imp_emulation.py",
       "size": 2960,
       "sha256": "4714441bccc06c8d913c6070c3dd2eff97e2f2c59d6a1a5d8a93a83f3929ec2d"
@@ -3135,6 +3165,11 @@
       "path": "python/Lib/site-packages/cffi/model.py",
       "size": 21797,
       "sha256": "5b7d14150644ef78cbe4cc7937cd584fbeeeb365b68898d39b45d87e7c33d5c8"
+    },
+    {
+      "path": "python/Lib/site-packages/cffi/parse_c_type.h",
+      "size": 5976,
+      "sha256": "39dc107f033d92dababe5081e377b11509b10c1b63d8c04d74af0b625d79b63c"
     },
     {
       "path": "python/Lib/site-packages/cffi/pkgconfig.py",
@@ -5492,14 +5527,144 @@
       "sha256": "9dd045e706dd77b17cff35af479d8c0ced109b5e7f3eb0820654a4e1d932e05f"
     },
     {
+      "path": "python/Lib/site-packages/numpy/_core/include/numpy/__multiarray_api.h",
+      "size": 61743,
+      "sha256": "260b8e85e2294969e6f6ebe5adf75964934e7f43f721712a41cd77c26c5a7821"
+    },
+    {
       "path": "python/Lib/site-packages/numpy/_core/include/numpy/__ufunc_api.c",
       "size": 1799,
       "sha256": "b0780ed83c411fd706b3286608a0888f2574d391b06f64701f24b1fd075912c6"
     },
     {
+      "path": "python/Lib/site-packages/numpy/_core/include/numpy/__ufunc_api.h",
+      "size": 13405,
+      "sha256": "5cf47325b50803e6b255024a3b17893919feb5871a99d8fd1a4c3659019164f7"
+    },
+    {
+      "path": "python/Lib/site-packages/numpy/_core/include/numpy/_neighborhood_iterator_imp.h",
+      "size": 1857,
+      "sha256": "b3e1f0fe5e564702ad62fb22220845d1b83e980fc28169f314539854527eab89"
+    },
+    {
+      "path": "python/Lib/site-packages/numpy/_core/include/numpy/_numpyconfig.h",
+      "size": 890,
+      "sha256": "418f32269bfe9f43a1290538d3f14c36da6f08bde7e1130030a8d41129c6531c"
+    },
+    {
+      "path": "python/Lib/site-packages/numpy/_core/include/numpy/_public_dtype_api_table.h",
+      "size": 4574,
+      "sha256": "9fafca6fdf12cafb11fd7eecb62340e95b86a7f7395b57b87cc55c25d3b4c22b"
+    },
+    {
+      "path": "python/Lib/site-packages/numpy/_core/include/numpy/arrayobject.h",
+      "size": 204,
+      "sha256": "994e6fa5c43de4f1f58f76e9f0a62124e14707e1b1c118d252c47b9f19534919"
+    },
+    {
+      "path": "python/Lib/site-packages/numpy/_core/include/numpy/arrayscalars.h",
+      "size": 4324,
+      "sha256": "dd995f7a0e19747a7be19bc2d91b50b3d00a4627fd8063002b52278b4263aa8b"
+    },
+    {
+      "path": "python/Lib/site-packages/numpy/_core/include/numpy/dtype_api.h",
+      "size": 21455,
+      "sha256": "80442c35808725d1941e03416d76379486a9d942edc894e7e6742aca0b0e2088"
+    },
+    {
+      "path": "python/Lib/site-packages/numpy/_core/include/numpy/halffloat.h",
+      "size": 1959,
+      "sha256": "4d165f5e08a96be745a695f6b8d824ae3acf962fb505f26d69d5a301e99b278b"
+    },
+    {
+      "path": "python/Lib/site-packages/numpy/_core/include/numpy/ndarrayobject.h",
+      "size": 12055,
+      "sha256": "f9de1a59905f95baaf7837034b58daf42dab9ea7a92b3ec4247f1bcda311836a"
+    },
+    {
+      "path": "python/Lib/site-packages/numpy/_core/include/numpy/ndarraytypes.h",
+      "size": 66982,
+      "sha256": "0cad1a31455f5539176948f0f2acc5d7ac76285de934b50250871fb4467bcfcd"
+    },
+    {
+      "path": "python/Lib/site-packages/numpy/_core/include/numpy/npy_2_compat.h",
+      "size": 8546,
+      "sha256": "c1d8c1efff80b56de8a7aed76e3dc4547e9aa5217b7111ba877739841cfe60cb"
+    },
+    {
+      "path": "python/Lib/site-packages/numpy/_core/include/numpy/npy_2_complexcompat.h",
+      "size": 857,
+      "sha256": "784f5d57f22ade311f1862451ffa508c99ef0ba790d765a0381edc64c9870721"
+    },
+    {
+      "path": "python/Lib/site-packages/numpy/_core/include/numpy/npy_3kcompat.h",
+      "size": 9673,
+      "sha256": "8b602fa94aab6c18b2c7e29a2a7553378d8c195eda9e3a180857dfd494c29029"
+    },
+    {
+      "path": "python/Lib/site-packages/numpy/_core/include/numpy/npy_common.h",
+      "size": 32884,
+      "sha256": "2489ca0fdc72032fcb2408cfce1137294b9e09f56e9601de4d9309f02b5b3c49"
+    },
+    {
+      "path": "python/Lib/site-packages/numpy/_core/include/numpy/npy_cpu.h",
+      "size": 4352,
+      "sha256": "d8151ec04d80b7d981fe75fd826b2dd72a05c788c90568f952a2b07483cd6b71"
+    },
+    {
+      "path": "python/Lib/site-packages/numpy/_core/include/numpy/npy_endian.h",
+      "size": 2878,
+      "sha256": "d97eb669ad52f486aefe80fc6b62ac0e542b0e3b406e8cff4e7df6af576d129f"
+    },
+    {
+      "path": "python/Lib/site-packages/numpy/_core/include/numpy/npy_math.h",
+      "size": 18858,
+      "sha256": "69e485b3ad106d63f2d6020fc870cfad813189f9b999b0c07233ff98b93f3c5d"
+    },
+    {
+      "path": "python/Lib/site-packages/numpy/_core/include/numpy/npy_no_deprecated_api.h",
+      "size": 678,
+      "sha256": "d3266b25c40427a3021c9227424e533fdfea678b7b11f06ea0b389df822525de"
+    },
+    {
+      "path": "python/Lib/site-packages/numpy/_core/include/numpy/npy_os.h",
+      "size": 1256,
+      "sha256": "86542c83fefe464bd2decf0e33c297cbdf71c7225b0a6f96d4061571d9ced5cc"
+    },
+    {
+      "path": "python/Lib/site-packages/numpy/_core/include/numpy/numpyconfig.h",
+      "size": 7466,
+      "sha256": "163c41f9cc1c4bcc17da63186368044710e062fb1535a0e6ef582294c6cc6089"
+    },
+    {
+      "path": "python/Lib/site-packages/numpy/_core/include/numpy/random/bitgen.h",
+      "size": 488,
+      "sha256": "e3d03028e479e76afe36486e48e175bac6ff51188c49132f0f6d89179a4a2278"
+    },
+    {
+      "path": "python/Lib/site-packages/numpy/_core/include/numpy/random/distributions.h",
+      "size": 9861,
+      "sha256": "5b9b4ec844ddd26d56d0675a6797493fc7ca941b6c4e91b6dd5d99966ae5aa98"
+    },
+    {
+      "path": "python/Lib/site-packages/numpy/_core/include/numpy/random/libdivide.h",
+      "size": 80138,
+      "sha256": "7b0f4c3613d07752ec0998968859a3f4867bc8e9c0dc728e5df7c3791f57d63c"
+    },
+    {
       "path": "python/Lib/site-packages/numpy/_core/include/numpy/random/LICENSE.txt",
       "size": 1018,
       "sha256": "fbc539f47d0cf83bc61378080fb873d5c14630126cacbfe754035c3926daa5ec"
+    },
+    {
+      "path": "python/Lib/site-packages/numpy/_core/include/numpy/ufuncobject.h",
+      "size": 11780,
+      "sha256": "05e9e0bea5ea8b2e22a73cf6dca422d4a95dcbdc9b614b384a9e7203bdd58225"
+    },
+    {
+      "path": "python/Lib/site-packages/numpy/_core/include/numpy/utils.h",
+      "size": 1185,
+      "sha256": "c0c3689921f70df8f4abbf0fae32d5b45b4df853e8ed4278a3489f0943bee84b"
     },
     {
       "path": "python/Lib/site-packages/numpy/_core/lib/npy-pkg-config/mlib.ini",
@@ -6685,6 +6850,11 @@
       "path": "python/Lib/site-packages/numpy/f2py/src/fortranobject.c",
       "size": 46456,
       "sha256": "3e14e03ab406ccbab2af24738466388452d03e18482ffa4587b4d94fbde3e891"
+    },
+    {
+      "path": "python/Lib/site-packages/numpy/f2py/src/fortranobject.h",
+      "size": 5823,
+      "sha256": "edc7d137fb53a0043535ad77550d8acdbdae8cc1d40201ac6d27277cb54e1eab"
     },
     {
       "path": "python/Lib/site-packages/numpy/f2py/symbolic.py",
@@ -12327,6 +12497,11 @@
       "sha256": "79b959fce99b29bd5bae5c531f75bfb126952416fa9b3bf044528fb2874f45a6"
     },
     {
+      "path": "python/Lib/site-packages/win32/include/PyWinTypes.h",
+      "size": 30530,
+      "sha256": "ffd12cc9b54a5e56d4d1d70830b70fa97c160e8abd917aa6ae31f3184684b5a5"
+    },
+    {
       "path": "python/Lib/site-packages/win32/lib/_win32verstamp_pywin32ctypes.py",
       "size": 4504,
       "sha256": "bb7b4033562cf36dacabceb907072d0dd7e57f87f7369a7e649928815ce6edf2"
@@ -12727,6 +12902,11 @@
       "sha256": "2e7402ed1683a751bb5222a0379e5d8a50e3467e35c0d0d35b2a3cca645372dc"
     },
     {
+      "path": "python/Lib/site-packages/win32/test/win32rcparser/test.h",
+      "size": 1169,
+      "sha256": "ce7a510695120f2ebb6bbeac0c7b8fd2e4c0258bf4f637e392bd5e85fff08bc2"
+    },
+    {
       "path": "python/Lib/site-packages/win32/test/win32rcparser/test.rc",
       "size": 6259,
       "sha256": "b2a25018218aac7d1db7c114cd362939e1b29e87968a948172436ff011da43da"
@@ -13080,6 +13260,21 @@
       "path": "python/Lib/site-packages/win32com/HTML/variant.html",
       "size": 5854,
       "sha256": "06d091504342ab912a29957eabe502ab1893fdd1417cbb04eff12b91265ec441"
+    },
+    {
+      "path": "python/Lib/site-packages/win32com/include/PythonCOM.h",
+      "size": 29753,
+      "sha256": "8d295461d09b2f99e9c5acf2c060f38118584e6d8f78df2407e50d27d00f3e25"
+    },
+    {
+      "path": "python/Lib/site-packages/win32com/include/PythonCOMRegister.h",
+      "size": 3036,
+      "sha256": "3a6d8704b48d4dab834682f14cc613f344610d6e7f9a3fff3e6f6ca76a4e75a7"
+    },
+    {
+      "path": "python/Lib/site-packages/win32com/include/PythonCOMServer.h",
+      "size": 8769,
+      "sha256": "34bb611bd7f6a8d6a695f7c33f0861d97f016b7e4c2089e35b8f56f2c468bd61"
     },
     {
       "path": "python/Lib/site-packages/win32com/License.txt",
@@ -14888,6 +15083,22 @@
       "license_path": "binaries/windows/x64/spirv-tools/LICENSE.txt",
       "build": "MSVC 19.51.36257 x64 Release static CRT; CMake Ninja; SPIRV_SKIP_TESTS=ON",
       "path": "spirv-tools/spirv-dis.exe"
+    },
+    "dxcompiler": {
+      "version": "v1.9.2609",
+      "source_url": "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2609/dxc_2026_09_29.zip",
+      "source_sha256": "ad31b1fc8443175d204f77a611fdb3ef2ec42759bdc2f1167368de24a4a7e7f1",
+      "license": "LICENSE-LLVM",
+      "license_path": "binaries/windows/x64/dxc/LICENSE-LLVM.txt",
+      "path": "dxc/dxcompiler.dll"
+    },
+    "dxc": {
+      "version": "v1.9.2609",
+      "source_url": "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2609/dxc_2026_09_29.zip",
+      "source_sha256": "ad31b1fc8443175d204f77a611fdb3ef2ec42759bdc2f1167368de24a4a7e7f1",
+      "license": "LICENSE-LLVM",
+      "license_path": "binaries/windows/x64/dxc/LICENSE-LLVM.txt",
+      "path": "dxc/dxc.exe"
     }
   }
 }
