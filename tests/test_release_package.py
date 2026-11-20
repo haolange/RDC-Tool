@@ -41,7 +41,7 @@ def test_package_release_builds_self_contained_zip(tmp_path: Path, monkeypatch) 
         "binaries/windows/x64/manifest.runtime.json",
         "binaries/android/arm64/org.renderdoc.renderdoccmd.arm64.apk",
         "binaries/android/arm32/org.renderdoc.renderdoccmd.arm32.apk",
-        "binaries/linux/x64/librenderdoc.so",
+        "binaries/linux/x64/lib/librenderdoc.so",
     ):
         _write(root / rel)
     _write(root / "binaries/windows/x64/manifest.runtime.json", "{}")

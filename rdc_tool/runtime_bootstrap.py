@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from rdc_tool.platform import native as platform_native
-from rdc_tool.runtime_paths import binaries_root, native_library_name, pymodules_dir
+from rdc_tool.runtime_paths import binaries_root, host_layout, pymodules_dir
 from rdc_tool.runtime_identity import loaded_runtime_identity
 
 
@@ -55,7 +55,7 @@ def bootstrap_renderdoc_runtime(*, probe_import: bool = False) -> RuntimeBootstr
         sys.path.insert(0, pymod_text)
         report.sys_path_added = True
 
-    loader = platform_native.prepare_loader(bin_dir / native_library_name(), pymod_dir)
+    loader = platform_native.prepare_loader(bin_dir / host_layout().native_library, pymod_dir)
     report.loader_prepared = loader.prepared
     report.loader_errors = loader.errors
 

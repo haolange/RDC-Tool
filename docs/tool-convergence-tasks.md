@@ -41,7 +41,7 @@
 | I 运行库身份 | R | 通过 | `HOST_LAYOUTS`（windows-x64、linux-x64）；共享回执 `binaries/native_build.json`（`source.repository/revision`）；`local_replay_unsupported` |
 | K 打包工具链 | I | 通过 | `package_runtime` 跨平台、钉住解释器与哈希锁依赖；按主机选择解释器的 launcher；按主机打包与校验 |
 | T 测试分层 | K | 通过 | 单元测试用 fake renderdoc 在任意主机运行；`fixture_integration` 显式开启才运行，开启后不可回放即失败 |
-| X Linux 候选 | T | 阻塞 | 从未修改的 fork `haolange/renderdoc@dde8822` 构建 `librenderdoc.so` 与 binding（`-include vector`，见 [release-baseline](release-baseline.md#linux-原生构建)），带 adb r36.0.2 与源码构建的 SPIRV-Tools v2026.4 组装候选。候选回执与仓库回执共用同一 `source`，doctor 报告 `linux-x64`、`android-arm32`、`android-arm64` 均为 `verified`（回执 sha256 `137638888bcd…`）；实际加载 `librenderdoc.so` `5b13dd58…`、`renderdoc.so` `4a860c0d…`，内嵌提交 dde8822、版本 1.48。真实回放阻塞，见下文 |
+| X Linux 候选 | T | 通过 | 从未修改的 fork `haolange/renderdoc@dde8822` 构建 `librenderdoc.so` 与 binding（`-include vector`，见 [release-baseline](release-baseline.md#linux-原生构建)），带 adb r36.0.2 与源码构建的 SPIRV-Tools v2026.4 组装候选。候选回执与仓库回执共用同一 `source`，doctor 报告 `linux-x64`、`android-arm32`、`android-arm64` 均为 `verified`（回执 sha256 `137638888bcd…`）；实际加载 `librenderdoc.so` `5b13dd58…`、`renderdoc.so` `4a860c0d…`，内嵌提交 dde8822、版本 1.48。原记的"lavapipe 上回放崩溃"已查明是 POSIX 预加载使 RenderDoc 按捕获目标初始化，Linux 布局改为 `lib/librenderdoc.so` 后修复（见 CHANGELOG）。2026-11-19 云端无 GPU 容器复验：同源重建的候选经 CLI 在 lavapipe 上打开 lavapipe 自录的 vkcube capture，事件树、像素值、Pixel History、SPIR-V 反汇编、最终输出图像与 SPIR-V 替换的 A-B-A（替换后像素归零，撤销后逐位复原）均通过，daemon 与 worker 退出。仓库 `vkcube.rdc` 录自 NVIDIA，lavapipe 以内存类型不匹配明确拒绝，跨厂商 capture 不可移植属预期 |
 | G RDC-Agent 对齐 | R | 通过 | 分支 `claude/happy-einstein-n9rvui`：daemon 注册名 `rdc_tool_cli`，不再传 `RDC_TOOL_ROOT`；合并后主进程真实发现、只读调用与 guide catalog 指纹一致，详见下文 |
 | D1 仓库卫生 | — | 通过 | 删除 `.qoder/`、`policy/` 与 `intermediate/` 占位；脚本与环境变量文档由测试守护 |
 | D2 文档中文化 | D1 | 通过 | 全部文档中文叙述、保留 BOM；基线、配置、脚本、配对各只一处声明；`tool-reference.md` 中文生成；用户文档禁止写死工具总数 |
@@ -52,7 +52,7 @@
 
 | 项 | 影响 | 解除条件 |
 |---|---|---|
-| lavapipe 上原生回放崩溃 | X 的真实回放：候选 `librenderdoc.so` 打开 `vkcube.rdc` 后在 `ReplayController::PostCreateInit` → `WrappedVulkan::Serialise_vkCreateSwapchainKHR` 段错误，`fixture_integration` 按设计失败 | 在有真实 Vulkan 驱动的 Linux 主机复测；或在 fork 中定位 swapchain 序列化对无 surface 软件驱动的处理 |
+| Linux 回放 fixture | 仓库两份 vkcube capture 录自 NVIDIA，不能在 lavapipe 或其他厂商驱动上回放，`fixture_integration` 在 Linux CI 上无可回放样本 | 需要时在目标驱动上录制同源 fixture（lavapipe 录制方法：Xvfb + 用户级隐式层注册 + `ExecuteAndInject` 后经 target control 触发），按 fixture 策略登记来源与哈希 |
 | Linux 正式产物 | 尚无 Linux 发行包 | 下一轮：在 glibc 较老的构建环境中按 [release-baseline](release-baseline.md#linux-原生构建) 的配置构建，把 `linux-x64` 写入仓库共享回执，`package_runtime --host linux-x64` 与包校验 |
 | Windows 捆绑依赖早于哈希锁 | 已提交的 Windows `python/` 中仍有 MCP 时代的多余包，`bundle == lock` 校验未启用 | 下一轮用 `package_runtime --host windows-x64` 按锁重建并启用该校验 |
 

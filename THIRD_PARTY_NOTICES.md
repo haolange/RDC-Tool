@@ -4,7 +4,7 @@
 
 ## RenderDoc 原生运行库
 
-- RenderDoc（MIT），源码 fork `https://github.com/haolange/renderdoc`，当前基线与配对规则见 [docs/release-baseline.md](docs/release-baseline.md)。随包产物：Windows `renderdoc.dll`、`pymodules/renderdoc.pyd` 与 Vulkan layer 清单 `renderdoc.json`，以及 Android arm32/arm64 helper APK；Linux `librenderdoc.so` 与 `pymodules/renderdoc.so` 随下一轮同源构建加入。
+- RenderDoc（MIT），源码 fork `https://github.com/haolange/renderdoc`，当前基线与配对规则见 [docs/release-baseline.md](docs/release-baseline.md)。随包产物：Windows `renderdoc.dll`、`pymodules/renderdoc.pyd` 与 Vulkan layer 清单 `renderdoc.json`，以及 Android arm32/arm64 helper APK；Linux `lib/librenderdoc.so` 与 `pymodules/renderdoc.so` 随下一轮同源构建加入。
 - Windows 运行目录中随 RenderDoc 分发的 `d3dcompiler_47.dll`、`dbghelp.dll`、`symsrv.dll` 是 Microsoft 可再发行组件，遵循其各自的 Microsoft 许可。
 
 ## 捆绑 Python

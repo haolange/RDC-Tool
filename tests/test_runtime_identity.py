@@ -153,7 +153,7 @@ def native_manifest_fixture(root: Path, layer_bytes: bytes | None) -> Path:
 
 def test_receipt_targets_follow_host_layouts_and_android():
     assert set(identity.NATIVE_TARGETS) == {*identity.HOST_LAYOUTS, "android-arm32", "android-arm64"}
-    assert identity.NATIVE_TARGETS["linux-x64"] == {"native_library": "binaries/linux/x64/librenderdoc.so",
+    assert identity.NATIVE_TARGETS["linux-x64"] == {"native_library": "binaries/linux/x64/lib/librenderdoc.so",
                                                     "binding_module": "binaries/linux/x64/pymodules/renderdoc.so"}
 
 
@@ -207,7 +207,8 @@ def test_receipt_source_must_name_repository_and_exact_revision(tmp_path, change
 def test_linux_host_runtime_is_verified_from_its_layout(tmp_path):
     runtime = tmp_path / "binaries/linux/x64"
     (runtime / "pymodules").mkdir(parents=True)
-    (runtime / "librenderdoc.so").write_bytes(b"native library")
+    (runtime / "lib").mkdir()
+    (runtime / "lib/librenderdoc.so").write_bytes(b"native library")
     (runtime / "pymodules/renderdoc.so").write_bytes(b"binding module")
     (runtime / "python").mkdir()
     (runtime / "python/libpython3.14.so").write_bytes(b"python is not native-owned")
@@ -219,7 +220,7 @@ def test_linux_host_runtime_is_verified_from_its_layout(tmp_path):
                                                    "toolchain": {"compiler": "gcc"}, "inputs_sha256": "c" * 64,
                                                    "outputs": outputs, "runtime_files": files}]}
     (tmp_path / identity.RECEIPT_PATH).write_text(json.dumps(receipt), encoding="utf-8")
-    assert sorted(item["path"] for item in files) == ["binaries/linux/x64/librenderdoc.so",
+    assert sorted(item["path"] for item in files) == ["binaries/linux/x64/lib/librenderdoc.so",
                                                       "binaries/linux/x64/pymodules/renderdoc.so"]
     assert identity.native_manifest_status(tmp_path, required=("linux-x64",))["status"] == "verified"
     (runtime / "stale.so").write_bytes(b"unreceipted library")
@@ -274,8 +275,8 @@ def test_loader_diagnostic_does_not_import_renderdoc(tmp_path, monkeypatch):
 def test_native_dll_is_observed_even_without_a_python_binding(tmp_path, monkeypatch, foreign):
     configured = tmp_path / "configured"
     actual = tmp_path / "foreign" if foreign else configured
-    actual.mkdir()
-    dll = actual / identity.native_library_name()
+    dll = actual / identity.host_layout().native_library
+    dll.parent.mkdir(parents=True)
     dll.write_bytes(b"loaded native library")
     monkeypatch.delitem(sys.modules, "renderdoc", raising=False)
     monkeypatch.setattr(identity.platform_native, "loaded_library_path", lambda name: dll.resolve())

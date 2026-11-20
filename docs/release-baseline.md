@@ -27,7 +27,7 @@ RDC-Tool 不自动跟随上游每个版本；新运行库只有在完成同源�
 
 - `source`：字段必须恰好是 `repository`（https URL）、`revision`（被构建的 40 位提交）、`base_revision`、`upstream_revision`（40 位）与 `tree_sha256`（源码树摘要，64 位）。多余或缺失字段直接判为无效，打包工具同样拒绝而不是静默丢弃。
 - `tree_sha256` 由 `python scripts/native_source_digest.py <源码检出>` 计算：对该提交 `git ls-tree -r` 的每个条目按路径排序，逐条哈希 `<路径>\0<blob 的 SHA256>\n`，因此不受检出换行、未跟踪文件或构建目录影响；不带 `--revision` 时要求工作区干净。当前仓库回执里的 `bce2094…` 早于这一定义，无法从 dde8822 的 Git 内容复现（很可能取自 Windows 工作区），下一次同源重建按本定义重新记录。
-- `builds`：每个目标一项，目标名唯一且属于 `NATIVE_TARGETS`（全部主机布局 + `android-arm32`/`android-arm64`）。每项记录 `configuration`、`toolchain`、`inputs_sha256`（必须等于 `source.tree_sha256`）与 `outputs`。输出角色：主机目标为 `native_library` 与 `binding_module`（路径由主机布局决定，如 `binaries/linux/x64/librenderdoc.so`），Android 为 `helper_apk`（另记录 APK 版本、signer 证书指纹、包内原生库 SHA256 与 ELF BuildID；读取证书指纹不代表已执行密码学验签）。主机目标还必须有完整 `runtime_files`，覆盖运行目录根部的原生库、Vulkan layer JSON 与 `pymodules/` 全部文件。
+- `builds`：每个目标一项，目标名唯一且属于 `NATIVE_TARGETS`（全部主机布局 + `android-arm32`/`android-arm64`）。每项记录 `configuration`、`toolchain`、`inputs_sha256`（必须等于 `source.tree_sha256`）与 `outputs`。输出角色：主机目标为 `native_library` 与 `binding_module`（路径由主机布局决定，如 `binaries/linux/x64/lib/librenderdoc.so`），Android 为 `helper_apk`（另记录 APK 版本、signer 证书指纹、包内原生库 SHA256 与 ELF BuildID；读取证书指纹不代表已执行密码学验签）。主机目标还必须有完整 `runtime_files`，覆盖原生库、Vulkan layer JSON 与 `pymodules/` 全部文件（Windows 在运行目录根部，Linux 在 `lib/`）。
 
 校验规则（存在即严格，缺席仅报告）：
 
@@ -46,7 +46,7 @@ Linux 主机布局的原生库与绑定从与其他目标相同的冻结源码�
 | 配置 | `cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DENABLE_QRENDERDOC=OFF -DENABLE_PYRENDERDOC=ON -DCMAKE_CXX_FLAGS="-include vector" -DPython3_EXECUTABLE=<捆绑解释器>/bin/python3.14 -DPython3_FIND_STRATEGY=LOCATION`。绑定必须对 `scripts/python-runtimes.json` 钉住的同一个解释器编译：RenderDoc 通过 `find_package(Python3)` 选择 Python，只认 `Python3_*` 变量，否则会拿到构建机上的其他 Python，产出的 `renderdoc.so` 在捆绑的 3.14 下导入即崩溃。构建后核对 `CMakeCache.txt` 中 `FIND_PACKAGE_MESSAGE_DETAILS_Python3` 指向该解释器 |
 | `-include vector` | dde8822 的 `renderdoc/driver/vulkan/vk_pixelhistory.cpp` 用到 `std::vector` 却没有包含 `<vector>`。MSVC 与 Android NDK 的标准库会间接带入，现有 Windows 与 Android 产物就是这样构建出来的；GCC 的 libstdc++ 不会。用编译选项补齐而不改源码，Linux 产物与它们同属一个 revision，能写进同一份回执。下一次基线升级改动 fork 时，把这行 include 合入源码并删除该选项 |
 | 自定义 SWIG | 构建会下载 `baldurk/swig` 标签 `renderdoc-modified-7` 的源码包；下载受限时用 `-DRENDERDOC_SWIG_PACKAGE=<本地 zip>` 指向同一标签的源码包 |
-| 输出 | 运行目录根部的 `librenderdoc.so` 与 Vulkan layer `renderdoc_capture.json`，以及 `pymodules/renderdoc.so`；回执 `linux-x64` 项的 `toolchain` 记录 GCC、CMake、glibc、Python 与 `cxx_flags` |
+| 输出 | `lib/librenderdoc.so` 与 Vulkan layer `lib/renderdoc_capture.json`，以及 `pymodules/renderdoc.so`。绑定的 RUNPATH 是 `$ORIGIN/:$ORIGIN/../lib/`，原生库必须在 `lib/` 下由绑定作为依赖加载：先单独加载它会让 RenderDoc 按捕获目标初始化并在回放时崩溃；回执 `linux-x64` 项的 `toolchain` 记录 GCC、CMake、glibc、Python 与 `cxx_flags` |
 
 正式产物还须在 glibc 较老的构建环境中按此配置构建，否则用户系统必须具备构建机的 glibc 版本。
 
