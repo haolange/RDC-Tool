@@ -30,6 +30,9 @@ def pytest_addoption(parser: pytest.Parser) -> None:
                     help="Run fixture_integration tests; an unusable runtime then fails instead of skipping.")
     group.addoption("--fixture-root", default=str(ROOT),
                     help="Installation root whose launcher and runtime the integration tests use (default: this checkout).")
+    group.addoption("--fixture-devices", default="any-vulkan,nvidia-vulkan",
+                    help="Comma-separated device classes this machine can replay (tests/fixtures/fixtures.json `device`); "
+                         "a software-only Vulkan host such as lavapipe passes `any-vulkan`.")
 
 
 @pytest.fixture

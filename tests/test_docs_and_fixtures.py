@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 
 from scripts.generate_tool_reference import generate_tool_reference
@@ -57,27 +58,32 @@ def test_rdc_tool_native_playbook_covers_cli_and_runtime_contracts() -> None:
         assert term in text, term
 
 
-def test_public_rdc_fixtures_have_expected_size_and_hash() -> None:
-    expected = {
-        "vkcube.rdc": (75478, "00797a27e6316a0cf4369327f9db30a21635fa757673b3f9712af07989145ba8"),
-        "vkcube_validation.rdc": (65913, "c50cd1e7c29241c64fd33faf07cb35e802f9dc85692a8512aa36db01c956b385"),
-    }
-    for name, (size, sha256) in expected.items():
-        path = ROOT / "tests" / "fixtures" / name
-        assert path.is_file()
-        assert path.stat().st_size == size
-        assert hashlib.sha256(path.read_bytes()).hexdigest() == sha256
+def _fixture_manifest() -> list[dict]:
+    return json.loads((ROOT / "tests" / "fixtures" / "fixtures.json").read_text(encoding="utf-8"))["fixtures"]
+
+
+def test_public_rdc_fixtures_match_their_manifest() -> None:
+    manifest = _fixture_manifest()
+    listed = {entry["name"] for entry in manifest}
+    present = {path.name for path in (ROOT / "tests" / "fixtures").glob("*.rdc")}
+    assert listed == present, f"fixtures.json must list exactly the committed captures: {sorted(listed ^ present)}"
+    for entry in manifest:
+        path = ROOT / "tests" / "fixtures" / entry["name"]
+        assert path.stat().st_size == entry["size"], entry["name"]
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == entry["sha256"], entry["name"]
+        assert entry["device"] in {"any-vulkan", "nvidia-vulkan"}, entry["name"]
 
 
 def test_fixture_policy_and_third_party_notices_cover_copied_assets() -> None:
     fixture_readme = (ROOT / "tests" / "fixtures" / "README.md").read_text(encoding="utf-8-sig")
     notices = (ROOT / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8-sig")
 
-    for name in ("vkcube.rdc", "vkcube_validation.rdc"):
-        assert name in fixture_readme
-        assert name in notices
+    for entry in _fixture_manifest():
+        assert entry["name"] in fixture_readme
+        assert entry["name"] in notices
     assert "MIT" in notices
     assert "BANANASJIM" in notices
+    assert "Apache-2.0" in notices
     assert "不随 `rdc-tool` 发行包分发" in notices
 
 

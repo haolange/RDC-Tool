@@ -24,3 +24,7 @@
 - 许可证：MIT，Copyright (c) 2024 BANANASJIM；许可证全文见上游 `rdc-cli/LICENSE`。
 - 用途：仅用于本仓库的确定性测试与 `fixture_integration` 真实回放测试。
 - 发行行为：不随 `rdc-tool` 发行包分发。
+
+- 来源：`tests/fixtures/vkcube_lavapipe.rdc` 是 Khronos Vulkan-Tools 的 `vkcube` 示例（Apache-2.0，Copyright The Khronos Group Inc. 等，见 Vulkan-Tools `LICENSE.txt`）在 Mesa lavapipe 上运行时，由本仓库钉住的 RenderDoc fork 录制的一帧。
+- 许可证：录制内容来自 Apache-2.0 的 `vkcube`；RenderDoc 为 MIT。
+- 用途与发行行为同上：仅用于测试，不随 `rdc-tool` 发行包分发。
