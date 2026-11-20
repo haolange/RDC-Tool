@@ -8,6 +8,9 @@
 | --- | ---: | --- | --- |
 | `vkcube.rdc` | 75478 | `00797a27e6316a0cf4369327f9db30a21635fa757673b3f9712af07989145ba8` | 上游 rdc-cli 项目 `tests/fixtures/vkcube.rdc` |
 | `vkcube_validation.rdc` | 65913 | `c50cd1e7c29241c64fd33faf07cb35e802f9dc85692a8512aa36db01c956b385` | 上游 rdc-cli 项目 `tests/fixtures/vkcube_validation.rdc` |
+| `vkcube_lavapipe.rdc` | 154267 | `c62edae0ac451484ca651c88741e37dc011abaddbcb18f7aded0fd284a909cb6` | Khronos Vulkan-Tools 的 `vkcube` 在 Mesa lavapipe 上运行，用本仓库钉住的 RenderDoc fork（`dde8822`）录制 |
+
+每个 capture 只能在与录制驱动兼容的设备上回放：前两个由 NVIDIA Vulkan 驱动录制，lavapipe 等软件 Vulkan 无法回放；`vkcube_lavapipe.rdc` 在任何 Vulkan 实现（含 lavapipe）上都可回放。`fixtures.json` 是这份清单的机器可读版本：`device` 为 `nvidia-vulkan` 或 `any-vulkan`，测试按它校验大小、哈希并选择可回放的 capture。新增 capture 时同时更新本表、`fixtures.json` 与 `THIRD_PARTY_NOTICES.md`。
 
 规则：
 
@@ -25,6 +28,16 @@
 ```bash
 python -m pytest tests/test_fixture_integration.py --fixture-integration --fixture-root <installation>
 ```
+
+只有软件 Vulkan 的主机（如 Linux + lavapipe）加 `--fixture-devices any-vulkan`，只回放标为 `any-vulkan` 的 capture；默认两类设备都回放。
+
+### 重录 `vkcube_lavapipe.rdc`
+
+在 Linux 上按 [release-baseline.md](../../docs/release-baseline.md#linux-原生构建) 构建原生库与绑定后：
+
+1. 安装 `vulkan-tools`（提供 `vkcube`）与 Mesa lavapipe，确认 `VK_ICD_FILENAMES` 指向 lavapipe 的 ICD JSON，并 `unset VK_DRIVER_FILES`，避免系统驱动抢先。
+2. 在 Xvfb 中运行（`xvfb-run -a`），用构建出的 Python 绑定执行：`renderdoc.ExecuteAndInject("/usr/bin/vkcube", <工作目录>, "--c 3000", [VK_ICD_FILENAMES=<lavapipe ICD>], <输出前缀>, CaptureOptions(), False)`，再以 `CreateTargetControl` 连接，等待约 3 秒后 `TriggerCapture(1)`，从 `NewCapture` 消息取得路径。
+3. 用同一绑定回放核对：6 个 action、draw 位于 EID 11、渲染目标 500×500 `B8G8R8A8_UNORM`、中心像素可读；再按上表更新大小与 SHA256。
 
 有真实 RenderDoc 运行库或设备时，完整的本地或 Android 远端 smoke 仍可以向 CLI smoke 命令传入显式的外部 capture 路径：
 

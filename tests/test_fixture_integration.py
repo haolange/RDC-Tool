@@ -21,6 +21,9 @@ from rdc_tool.runtime_paths import host_layout
 
 pytestmark = pytest.mark.fixture_integration
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
+# Each committed capture names the device class that can replay it (a capture replays only on a driver
+# compatible with the one that recorded it); the host chooses which classes it has with --fixture-devices.
+MANIFEST = json.loads((FIXTURES / "fixtures.json").read_text(encoding="utf-8"))["fixtures"]
 
 
 class Installation:
@@ -65,8 +68,14 @@ def _capability_or_ok(payload: dict) -> None:
     assert payload["ok"] or (payload.get("error") or {}).get("category") == "capability", json.dumps(payload)[:2000]
 
 
-@pytest.mark.parametrize("capture", ["vkcube.rdc", "vkcube_validation.rdc"])
-def test_capture_replays_and_observes_through_the_launcher(installation: Installation, capture: str) -> None:
+@pytest.mark.parametrize("fixture", MANIFEST, ids=[entry["name"] for entry in MANIFEST])
+def test_capture_replays_and_observes_through_the_launcher(
+    installation: Installation, fixture: dict, request: pytest.FixtureRequest,
+) -> None:
+    devices = {item.strip() for item in request.config.getoption("--fixture-devices").split(",") if item.strip()}
+    if fixture["device"] not in devices:
+        pytest.skip(f"{fixture['name']} needs a {fixture['device']} device; this host replays {sorted(devices)}")
+    capture = fixture["name"]
     context = f"fixture-{Path(capture).stem}-{uuid.uuid4().hex[:8]}"
     try:
         opened = installation.run("--daemon-context", context, "capture", "open", "--file", str(FIXTURES / capture),
