@@ -26,7 +26,7 @@ RDC-Tool 不自动跟随上游每个版本；新运行库只有在完成同源�
 回执结构：
 
 - `source`：字段必须恰好是 `repository`（https URL）、`revision`（被构建的 40 位提交）、`base_revision`、`upstream_revision`（40 位）与 `tree_sha256`（源码树摘要，64 位）。多余或缺失字段直接判为无效，打包工具同样拒绝而不是静默丢弃。
-- `tree_sha256` 由 `python scripts/native_source_digest.py <源码检出>` 计算：对该提交 `git ls-tree -r` 的每个条目按路径排序，逐条哈希 `<路径>\0<blob 的 SHA256>\n`，因此不受检出换行、未跟踪文件或构建目录影响；不带 `--revision` 时要求工作区干净。当前仓库回执里的 `bce2094…` 早于这一定义，任何已提交内容都复现不出来：按本定义，`dde8822…` 的摘要是 `20b5f0c88580b52166c94ddb59b7125e600297bb6e256a67f37368642797252b`（6035 个条目），`base_revision` 是 `2ff1874a…`，`upstream_revision` 是 `660ce910…`；改用 Windows CRLF 检出字节、大小写或反斜杠排序、`sha256sum` 等常见行格式、整树 `git archive` 也都对不上。所以它只能来自含未提交或生成文件的工作区，回执的源码出处无法核实（运行时不重算源码摘要，输出字节校验不受影响）。修正方式是在干净的 `dde8822` 检出上重建 Windows 原生产物，并用本脚本重新记录 `tree_sha256` 与各目标的 `inputs_sha256`；不得直接把回执改写成 `20b5f0c8…`，那等于声称产物出自未经核实的源码。
+- `tree_sha256` 由 `python scripts/native_source_digest.py <源码检出>` 计算：对该提交 `git ls-tree -r` 的每个条目按路径排序，逐条哈希 `<路径>\0<blob 的 SHA256>\n`；不带 `--revision` 时要求工作区干净。2026-11-21 从干净的 `dde88226a1cf8145edfe7094a67cbcdab6363d46` 检出重建 Windows Release x64 DLL/PYD 与两个 Android helper，6035 个条目的摘要为 `20b5f0c88580b52166c94ddb59b7125e600297bb6e256a67f37368642797252b`。Android 版本号保持 149，两个 helper 的签名证书与原运行集一致；回执的各目标输入摘要与输出文件身份均按本次构建更新。
 - `builds`：每个目标一项，目标名唯一且属于 `NATIVE_TARGETS`（全部主机布局 + `android-arm32`/`android-arm64`）。每项记录 `configuration`、`toolchain`、`inputs_sha256`（必须等于 `source.tree_sha256`）与 `outputs`。输出角色：主机目标为 `native_library` 与 `binding_module`（路径由主机布局决定，如 `binaries/linux/x64/lib/librenderdoc.so`），Android 为 `helper_apk`（另记录 APK 版本、signer 证书指纹、包内原生库 SHA256 与 ELF BuildID；读取证书指纹不代表已执行密码学验签）。主机目标还必须有完整 `runtime_files`，覆盖原生库、Vulkan layer JSON 与 `pymodules/` 全部文件（Windows 在运行目录根部，Linux 在 `lib/`）。
 
 校验规则（存在即严格，缺席仅报告）：

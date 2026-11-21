@@ -4,6 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 
+from conftest import DEFAULT_FIXTURE_DEVICES
 from scripts.generate_tool_reference import generate_tool_reference
 from rdc_tool.runtime_catalog import catalog_payload
 
@@ -71,7 +72,13 @@ def test_public_rdc_fixtures_match_their_manifest() -> None:
         path = ROOT / "tests" / "fixtures" / entry["name"]
         assert path.stat().st_size == entry["size"], entry["name"]
         assert hashlib.sha256(path.read_bytes()).hexdigest() == entry["sha256"], entry["name"]
-        assert entry["device"] in {"any-vulkan", "nvidia-vulkan"}, entry["name"]
+        assert entry["device"] in {"software-vulkan", "nvidia-vulkan"}, entry["name"]
+
+
+def test_software_capture_is_not_selected_for_the_default_nvidia_device_class() -> None:
+    fixture = next(entry for entry in _fixture_manifest() if entry["name"] == "vkcube_lavapipe.rdc")
+    assert fixture["device"] == "software-vulkan"
+    assert fixture["device"] not in DEFAULT_FIXTURE_DEVICES.split(",")
 
 
 def test_fixture_policy_and_third_party_notices_cover_copied_assets() -> None:

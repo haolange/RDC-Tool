@@ -18,7 +18,7 @@
       "name": "vkcube_lavapipe.rdc",
       "size": 154267,
       "sha256": "c62edae0ac451484ca651c88741e37dc011abaddbcb18f7aded0fd284a909cb6",
-      "device": "any-vulkan",
+      "device": "software-vulkan",
       "source": "Khronos Vulkan-Tools vkcube (Apache-2.0) on Mesa lavapipe, recorded with the pinned RenderDoc fork"
     }
   ]
