@@ -10,7 +10,7 @@
 | `vkcube_validation.rdc` | 65913 | `c50cd1e7c29241c64fd33faf07cb35e802f9dc85692a8512aa36db01c956b385` | 上游 rdc-cli 项目 `tests/fixtures/vkcube_validation.rdc` |
 | `vkcube_lavapipe.rdc` | 154267 | `c62edae0ac451484ca651c88741e37dc011abaddbcb18f7aded0fd284a909cb6` | Khronos Vulkan-Tools 的 `vkcube` 在 Mesa lavapipe 上运行，用本仓库钉住的 RenderDoc fork（`dde8822`）录制 |
 
-每个 capture 只能在与录制驱动兼容的设备上回放：前两个由 NVIDIA Vulkan 驱动录制，lavapipe 等软件 Vulkan 无法回放；`vkcube_lavapipe.rdc` 在任何 Vulkan 实现（含 lavapipe）上都可回放。`fixtures.json` 是这份清单的机器可读版本：`device` 为 `nvidia-vulkan` 或 `any-vulkan`，测试按它校验大小、哈希并选择可回放的 capture。新增 capture 时同时更新本表、`fixtures.json` 与 `THIRD_PARTY_NOTICES.md`。
+每个 capture 只能在与录制驱动兼容的设备上回放：前两个由 NVIDIA Vulkan 驱动录制，标为 `nvidia-vulkan`；`vkcube_lavapipe.rdc` 录自 Mesa lavapipe，标为 `software-vulkan`，已在 lavapipe 与 Windows SwiftShader 上回放，其他 Vulkan 实现可能因内存要求不同而拒绝。`fixtures.json` 是机器可读清单，测试按 `device`、大小与哈希选择输入。新增 capture 时同时更新本表、`fixtures.json` 与 `THIRD_PARTY_NOTICES.md`。
 
 规则：
 
@@ -29,7 +29,7 @@
 python -m pytest tests/test_fixture_integration.py --fixture-integration --fixture-root <installation>
 ```
 
-只有软件 Vulkan 的主机（如 Linux + lavapipe）加 `--fixture-devices any-vulkan`，只回放标为 `any-vulkan` 的 capture；默认两类设备都回放。
+默认选择 `nvidia-vulkan`；使用已确认兼容的软件 Vulkan 驱动时传入 `--fixture-devices software-vulkan`，只回放该类 capture。
 
 ### 重录 `vkcube_lavapipe.rdc`
 

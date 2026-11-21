@@ -9,6 +9,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 os.environ.setdefault("RDC_TOOL_INTERMEDIATE_ROOT", str(ROOT / "intermediate" / "tool-convergence-tests"))
+DEFAULT_FIXTURE_DEVICES = "nvidia-vulkan"
 TEST_ROOT = Path(os.environ["RDC_TOOL_INTERMEDIATE_ROOT"])
 PYTEST_OUT = TEST_ROOT / "pytest"
 PYTEST_OUT.mkdir(parents=True, exist_ok=True)
@@ -30,9 +31,9 @@ def pytest_addoption(parser: pytest.Parser) -> None:
                     help="Run fixture_integration tests; an unusable runtime then fails instead of skipping.")
     group.addoption("--fixture-root", default=str(ROOT),
                     help="Installation root whose launcher and runtime the integration tests use (default: this checkout).")
-    group.addoption("--fixture-devices", default="any-vulkan,nvidia-vulkan",
+    group.addoption("--fixture-devices", default=DEFAULT_FIXTURE_DEVICES,
                     help="Comma-separated device classes this machine can replay (tests/fixtures/fixtures.json `device`); "
-                         "a software-only Vulkan host such as lavapipe passes `any-vulkan`.")
+                         "a compatible software Vulkan host passes `software-vulkan`.")
 
 
 @pytest.fixture

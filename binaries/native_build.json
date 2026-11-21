@@ -4,7 +4,7 @@
     "revision": "dde88226a1cf8145edfe7094a67cbcdab6363d46",
     "base_revision": "f6aff93bcbb823eb4a8fcea324e55cd54adbdcf9",
     "upstream_revision": "282b28b3a3d097f2fd8faddc4517cd283b22f3ee",
-    "tree_sha256": "bce2094cc878e9677ad807d469746baa2a87c252df09ef5d4022a4df8047dfe3"
+    "tree_sha256": "20b5f0c88580b52166c94ddb59b7125e600297bb6e256a67f37368642797252b"
   },
   "builds": [
     {
@@ -21,19 +21,19 @@
         "visual_studio": "18 Community",
         "python_package_sha256": "ef63a18b486268cbfd1fa59e7b6094c42521b25f0184af8b267e1718dd0cb3a5"
       },
-      "inputs_sha256": "bce2094cc878e9677ad807d469746baa2a87c252df09ef5d4022a4df8047dfe3",
+      "inputs_sha256": "20b5f0c88580b52166c94ddb59b7125e600297bb6e256a67f37368642797252b",
       "outputs": [
         {
           "role": "native_library",
           "path": "binaries/windows/x64/renderdoc.dll",
-          "size": 25836544,
-          "sha256": "636a5c58e871f84201210dc78cd387fc20e1306a384f7408a896af97fa3f8071"
+          "size": 25830400,
+          "sha256": "2246133c94583c9ba2405b1ac124c18e44f4c8bf22bac8e513033f7cd9ac7507"
         },
         {
           "role": "binding_module",
           "path": "binaries/windows/x64/pymodules/renderdoc.pyd",
           "size": 5862912,
-          "sha256": "33caa4cdb75308ed27fac39a7c6878a695e41f453ac17d2bd9bb2aa18d37b76c"
+          "sha256": "680d7a4712fa09e6714e3c2b7f097fc395a982fc4ccfe0170f40c81817af68cb"
         }
       ],
       "runtime_files": [
@@ -48,9 +48,14 @@
           "sha256": "1387a9f99c2f4342dea0d68208081f936b10a0049d28478c896b808c5c13d057"
         },
         {
+          "path": "binaries/windows/x64/pymodules/renderdoc.pyd",
+          "size": 5862912,
+          "sha256": "680d7a4712fa09e6714e3c2b7f097fc395a982fc4ccfe0170f40c81817af68cb"
+        },
+        {
           "path": "binaries/windows/x64/renderdoc.dll",
-          "size": 25836544,
-          "sha256": "636a5c58e871f84201210dc78cd387fc20e1306a384f7408a896af97fa3f8071"
+          "size": 25830400,
+          "sha256": "2246133c94583c9ba2405b1ac124c18e44f4c8bf22bac8e513033f7cd9ac7507"
         },
         {
           "path": "binaries/windows/x64/renderdoc.json",
@@ -61,11 +66,6 @@
           "path": "binaries/windows/x64/symsrv.dll",
           "size": 127944,
           "sha256": "1d91eab8b40e70c7db6d53d3b15d50bf0784f113307307395302333003b63d98"
-        },
-        {
-          "path": "binaries/windows/x64/pymodules/renderdoc.pyd",
-          "size": 5862912,
-          "sha256": "33caa4cdb75308ed27fac39a7c6878a695e41f453ac17d2bd9bb2aa18d37b76c"
         }
       ]
     },
@@ -82,18 +82,18 @@
         "android_build_tools": "36.0.0",
         "signer_certificate_sha256": "0e6f9baa87ca7e01a3e418cf0b8a0f13333c7e2433d6b3bf37826fb2a1a6c297"
       },
-      "inputs_sha256": "bce2094cc878e9677ad807d469746baa2a87c252df09ef5d4022a4df8047dfe3",
+      "inputs_sha256": "20b5f0c88580b52166c94ddb59b7125e600297bb6e256a67f37368642797252b",
       "outputs": [
         {
           "role": "helper_apk",
           "path": "binaries/android/arm32/org.renderdoc.renderdoccmd.arm32.apk",
-          "size": 54805189,
-          "sha256": "2cf4af761f2c32df5f67f72ce29e8b220cc918ccba74d108bdb71f5f41a2f93d",
+          "size": 54907589,
+          "sha256": "ea9052fb87acb7d31a678ccf643e6341f5a0f4fa20494052547a7357febe9c86",
           "apk": {
             "package_name": "org.renderdoc.renderdoccmd.arm32",
             "version_code": 149,
             "version_name": "dde88226a1cf8145edfe7094a67cbcdab6363d46",
-            "apk_sha256": "2cf4af761f2c32df5f67f72ce29e8b220cc918ccba74d108bdb71f5f41a2f93d",
+            "apk_sha256": "ea9052fb87acb7d31a678ccf643e6341f5a0f4fa20494052547a7357febe9c86",
             "signer_certificate_sha256": [
               "0e6f9baa87ca7e01a3e418cf0b8a0f13333c7e2433d6b3bf37826fb2a1a6c297"
             ],
@@ -101,15 +101,15 @@
             "libraries": [
               {
                 "path": "lib/armeabi-v7a/libVkLayer_GLES_RenderDoc.so",
-                "size": 193105168,
-                "sha256": "e0c34fc184945bc4219eff547ecf96190838462e5f8c0ea100d6aadf853a299c",
-                "build_id": "92266c3618b4da39"
+                "size": 195510204,
+                "sha256": "2d955cda84d03af13c2c7270808c6ff43c65f35f3b7f88b67e2288e357522320",
+                "build_id": "a4b4ef37b945de1d"
               },
               {
                 "path": "lib/armeabi-v7a/librenderdoccmd.so",
-                "size": 2197872,
-                "sha256": "8eb6ef6a2885c6a71c2e8654488305547fd54b006e178edb157069a15329644f",
-                "build_id": "6c8d725235c85b658525ab7aacc2e56ce46cbb27"
+                "size": 2221388,
+                "sha256": "9f0ee9d56e5ee3971f0347f8e7237532523c871a2b774dc539ce1efeac4b350f",
+                "build_id": "8cd4a5d6f3df5a3461eb0326be8124fed15d76c8"
               }
             ]
           }
@@ -129,18 +129,18 @@
         "android_build_tools": "36.0.0",
         "signer_certificate_sha256": "0e6f9baa87ca7e01a3e418cf0b8a0f13333c7e2433d6b3bf37826fb2a1a6c297"
       },
-      "inputs_sha256": "bce2094cc878e9677ad807d469746baa2a87c252df09ef5d4022a4df8047dfe3",
+      "inputs_sha256": "20b5f0c88580b52166c94ddb59b7125e600297bb6e256a67f37368642797252b",
       "outputs": [
         {
           "role": "helper_apk",
           "path": "binaries/android/arm64/org.renderdoc.renderdoccmd.arm64.apk",
-          "size": 56373951,
-          "sha256": "41a3edcaabce610c84abe813ac44418615caf17d4adda5e7fbad55ec31ee7a5d",
+          "size": 56472255,
+          "sha256": "6f114c2baf4b8f6a183878e59e9c45337e66ef970355521056cd95fc0ab338a1",
           "apk": {
             "package_name": "org.renderdoc.renderdoccmd.arm64",
             "version_code": 149,
             "version_name": "dde88226a1cf8145edfe7094a67cbcdab6363d46",
-            "apk_sha256": "41a3edcaabce610c84abe813ac44418615caf17d4adda5e7fbad55ec31ee7a5d",
+            "apk_sha256": "6f114c2baf4b8f6a183878e59e9c45337e66ef970355521056cd95fc0ab338a1",
             "signer_certificate_sha256": [
               "0e6f9baa87ca7e01a3e418cf0b8a0f13333c7e2433d6b3bf37826fb2a1a6c297"
             ],
@@ -148,15 +148,15 @@
             "libraries": [
               {
                 "path": "lib/arm64-v8a/libVkLayer_GLES_RenderDoc.so",
-                "size": 238489784,
-                "sha256": "f59b0d231adaebf4dbcf93f7f0700cba2d5f9062c476fb523b6ee922b49c7857",
-                "build_id": "5bd3efc2a76a6d48"
+                "size": 240873880,
+                "sha256": "ff8dc051d8edc5bcbb36ecb3180a4ce01a8d8bd8ed824f638d8cde14d1038cf7",
+                "build_id": "22a9072f52cd9d00"
               },
               {
                 "path": "lib/arm64-v8a/librenderdoccmd.so",
-                "size": 2902280,
-                "sha256": "043fc1ee7b363393134fb795cbd894a6d9f009608dae56d84c95c01132405a0b",
-                "build_id": "06c33d4f8eb67a32c70939b85a832150f4ba7fbb"
+                "size": 2926240,
+                "sha256": "54387a7cf7e94e158e57d90b2fab87f0b66f87230a0264dc9ebefaa27ab00948",
+                "build_id": "862d196a0afe0263cfd3cf7c5ae4f25186fe495c"
               }
             ]
           }
