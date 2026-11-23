@@ -1091,19 +1091,26 @@ def cleanup_android_remote(result: AndroidBootstrapResult) -> list[str]:
             if not matches:
                 result.created_forward = False
             else:
-                _run_subprocess(
-                [result.adb_path, "-H", f"[{endpoint[0]}]" if ":" in endpoint[0] else endpoint[0],
-                 "-P", str(endpoint[1]), "-s", result.device_serial, "forward", "--remove", result.forward_spec],
-                timeout_s=10.0,
-                error_code="adb_forward_remove_failed",
-                error_message="Failed to remove adb forward",
-                )
+                remove_error: AndroidRemoteBootstrapError | None = None
+                try:
+                    _run_subprocess(
+                        [result.adb_path, "-H", f"[{endpoint[0]}]" if ":" in endpoint[0] else endpoint[0],
+                         "-P", str(endpoint[1]), "-s", result.device_serial, "forward", "--remove", result.forward_spec],
+                        timeout_s=10.0,
+                        error_code="adb_forward_remove_failed",
+                        error_message="Failed to remove adb forward",
+                    )
+                except AndroidRemoteBootstrapError as exc:
+                    # A disconnect can remove the forward while the removal command is in flight.
+                    remove_error = exc
                 remaining = [row for row in _list_adb_forwards_for_cleanup(endpoint)
                              if row[1] == result.forward_spec]
                 if remaining and remaining != [expected]:
                     raise AndroidRemoteBootstrapError("adb_forward_ownership_changed",
                         "ADB forward identity changed; refusing to remove it")
                 if remaining:
+                    if remove_error:
+                        raise remove_error
                     raise AndroidRemoteBootstrapError("adb_forward_cleanup_unconfirmed",
                         "ADB forward cleanup unconfirmed: owned mapping remains after removal")
                 result.created_forward = False

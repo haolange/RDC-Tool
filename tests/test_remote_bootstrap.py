@@ -428,11 +428,14 @@ def test_forward_cleanup_requires_confirmed_post_remove_absence(monkeypatch, pos
     assert len(state.calls) == 2 and all(connection.closed for connection in state.connections)
 
 
-def test_forward_cleanup_accepts_confirmed_empty_after_remove(monkeypatch, adb_forward_protocol):
+@pytest.mark.parametrize("remove_failed", [False, True])
+def test_forward_cleanup_accepts_confirmed_empty_after_remove(monkeypatch, adb_forward_protocol, remove_failed):
     commands = []
     state = adb_forward_protocol([_forward_frame(b'serial-1 tcp:38960 localabstract:renderdoc_38920\n'), _forward_frame()])
     def run(cmd, **kwargs):
         commands.append(cmd)
+        if remove_failed:
+            raise remote_bootstrap.AndroidRemoteBootstrapError("adb_forward_remove_failed", "Forward already disappeared")
         return SimpleNamespace(returncode=0, stdout='', stderr='')
     monkeypatch.setattr(remote_bootstrap, '_run_subprocess', run)
     result = AndroidBootstrapResult('adb', 'serial-1', '', '', '', '127.0.0.1',

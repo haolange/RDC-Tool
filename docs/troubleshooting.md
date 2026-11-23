@@ -128,4 +128,4 @@ Android target control 为每个实际 target 临时建立带 `--no-rebind` 的�
 
 ADB forward 清理只以 ADB server 的 `host:list-forward` 协议应答作为列表真源，不读取 CLI `forward --list`；CLI 即使返回换行或退出码为零，也不能证明列表 payload 完整。一次查询共用 10 秒 deadline，完整读取 `OKAY`、4 位十六进制长度及对应 payload；完整的零长度帧才是合法的空列表。`FAIL`、EOF、超时、无效的长度、UTF-8 或行格式都是 `ADB forward cleanup unconfirmed`，并保留 lease。
 
-查询按 ADB 标准的 server 端点变量优先级选择 server（变量见 [configuration.md](configuration.md)），默认 `localhost:5037`，只支持 TCP 端点；不支持的端点明确报告未确认，不回落到默认 server。同一次清理固定 endpoint，捆绑 ADB 的删除命令通过显式 `-H`/`-P` 绑定该 server；删除后只做一次同协议查询，确认 local spec 已无映射。映射仍在、查询失败或外部重绑都不能退役 ownership，也不会追加删除、自动重试或改用其他查询路径。公开错误沿用 disconnect/context cleanup 的既有错误与 `cleanup_errors`。`context clear` 的成功回执不能替代 forward、helper 与宿主进程各自的终态证据。
+查询按 ADB 标准的 server 端点变量优先级选择 server（变量见 [configuration.md](configuration.md)），默认 `localhost:5037`，只支持 TCP 端点；不支持的端点明确报告未确认，不回落到默认 server。同一次清理固定 endpoint，捆绑 ADB 的删除命令通过显式 `-H`/`-P` 绑定该 server；删除后只做一次同协议查询，确认 local spec 已无映射。即使删除命令报告失败，也按同一次查询结果判断，例如断连与删除并发时转发可能已消失。映射仍在、查询失败或外部重绑都不能退役 ownership，也不会追加删除、自动重试或改用其他查询路径。公开错误沿用 disconnect/context cleanup 的既有错误与 `cleanup_errors`。`context clear` 的成功回执不能替代 forward、helper 与宿主进程各自的终态证据。
