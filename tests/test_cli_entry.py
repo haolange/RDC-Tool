@@ -25,6 +25,16 @@ def test_launcher_and_package_entry_share_one_version_payload():
     assert payload["schema_version"] == expected["schema_version"]
 
 
+def test_version_reports_the_served_catalog_identity():
+    payload = json.loads(_run("version", "--json").stdout)
+    listed = json.loads(_run("tools", "list", "--json").stdout)["data"]
+    assert payload["data"]["catalog"] == {
+        "schema_version": listed["schema_version"],
+        "fingerprint": listed["fingerprint"],
+        "tool_count": listed["tool_count"],
+    }
+
+
 def test_launcher_has_no_private_options():
     result = _run("--context-id", "x", "version")
     assert result.returncode != 0

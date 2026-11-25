@@ -14,6 +14,7 @@
 
 ### daemon、CLI 与配置
 
+- `version --json` 报告本安装提供的 catalog 身份（`data.catalog.fingerprint` 与 `tool_count`），与 `tools list --json` 一致；RDC-Agent 按（版本，指纹）成对校验，与其打包快照不一致时明确报错。
 - daemon 在解码任何请求前完成 HMAC 握手；IPC key 经 stdin 传递，不再出现在命令行参数和任何 CLI 输出中。`daemon status`/`start` 的输出字段 `pipe_name` 改为 `endpoint`。升级前留下的旧格式 state 会被判为无效，重新 `daemon start` 即可。
 - 删除未文档化的 `daemon start --pipe-name` 与 CLI 私有别名 `--context-id`；`rdc-tool --version`、`version --json` 与 help 只有一套输出。
 - `rd.core.set_config` 只接受实际生效的键（`artifact_dir`、`log_level`、`snapshot_retention`、`runtime_limits`），未知键报错。

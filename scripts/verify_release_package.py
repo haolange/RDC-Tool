@@ -260,6 +260,9 @@ def _verify_version_payload(root: Path) -> None:
         raise RuntimeError(f"version public_commands mismatch: {data.get('public_commands')!r}")
     if data.get("tool_version") != TOOL_VERSION:
         raise RuntimeError("runtime version does not match release source")
+    catalog = data.get("catalog")
+    if not isinstance(catalog, dict) or not catalog.get("fingerprint") or not isinstance(catalog.get("tool_count"), int):
+        raise RuntimeError(f"version catalog identity missing: {json.dumps(data)[:500]}")
     entrypoints = data.get("entrypoints")
     if not isinstance(entrypoints, dict) or "windows_cmd" not in entrypoints or "posix_shell" not in entrypoints or "python_cli" not in entrypoints:
         raise RuntimeError(f"version entrypoints missing physical launchers: {json.dumps(data)[:500]}")

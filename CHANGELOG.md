@@ -2,6 +2,7 @@
 
 ## 待发布 `Unreleased`
 
+- 版本升至 1.1.3。`version --json` 新增 `data.catalog`（`schema_version`、`fingerprint`、`tool_count`），与 `tools list --json` 报告的同一份 catalog 一致；RDC-Agent 据此把（版本，指纹）与其打包的 catalog 快照成对校验。发布包校验要求该字段存在。
 - 修复 Linux 本地回放在打开 capture 时段错误：POSIX 加载原语此前先用 ctypes 预加载 `librenderdoc.so`，RenderDoc 的库构造函数此时还看不到 Python 绑定导出的 `renderdoc__replay__marker`，便按"被注入的捕获目标"安装钩子，随后在 `WrappedVulkan::Serialise_vkCreateSwapchainKHR` 崩溃。Linux 主机布局把原生库移到 `lib/librenderdoc.so`（Vulkan layer 清单同在 `lib/`），由绑定自带的 RUNPATH `$ORIGIN/../lib/` 作为依赖加载，POSIX 不再预加载任何库。此前记为"lavapipe 上原生回放崩溃"的阻塞即此缺陷，与驱动无关。
 - 统一请求拒绝的无副作用证明：事件缺失等前置拒绝仅在未尝试原生效果且入口回放及关联状态逐项不变时返回 `validation` 与保全字段；无法证明时返回 `runtime`。事件不存在的分类由 `not_found` 改为 `validation` 或 `runtime`；仅有未尝试 shader replacement 不再证明整个回放未变。
 - 新增 `rdc_tool/platform/` 平台层（host、locks、process、ipc、native、preview），每个契约一套共享逻辑加 Windows/POSIX 原语；平台包外禁止任何主机判断，由 `tests/test_platform_boundary.py` 守护。此前 HEAD 在 Linux 上无法 import。参考外部 PR #2 重新实现并署名。
