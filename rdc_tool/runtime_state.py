@@ -189,6 +189,15 @@ def _normalize_shader_replacements(value: Any) -> list[Dict[str, Any]]:
     return normalized
 
 
+def _normalize_worker_exit(value: Dict[str, Any]) -> Dict[str, Any]:
+    """A confirmed worker exit: its identity and, when known, why and during which request it ended."""
+    stack_log = value.get("stack_log") if isinstance(value.get("stack_log"), dict) else {}
+    return {"pid": value["pid"], "birth": value["birth"],
+            "reason": str(value.get("reason") or ""), "trace_id": str(value.get("trace_id") or ""),
+            "request_id": str(value.get("request_id") or ""),
+            "stack_log": {"path": str(stack_log.get("path") or ""), "tail": str(stack_log.get("tail") or "")}}
+
+
 def _normalize_session_record(session_id: str, value: Any) -> Dict[str, Any]:
     item = dict(value or {}) if isinstance(value, dict) else {}
     recovery = item.get("recovery") if isinstance(item.get("recovery"), dict) else {}
@@ -217,7 +226,7 @@ def _normalize_session_record(session_id: str, value: Any) -> Dict[str, Any]:
             "last_success_ms": _normalize_int(recovery.get("last_success_ms")),
             "attempt_count": _normalize_int(recovery.get("attempt_count")),
             "last_error": str(recovery.get("last_error") or item.get("last_error") or "").strip(),
-            **({"worker_exit": {"pid": worker_exit["pid"], "birth": worker_exit["birth"]}} if verified_exit else {}),
+            **({"worker_exit": _normalize_worker_exit(worker_exit)} if verified_exit else {}),
         },
     }
 

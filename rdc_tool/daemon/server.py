@@ -15,13 +15,15 @@ from typing import Any, Dict
 
 from rdc_tool import timeout_policy
 from rdc_tool.context_snapshot import normalize_context_id
+from rdc_tool.core.contracts import canonical_error
+from rdc_tool.io_utils import rotating_log_handler
 from rdc_tool.daemon.client import context_has_unreleased_resources, owner_lost_should_stop
 from rdc_tool.daemon.state import (
-    DEFAULT_IDLE_TIMEOUT_S, DEFAULT_LEASE_TIMEOUT_S, epoch_ms, iso_to_ms, normalize_timeout, owner_process,
-    process_identity, public_view, save_state, state_path, utc_now_iso,
+    DEFAULT_IDLE_TIMEOUT_S, DEFAULT_LEASE_TIMEOUT_S, daemon_log_path, epoch_ms, iso_to_ms, normalize_timeout,
+    owner_process, process_identity, public_view, save_state, state_path, utc_now_iso,
 )
 from rdc_tool.daemon.ownership import OwnerLease
-from rdc_tool.daemon.worker import RuntimeWorkerProcess
+from rdc_tool.daemon.worker import RuntimeWorkerProcess, WorkerFailure
 from rdc_tool.platform import ipc, process
 from rdc_tool.platform.ipc import Endpoint
 from rdc_tool.progress import NativeCallFrame, ProgressEvent
@@ -32,6 +34,14 @@ logger = logging.getLogger("rdc_tool.daemon")
 # Do not release an owner's kernel lock while this process is still alive,
 # including listener/worker teardown and interpreter shutdown.
 _PROCESS_OWNER_LEASES: list[OwnerLease] = []
+WORKER_LIFECYCLE_LIMIT = 16
+# A persisted worker exit keeps the head of its stack dump; the full tail stays
+# in worker.log and in the failing request's error envelope.
+_PERSISTED_STACK_TAIL_CHARS = 2048
+
+
+class WorkerUnavailable(RuntimeError):
+    """The worker could not be started or its predecessor's exit could not be confirmed; nothing ran."""
 
 
 class _ClientChannel:
@@ -151,6 +161,7 @@ class DaemonRuntime:
             "attached_clients": [],
             "active_request_count": 0,
             "active_operation": {},
+            "worker_lifecycle": [],
             "session_id": "",
             "capture_file_id": "",
             "capture_path": "",
@@ -380,21 +391,41 @@ class DaemonRuntime:
         self.state["backend"] = str(context_state.get("backend") or "local")
         self.state["worker"] = self._worker_snapshot_locked()
 
+    def _record_worker_lifecycle(self, event: str, worker: process.ProcessIdentity, **facts: Any) -> None:
+        entry = {"event": event, "pid": worker.pid, "start_generation": worker.birth, "at_ms": epoch_ms(), **facts}
+        with self._state_lock:
+            history = [item for item in self.state.get("worker_lifecycle") or [] if isinstance(item, dict)]
+            self.state["worker_lifecycle"] = [*history, entry][-WORKER_LIFECYCLE_LIMIT:]
+
     def _ensure_worker(self) -> RuntimeWorkerProcess:
         if self._worker is None:
             self._worker = RuntimeWorkerProcess(context_id=self.daemon_context)
-        if not self._worker.is_running():
-            prior = self._worker.previous_identity()
-            if prior.pid and process.probe(prior) is not process.Liveness.EXITED:
-                raise RuntimeError("Previous worker identity is still live or unavailable; preserve context for recovery")
-            self._mark_replay_requires_restart(
-                "Replay worker changed; close and reopen the capture through its owning lifecycle", prior)
+        if self._worker.is_running():
+            return self._worker
+        prior = self._worker.previous_identity()
+        if prior.pid and process.probe(prior) is not process.Liveness.EXITED:
+            raise RuntimeError("Previous worker identity is still live or unavailable; preserve context for recovery")
+        # A request after a worker loss starts a fresh worker, but it never
+        # restores replay: persisted sessions stay requires_restart.
+        self._mark_replay_requires_restart(
+            "Replay worker changed; close and reopen the capture through its owning lifecycle", prior,
+            reason="previous_worker_exited")
         self._worker.ensure_started()
+        self._record_worker_lifecycle("started", self._worker.previous_identity())
         return self._worker
 
-    def _mark_replay_requires_restart(self, message: str, exited_worker: process.ProcessIdentity | None = None) -> None:
+    def _mark_replay_requires_restart(self, message: str, exited_worker: process.ProcessIdentity | None = None, *,
+                                      reason: str = "", trace_id: str = "", request_id: str = "",
+                                      stack_log: Dict[str, str] | None = None) -> bool:
+        """Quarantine every persisted session; True when there was replay to quarantine."""
         state = load_context_state(self.daemon_context)
         sessions = state.get("sessions") or {}
+        worker_exit = None
+        if exited_worker is not None and exited_worker.pid > 0:
+            worker_exit = {"pid": exited_worker.pid, "birth": exited_worker.birth, "reason": reason,
+                           "trace_id": trace_id, "request_id": request_id,
+                           "stack_log": {"path": str((stack_log or {}).get("path") or ""),
+                                         "tail": str((stack_log or {}).get("tail") or "")[:_PERSISTED_STACK_TAIL_CHARS]}}
         for record in sessions.values():
             previous_recovery = dict(record.get("recovery") or {})
             previous_exit = (previous_recovery.get("worker_exit")
@@ -405,36 +436,73 @@ class DaemonRuntime:
             record["last_error"] = message
             record["recovery"] = {**previous_recovery,
                 "status": "requires_restart", "last_error": message,
-                "worker_exit": ({"pid": exited_worker.pid, "birth": exited_worker.birth}
-                                if exited_worker is not None and exited_worker.pid > 0 else previous_exit)}
+                "worker_exit": worker_exit or previous_exit}
         if sessions:
             state["recovery"] = {**dict(state.get("recovery") or {}),
                 "status": "degraded", "last_error": message,
                 "recovered_session_ids": [], "deferred_session_ids": [],
                 "degraded_session_ids": list(sessions)}
             save_context_state(state, self.daemon_context)
+        return bool(sessions)
 
     def _request_worker(self, method: str, params: Dict[str, Any], *, no_progress_s: float,
                         frames: Any = None) -> Dict[str, Any]:
-        worker = self._ensure_worker()
+        try:
+            worker = self._ensure_worker()
+        except Exception as exc:
+            raise WorkerUnavailable(str(exc)) from exc
+        request_id = str(params.get("request_id") or "")
         try:
             response = worker.request(method, params, no_progress_s=no_progress_s, frame_sink=frames or self)
             if not bool(response.get("ok")):
                 error = response.get("error") if isinstance(response.get("error"), dict) else {}
-                raise RuntimeError(str(error.get("message") or f"worker {method} failed"))
+                raise WorkerFailure("worker_request_failed", "worker_error",
+                                    str(error.get("message") or f"worker {method} failed"),
+                                    worker=worker.previous_identity(), stack_log={"path": worker.log_path, "tail": ""},
+                                    trace_id=str(params.get("trace_id") or ""))
             return dict(response)
         except Exception as exc:
             # A lost response can follow an applied mutation. Never resubmit it
             # to a fresh worker or recover the old controller implicitly.
-            message = f"Replay worker request failed; outcome unknown; clear context before retrying: {exc}"
-            prior = worker.previous_identity()
+            failure = exc if isinstance(exc, WorkerFailure) else WorkerFailure(
+                "worker_request_failed", "daemon_error", str(exc), worker=worker.previous_identity(),
+                stack_log={"path": worker.log_path, "tail": ""}, trace_id=str(params.get("trace_id") or ""))
+            prior = failure.worker if failure.worker.pid > 0 else worker.previous_identity()
+            message = (f"Replay worker request failed ({failure.code}: {failure.reason}); outcome unknown; "
+                       f"clear context before retrying: {failure}")
             try:
                 worker.stop()
             except Exception as cleanup_error:
                 message += f"; worker cleanup failed: {cleanup_error}"
-            confirmed = prior if prior.pid > 0 and process.probe(prior) is process.Liveness.EXITED else None
-            self._mark_replay_requires_restart(message, confirmed)
-            raise RuntimeError(message) from exc
+            failure.exit_confirmed = prior.pid > 0 and process.probe(prior) is process.Liveness.EXITED
+            failure.replay_requires_restart = self._mark_replay_requires_restart(
+                message, prior if failure.exit_confirmed else None, reason=failure.reason, trace_id=failure.trace_id,
+                request_id=request_id, stack_log=failure.stack_log)
+            self._record_worker_lifecycle(
+                "exited", prior, reason=failure.reason, code=failure.code, exit_confirmed=failure.exit_confirmed,
+                trace_id=failure.trace_id, request_id=request_id, stack_log={"path": failure.stack_log.get("path", "")})
+            if failure is exc:
+                raise
+            raise failure from exc
+
+    def _worker_failure_details(self, failure: WorkerFailure, *, failure_stage: str, request_id: str,
+                                no_progress_ms: int) -> Dict[str, Any]:
+        with self._state_lock:
+            active = dict(self.state.get("active_operation") or {})
+        return {
+            "failure_stage": failure_stage,
+            "reason": failure.reason,
+            "outcome": "unknown",
+            "worker": {"pid": failure.worker.pid, "start_generation": failure.worker.birth},
+            "worker_exit_confirmed": failure.exit_confirmed,
+            "replay_requires_restart": bool(getattr(failure, "replay_requires_restart", False)),
+            "stack_log": {"path": str(failure.stack_log.get("path") or ""), "tail": str(failure.stack_log.get("tail") or "")},
+            "trace_id": failure.trace_id or str(active.get("trace_id") or ""),
+            "request_id": request_id,
+            "last_progress": {"stage": active.get("stage") or None, "native_call": active.get("native_call"),
+                              "at_ms": active.get("last_progress_ms")},
+            "no_progress_ms": no_progress_ms,
+        }
 
     def _handle_attach_client(self, params: Dict[str, Any]) -> Dict[str, Any]:
         client_id = str(params.get("client_id") or "").strip()
@@ -558,10 +626,22 @@ class DaemonRuntime:
                 with self._state_lock:
                     self._refresh_state_from_runtime_locked()
                 return {"ok": True, "result": result}
-            except Exception as exc:
+            except WorkerFailure as failure:
+                details = self._worker_failure_details(failure, failure_stage="worker_exec", request_id=request_id,
+                                                       no_progress_ms=no_progress_ms)
                 with self._state_lock:
                     self._refresh_state_from_runtime_locked()
-                return {"ok": False, "error": {"code": "worker_error", "message": str(exc)}}
+                return {"ok": True, "result": canonical_error(
+                    result_kind=operation, code=failure.code, category="runtime", message=str(failure),
+                    details=details, trace_id=details["trace_id"], transport=transport)}
+            except WorkerUnavailable as exc:
+                with self._state_lock:
+                    self._refresh_state_from_runtime_locked()
+                return {"ok": True, "result": canonical_error(
+                    result_kind=operation, code="worker_unavailable", category="runtime", message=str(exc),
+                    details={"failure_stage": "worker_start", "reason": "worker_unavailable", "outcome": "not_started",
+                             "request_id": request_id, "trace_id": trace_id, "no_progress_ms": no_progress_ms},
+                    trace_id=trace_id, transport=transport)}
             finally:
                 with self._state_lock:
                     self.state["active_request_count"] = max(
@@ -603,8 +683,16 @@ class DaemonRuntime:
                 if isinstance(data, dict):
                     released = dict(data.get("released") or {})
                 cleared = True
-            except Exception as exc:
-                return {"ok": False, "error": {"code": "worker_error", "message": str(exc)}}
+            except WorkerFailure as failure:
+                details = self._worker_failure_details(
+                    failure, failure_stage="worker_clear_context", request_id=channel.request_id,
+                    no_progress_ms=timeout_policy.DEFAULT_NO_PROGRESS_MS)
+                return {"ok": False, "error": {"code": failure.code, "category": "runtime", "message": str(failure),
+                                               "details": details}}
+            except WorkerUnavailable as exc:
+                return {"ok": False, "error": {"code": "worker_unavailable", "category": "runtime", "message": str(exc),
+                                               "details": {"failure_stage": "worker_start", "reason": "worker_unavailable",
+                                                           "outcome": "not_started"}}}
             finally:
                 with self._state_lock:
                     self._refresh_state_from_runtime_locked()
@@ -824,10 +912,11 @@ def main() -> None:
     parser.add_argument("--idle-timeout-seconds", type=int, default=DEFAULT_IDLE_TIMEOUT_S)
     args = parser.parse_args()
 
-    logging.basicConfig(
-        level=getattr(logging, str(args.log_level).upper(), logging.INFO),
-        format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
-    )
+    # The daemon is detached with no console; its own bounded log is the only
+    # record of what it did when a request or a worker went wrong.
+    handler = rotating_log_handler(daemon_log_path(args.daemon_context))
+    handler.setFormatter(logging.Formatter("%(asctime)s pid=%(process)d [%(name)s] %(levelname)s: %(message)s"))
+    logging.basicConfig(level=getattr(logging, str(args.log_level).upper(), logging.INFO), handlers=[handler])
 
     # The client writes the IPC key to stdin so it never appears in argv.
     token = sys.stdin.readline().strip()

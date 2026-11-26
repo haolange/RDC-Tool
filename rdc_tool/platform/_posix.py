@@ -64,29 +64,84 @@ def _boot_id() -> str:
     return (_PROC / "sys/kernel/random/boot_id").read_text(encoding="ascii").strip()
 
 
-def process_birth(pid: int) -> str | None:
-    if not (_PROC / "self/stat").is_file():
-        raise OSError("process birth requires /proc")
+def _stat_fields(pid: int) -> list[str] | None:
+    """The /proc stat fields after the command name, or ``None`` once the process is gone."""
     try:
         stat = (_PROC / str(pid) / "stat").read_text(encoding="utf-8", errors="replace")
     except (FileNotFoundError, ProcessLookupError):
         # ESRCH: the process was reaped between open and read. It is gone, not unreadable.
         return None
-    fields = stat[stat.rindex(")") + 2:].split()
-    if fields[0] in {"Z", "X"}:
+    return stat[stat.rindex(")") + 2:].split()
+
+
+def process_birth(pid: int) -> str | None:
+    if not (_PROC / "self/stat").is_file():
+        raise OSError("process birth requires /proc")
+    fields = _stat_fields(pid)
+    if fields is None or fields[0] in {"Z", "X"}:
         return None
     return f"linux-start-ticks:{_boot_id()}:{fields[19]}"
+
+
+def _children(pid: int, session: str) -> list[tuple[int, str]]:
+    """Live children of ``pid`` that stayed in its session, with their births.
+
+    A child that started its own session detached itself on purpose (an adb
+    server, for example) and is not part of the tree, exactly as a process
+    group kill would leave it alone.
+    """
+    found = []
+    for entry in _PROC.iterdir():
+        if not entry.name.isdigit():
+            continue
+        fields = _stat_fields(int(entry.name))
+        if fields is None or fields[0] in {"Z", "X"} or fields[1] != str(pid) or fields[3] != session:
+            continue
+        found.append((int(entry.name), f"linux-start-ticks:{_boot_id()}:{fields[19]}"))
+    return found
+
+
+def _signal_confirmed(pid: int, birth: str, signum: int) -> bool:
+    # Re-read the identity right before signalling: a reused PID is never signalled.
+    if process_birth(pid) != birth:
+        return False
+    try:
+        os.kill(pid, signum)
+    except ProcessLookupError:
+        return False
+    return True
 
 
 def kill_tree(pid: int) -> bool:
     try:
         group = os.getpgid(pid)
-        if group == pid and group != os.getpgrp():
-            os.killpg(group, signal.SIGKILL)
-        else:
-            os.kill(pid, signal.SIGKILL)
     except ProcessLookupError:
         return False
+    if group == pid and group != os.getpgrp():
+        # A detached daemon leads its own group; its worker and tools share it.
+        try:
+            os.killpg(group, signal.SIGKILL)
+        except ProcessLookupError:
+            return False
+        return True
+    # A process inside a shared group (the worker in its daemon's group) is
+    # killed with its descendants only. Each process is stopped before its
+    # children are read so the tree cannot grow, then the tree is killed
+    # leaves first, every signal behind a fresh identity check.
+    root_fields = _stat_fields(pid)
+    root_birth = process_birth(pid)
+    if root_fields is None or root_birth is None or not _signal_confirmed(pid, root_birth, signal.SIGSTOP):
+        return False
+    session = root_fields[3]
+    tree = [(pid, root_birth)]
+    index = 0
+    while index < len(tree):
+        for child, birth in _children(tree[index][0], session):
+            if _signal_confirmed(child, birth, signal.SIGSTOP):
+                tree.append((child, birth))
+        index += 1
+    for member, birth in reversed(tree):
+        _signal_confirmed(member, birth, signal.SIGKILL)
     return True
 
 

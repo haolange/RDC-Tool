@@ -231,8 +231,14 @@ def _daemon_exec(
         return canonical_error(result_kind=operation, code=exc.code, category=exc.category, message=str(exc),
                                details=exc.details, transport="cli")
     if not bool(resp.get("ok")):
+        # The daemon refused the request itself (budget, duplicate id): the
+        # operation never ran, and its result kind is still the operation.
         err = resp.get("error") if isinstance(resp.get("error"), dict) else {}
-        raise RuntimeError(str(err.get("message") or "daemon exec failed"))
+        return canonical_error(result_kind=operation, code=str(err.get("code") or "daemon_error"),
+                               category=str(err.get("category") or "runtime"),
+                               message=str(err.get("message") or "daemon rejected the request"),
+                               details=err.get("details") if isinstance(err.get("details"), dict) else {},
+                               transport="cli")
     result = resp.get("result")
     if not isinstance(result, dict):
         raise RuntimeError("daemon returned invalid result payload")

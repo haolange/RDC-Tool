@@ -20,6 +20,13 @@ def worker_state_path(context: Optional[str] = "default") -> Path:
     return root / f"worker_state_{context_file_token(ctx)}.json"
 
 
+def worker_log_path(context: Optional[str] = "default") -> Path:
+    """The worker's stderr: fatal-signal and no-progress stack dumps land here."""
+    ctx = normalize_context_id(context)
+    name = "worker.log" if ctx == "default" else f"worker_{context_file_token(ctx)}.log"
+    return worker_state_dir() / name
+
+
 def load_worker_state(context: Optional[str] = "default") -> Dict[str, Any]:
     path = worker_state_path(context)
     if not path.is_file():

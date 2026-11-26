@@ -39,6 +39,11 @@ EXEC_LOCK_SLICE_S = 1.0
 WORKER_READY_TIMEOUT_S = 10.0
 WORKER_CONTROL_TIMEOUT_S = 5.0
 WORKER_EXIT_TIMEOUT_S = 5.0
+# After the watchdog expires the daemon waits this long for the worker's stack
+# dump to arrive on stderr before it terminates the worker tree.
+STACK_DUMP_GRACE_S = 2.0
+# The worker re-arms its stack-dump timer at most this often while frames flow.
+STACK_DUMP_REARM_INTERVAL_S = 1.0
 PIXEL_HISTORY_TIMEOUT_S = 20.0
 
 

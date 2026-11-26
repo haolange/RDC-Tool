@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import faulthandler
+import io
 import json
 import logging
 import os
 import sys
 import threading
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
@@ -40,6 +43,54 @@ def _emit(payload: Dict[str, Any]) -> None:
         safe_stream_write(text, sys.stdout)
 
 
+class _StackDumps:
+    """faulthandler's watchdog for the running request.
+
+    The dump runs on faulthandler's own C thread and reads every Python
+    thread's frames without taking the GIL, so it still reports where the
+    worker is while a native call holds the interpreter. It fires just before
+    the daemon's no-progress watchdog and is re-armed, at most once a second,
+    whenever the request reports a frame.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._enabled = False
+        self._after_s = 0.0
+        self._armed_at = 0.0
+
+    def enable(self) -> None:
+        try:
+            faulthandler.enable(file=sys.stderr, all_threads=True)
+        except (AttributeError, OSError, ValueError, io.UnsupportedOperation):
+            return
+        self._enabled = True
+
+    def _arm_locked(self) -> None:
+        faulthandler.dump_traceback_later(self._after_s, repeat=False, file=sys.stderr, exit=False)
+        self._armed_at = time.monotonic()
+
+    def arm(self, no_progress_ms: int) -> None:
+        with self._lock:
+            if self._enabled:
+                self._after_s = timeout_policy.stack_dump_after_s(no_progress_ms)
+                self._arm_locked()
+
+    def touch(self) -> None:
+        with self._lock:
+            if self._after_s and time.monotonic() - self._armed_at >= timeout_policy.STACK_DUMP_REARM_INTERVAL_S:
+                self._arm_locked()
+
+    def cancel(self) -> None:
+        with self._lock:
+            if self._after_s:
+                self._after_s = 0.0
+                faulthandler.cancel_dump_traceback_later()
+
+
+_STACK_DUMPS = _StackDumps()
+
+
 class _WorkerFrameSink:
     """Carries one request's progress and native-call frames to the daemon."""
 
@@ -52,6 +103,7 @@ class _WorkerFrameSink:
         except Exception:
             # Frame delivery cannot change the native operation outcome.
             logging.getLogger(__name__).warning("Worker frame delivery failed", exc_info=True)
+        _STACK_DUMPS.touch()
 
     def publish(self, event: ProgressEvent) -> None:
         self._send({"kind": "progress", "event": asdict(event)})
@@ -69,14 +121,29 @@ async def _in_request(scope: RequestScope, work: Awaitable[Any]) -> Any:
         progress._CURRENT_REQUEST.reset(token)
 
 
+def _run_request(runner: asyncio.Runner, scope: RequestScope, work: Awaitable[Any]) -> Any:
+    _STACK_DUMPS.arm(scope.no_progress_ms)
+    try:
+        return runner.run(_in_request(scope, work))
+    finally:
+        _STACK_DUMPS.cancel()
+
+
 def _context_id() -> str:
     return normalize_context_id(os.environ.get("RDC_TOOL_CONTEXT_ID"))
 
 
+def _parent_daemon() -> ProcessIdentity:
+    return ProcessIdentity(int(os.environ.get("RDC_TOOL_DAEMON_PID") or 0), os.environ.get("RDC_TOOL_DAEMON_BIRTH", ""))
+
+
 def _watch_parent_daemon() -> None:
-    parent = ProcessIdentity(int(os.environ.get("RDC_TOOL_DAEMON_PID") or 0), os.environ.get("RDC_TOOL_DAEMON_BIRTH", ""))
+    parent = _parent_daemon()
     if parent.pid > 0:
         process.watch_parent(parent, lambda: os._exit(0))
+        # The daemon pumps this worker's stderr into worker.log: stack dumps
+        # and fatal-signal tracebacks go there.
+        _STACK_DUMPS.enable()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -145,7 +212,7 @@ def main(argv: list[str] | None = None) -> int:
                             request_id=str(params.get("request_id") or req_id), sink=sink,
                             trace_id=str(params.get("trace_id") or f"trc_{uuid.uuid4().hex[:12]}"),
                             no_progress_ms=int(params.get("no_progress_ms") or timeout_policy.DEFAULT_NO_PROGRESS_MS))
-                        result = runner.run(_in_request(scope,
+                        result = _run_request(runner, scope,
                             dispatch.dispatch_operation(
                                 operation,
                                 dict(params.get("args") or {}),
@@ -155,20 +222,24 @@ def main(argv: list[str] | None = None) -> int:
                                 progress_sink=sink,
                                 trace_id=scope.trace_id,
                             )
-                        ))
+                        )
                         observed = loaded_runtime()
                         if not cleanup and observed["status"] == "mismatch":
                             raise RuntimeError("Loaded RenderDoc paths differ from the configured runtime")
                         _emit({"id": req_id, "ok": True, "result": result, "loaded_runtime": observed})
                         continue
                     if method == "clear_context":
-                        result = runner.run(
+                        sink = _WorkerFrameSink(req_id)
+                        scope = RequestScope(request_id=req_id, sink=sink, trace_id=f"trc_{uuid.uuid4().hex[:12]}")
+                        result = _run_request(runner, scope,
                             dispatch.dispatch_operation(
                                 "rd.session.clear_context",
                                 {},
                                 transport="daemon",
                                 remote=False,
                                 context_id=context_id,
+                                progress_sink=sink,
+                                trace_id=scope.trace_id,
                             )
                         )
                         _emit({"id": req_id, "ok": True, "result": result})

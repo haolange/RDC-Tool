@@ -21,7 +21,7 @@ def event(stage="installing", **changes):
 
 def worker(monkeypatch, frames):
     process = RuntimeWorkerProcess(context_id="progress-test")
-    process._proc = SimpleNamespace(poll=lambda: None, stdin=io.StringIO())
+    process._proc = SimpleNamespace(poll=lambda: None, stdin=io.StringIO(), pid=4321)
     monkeypatch.setattr(process, "_save_state", lambda: None)
     for frame in frames:
         process._queue.put(frame)
