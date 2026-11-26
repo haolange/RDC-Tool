@@ -299,7 +299,10 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
             reporter = progress.current_reporter()
             if backend_type == "remote" and reporter is not None:
                 live_state._session_manager.get_state(session_info.session_id).transfer_progress = lambda stage, fraction: reporter.emit(stage, "Transferring capture", progress_pct=fraction, details={"session_id": session_info.session_id})
-            cap_info = await live_state._session_manager.open_capture(session_info.session_id, handle.file_path)
+            try:
+                cap_info = await live_state._session_manager.open_capture(session_info.session_id, handle.file_path)
+            finally:
+                remote_session._record_device_transfers(session_info.session_id)
             oplog._progress("capture_open_done", "Capture opened for replay", progress_pct=0.82, details={"session_id": session_info.session_id})
             # The session already exists in SessionManager after open_capture().
             # Avoid recovery-aware helpers until _runtime.replays/context state is

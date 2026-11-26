@@ -249,6 +249,8 @@ def default_context_snapshot(context: Optional[str] = "default") -> Dict[str, An
         "notes": "",
         "last_artifacts": [],
         "preview": default_preview_state(),
+        # Device-side capture transfer directories left for recovery; clear_context removes them.
+        "device_transfers": [],
         "updated_at_ms": _now_ms(),
     }
 
@@ -414,6 +416,12 @@ def normalize_context_snapshot(
         payload.get("preview"),
         backend=str(snapshot.get("backend") or "local"),
     )
+    transfers = payload.get("device_transfers")
+    snapshot["device_transfers"] = [
+        {"device_serial": str(item["device_serial"]), "shell_dir": str(item["shell_dir"])}
+        for item in (transfers if isinstance(transfers, list) else [])
+        if isinstance(item, dict) and str(item.get("device_serial") or "").strip() and str(item.get("shell_dir") or "").strip()
+    ]
     snapshot["updated_at_ms"] = _normalize_int(payload.get("updated_at_ms"), _now_ms())
     return snapshot
 

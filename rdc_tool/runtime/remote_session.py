@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional, Tuple
 from rdc_tool import context_snapshot, remote_bootstrap
 from rdc_tool.context_snapshot import default_context_snapshot, normalize_context_id
 from rdc_tool.core.errors import CoreError, RuntimeToolError
+from rdc_tool.core.session_manager import SessionError
 from rdc_tool.remote_bootstrap import AndroidBootstrapResult
 from rdc_tool.runtime import (
     coerce,
@@ -18,6 +19,40 @@ from rdc_tool.runtime import (
     renderdoc_api,
     settings,
 )
+
+
+def _record_device_transfers(session_id: str) -> None:
+    """Move a session's unreleased device transfer directories into its context, for clear_context."""
+    try:
+        state = live_state._session_manager.get_state(session_id) if live_state._session_manager is not None else None
+    except SessionError:
+        return
+    if state is None or not state.retained_transfer_dirs:
+        return
+    serial = str(state.remote_device_serial or getattr(state.remote_bootstrap_result, "device_serial", "") or "").strip()
+    ctx = live_state._runtime_context_id()
+    snapshot = context_records._context_snapshot(ctx)
+    transfers = [dict(item) for item in snapshot.get("device_transfers") or []]
+    for shell_dir in state.retained_transfer_dirs:
+        entry = {"device_serial": serial, "shell_dir": shell_dir}
+        if entry not in transfers:
+            transfers.append(entry)
+    state.retained_transfer_dirs.clear()
+    snapshot["device_transfers"] = transfers
+    context_records._store_context_snapshot(snapshot, ctx)
+
+
+async def _release_device_transfers(context_id: str) -> list[str]:
+    """Remove the context's recorded device transfer directories; errors keep the records."""
+    errors: list[str] = []
+    for transfer in list(context_records._context_snapshot(context_id).get("device_transfers") or []):
+        try:
+            errors.extend(await renderdoc_api._offload(
+                remote_bootstrap.remove_android_transfer_dir, remote_bootstrap.resolve_adb_path(),
+                str(transfer.get("device_serial") or ""), str(transfer.get("shell_dir") or "")))
+        except Exception as exc:
+            errors.append(str(exc))
+    return errors
 
 
 def _assert_remote_handle_context(

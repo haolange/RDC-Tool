@@ -222,6 +222,9 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
                         cleanup_errors.append(str(exc))
         if cleanup_errors:
             return envelope.failure("Context cleanup failed", code="context_cleanup_failed", details={"cleanup_errors": cleanup_errors, "cleanup_reason_code": "expired_remote_cleanup_failed"})
+        cleanup_errors = await remote_session._release_device_transfers(requested_context)
+        if cleanup_errors:
+            return envelope.failure("Context cleanup failed", code="context_cleanup_failed", details={"cleanup_errors": cleanup_errors, "cleanup_reason_code": "device_transfer_cleanup_failed"})
         snapshot = context_records._reset_context_snapshot(requested_context)
         state = context_records._context_state(requested_context)
         return envelope.success(

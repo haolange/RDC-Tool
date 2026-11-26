@@ -99,6 +99,14 @@ def run_tool(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
     return subprocess.run(command, **kwargs)
 
 
+def start_tool(command: list[str], **kwargs: Any) -> subprocess.Popen:
+    """Start a host utility without waiting for it; the caller watches it and kills it when it stalls."""
+    kwargs.setdefault("stdin", subprocess.DEVNULL)
+    for key, value in popen_options(SpawnProfile.TOOL).items():
+        kwargs.setdefault(key, value)
+    return subprocess.Popen(command, **kwargs)
+
+
 def launcher_argv(launcher: str) -> list[str]:
     """Command prefix that runs a launcher script or a command on PATH."""
     return _os.launcher_argv(launcher)

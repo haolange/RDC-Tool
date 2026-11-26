@@ -1101,6 +1101,29 @@ def _list_adb_forwards_for_cleanup(endpoint: tuple[str, int]) -> list[list[str]]
             f"ADB forward cleanup unconfirmed: {exc}") from exc
 
 
+_TRANSFER_DIR_RE = re.compile(r"/data/local/tmp/rdc-tool-transfer-[0-9a-f]{32}")
+
+
+def remove_android_transfer_dir(adb_path: str, device_serial: str, shell_dir: str) -> list[str]:
+    """Remove one capture transfer directory this tool created on the device; an absent one is already released."""
+    if not _TRANSFER_DIR_RE.fullmatch(str(shell_dir)) or not device_serial or any(char.isspace() for char in device_serial):
+        return [f"Refusing to remove an unrecognized device transfer path {shell_dir!r}"]
+    token = os.urandom(8).hex()
+    quoted = shlex.quote(shell_dir)
+    # Never recursively remove: only the transfer source and its own empty directory.
+    script = (f"if [ -e {quoted} ]; then rm -f {quoted}/source.rdc && rmdir {quoted}; fi "
+              f"&& printf '{token}:REMOVED\\n'")
+    try:
+        result = _run_subprocess(_adb_base_cmd(adb_path, device_serial) + ["shell", script], timeout_s=10.0,
+                                 error_code="android_transfer_cleanup_failed",
+                                 error_message=f"Device transfer cleanup failed for {shell_dir}")
+    except AndroidRemoteBootstrapError as error:
+        return [error.message]
+    if str(result.stdout or "").strip() != f"{token}:REMOVED":
+        return [f"Device transfer cleanup unconfirmed for {shell_dir}: {str(result.stderr or '').strip()}"]
+    return []
+
+
 def cleanup_android_remote(result: AndroidBootstrapResult) -> list[str]:
     errors: list[str] = []
     if result.created_forward:

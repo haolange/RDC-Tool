@@ -5,13 +5,14 @@ import hashlib
 import logging
 import re
 import shlex
+import subprocess
 import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from rdc_tool import native_calls
+from rdc_tool import native_calls, progress, timeout_policy
 from rdc_tool.platform import process
 from rdc_tool.platform import host as platform_host
 from rdc_tool.core.errors import CoreError
@@ -137,6 +138,9 @@ class SessionState:
     remote_bootstrap_result: Any = None
     remote_device_serial: str = ""
     transfer_progress: Any = None
+    # Device-side transfer directories whose release could not be confirmed;
+    # the owning context removes them during clear_context.
+    retained_transfer_dirs: List[str] = field(default_factory=list)
     capabilities: SessionCapabilities = field(default_factory=SessionCapabilities)
     capture_id: Optional[str] = None
     is_initialized: bool = False
@@ -144,6 +148,48 @@ class SessionState:
     replay_config: Dict[str, Any] = field(default_factory=dict)
     created_at: float = field(default_factory=time.time)
     cleanup_error: str = ""
+
+
+class TransferInterrupted(RuntimeError):
+    """An adb transfer stopped making progress or was cancelled; its client was killed."""
+
+    def __init__(self, reason: str, message: str) -> None:
+        super().__init__(message)
+        self.reason = reason  # stalled | cancelled
+
+
+def _run_transfer(command: list[str], observe_size: Any, on_growth: Any, window_s: float) -> subprocess.CompletedProcess:
+    """Run one adb transfer under a no-progress budget instead of a fixed timeout.
+
+    Once a second the destination size is observed: growth is progress, a
+    destination that does not grow for ``window_s`` is a stall, and a cancelled
+    request stops the transfer. Either way only the adb client is killed;
+    device-side work it started may continue, so the caller keeps the recovery
+    paths.
+    """
+    proc = process.start_tool(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    largest = -1
+    last_growth = time.monotonic()
+    try:
+        while True:
+            try:
+                out, err = proc.communicate(timeout=1.0)
+                return subprocess.CompletedProcess(command, proc.returncode, out, err)
+            except subprocess.TimeoutExpired:
+                pass
+            if progress.cancel_requested():
+                raise TransferInterrupted("cancelled", "transfer cancelled by the request owner")
+            observed = observe_size()
+            if observed > largest:
+                largest, last_growth = observed, time.monotonic()
+                on_growth(observed)
+            elif time.monotonic() - last_growth > window_s:
+                raise TransferInterrupted("stalled", f"transfer made no progress for {window_s:.0f} s")
+    except BaseException:
+        if proc.poll() is None:
+            proc.kill()
+        proc.communicate()
+        raise
 
 
 class SessionError(Exception):
@@ -492,6 +538,7 @@ class SessionManager:
             return base_cmd + ["shell", "run-as", package_name, *args]
 
         def run(command: list[str]) -> Any:
+            # A per-step limit for short adb queries; transfers below use a no-progress budget.
             return process.run_tool(command, check=False, capture_output=True, text=True, timeout=30)
 
         private_root = run(app_command("pwd"))
@@ -503,6 +550,23 @@ class SessionManager:
         with Path(rdc_path).open("rb") as source:
             digest = hashlib.file_digest(source, "sha256").hexdigest()
         remote_path = f"{remote_dir}/{digest}.rdc"
+        total_bytes = max(1, Path(rdc_path).stat().st_size)
+        window_s = timeout_policy.cooperative_no_progress_s(progress.current_no_progress_ms())
+
+        def size_of(command: list[str]) -> int:
+            try:
+                observed = run(command)
+            except Exception:
+                return -1
+            text = str(observed.stdout or "").strip()
+            return int(text) if not observed.returncode and text.isdigit() else -1
+
+        def growth(phase: float) -> Any:
+            # Push fills the first half of the transfer, the device writer the second.
+            def report(observed: int) -> None:
+                if state.transfer_progress:
+                    state.transfer_progress("capture_transfer_progress", phase + 0.5 * min(1.0, observed / total_bytes))
+            return report
 
         def checked_digest(result: Any, path: str) -> str:
             match = re.fullmatch(r"([0-9a-fA-F]{64})\s+(.+)", str(result.stdout or "").strip())
@@ -530,30 +594,42 @@ class SessionManager:
         nonce = uuid.uuid4().hex
         shell_dir = f"/data/local/tmp/rdc-tool-transfer-{nonce}"
         shell_source = f"{shell_dir}/source.rdc"
+
+        def keep_shell_dir() -> None:
+            # Unconfirmed device-side state is kept for recovery; the owning context
+            # releases the shell directory during clear_context.
+            if shell_dir not in state.retained_transfer_dirs:
+                state.retained_transfer_dirs.append(shell_dir)
+
+        def retain(message: str, error: BaseException | str) -> RuntimeError:
+            keep_shell_dir()
+            return RuntimeError(f"{message}: {error}")
+
         script = (f"umask 077; mkdir -m 700 {shlex.quote(shell_dir)} "
                   f"&& printf '{nonce}:SHELL_CREATED\\n'")
         try:
             shell_created = run(base_cmd + ["shell", script])
         except BaseException as error:
-            raise RuntimeError(f"Android capture sync directory creation unconfirmed; retain {shell_dir}: {error}") from error
+            raise retain(f"Android capture sync directory creation unconfirmed; retain {shell_dir}", error) from error
         if shell_created.returncode or str(shell_created.stdout or "").strip() != f"{nonce}:SHELL_CREATED":
-            raise RuntimeError(f"Android capture sync directory creation unconfirmed; retain {shell_dir}: "
-                               f"{shell_created.stderr.strip()}")
+            raise retain(f"Android capture sync directory creation unconfirmed; retain {shell_dir}",
+                         shell_created.stderr.strip())
         # ADB sync transfers file bytes without sending them through shell stdin,
         # whose Windows transport can normalize CRLF even without a PTY.
         try:
-            pushed = process.run_tool(base_cmd + ["push", str(rdc_path), shell_source], check=False,
-                                      capture_output=True, text=True, timeout=240)
+            pushed = _run_transfer(base_cmd + ["push", str(rdc_path), shell_source],
+                                   lambda: size_of(base_cmd + ["shell", "stat", "-c", "%s", shell_source]),
+                                   growth(0.0), window_s)
         except BaseException as error:
-            raise RuntimeError(f"Android capture sync outcome unconfirmed; retain {shell_dir}: {error}") from error
+            raise retain(f"Android capture sync outcome unconfirmed; retain {shell_dir}", error) from error
         if pushed.returncode:
-            raise RuntimeError(f"Android capture sync outcome unconfirmed; retain {shell_dir}: {pushed.stderr.strip()}")
+            raise retain(f"Android capture sync outcome unconfirmed; retain {shell_dir}", pushed.stderr.strip())
         try:
             if checked_digest(run(base_cmd + ["shell", "sha256sum", shell_source]), shell_source) != digest:
                 raise RuntimeError("Android capture sync SHA256 verification failed")
         except BaseException as error:
             # A missing/unreadable digest is not a device-side write exit receipt.
-            raise RuntimeError(f"Android capture sync verification unconfirmed; retain {shell_dir}: {error}") from error
+            raise retain(f"Android capture sync verification unconfirmed; retain {shell_dir}", error) from error
         # noclobber makes this exact cache path exclusive. Native replay must not
         # open or own it until this nonce's writer and its bytes are verified.
         script = (f"set -C; exec 3> {shlex.quote(remote_path)} || exit; "
@@ -564,18 +640,19 @@ class SessionManager:
         command = base_cmd + ["shell", f"cat {shlex.quote(shell_source)} | "
                               f"run-as {package_name} sh -c {shlex.quote(script)}"]
         try:
-            transferred = process.run_tool(command, check=False, capture_output=True, text=True, timeout=60)
+            transferred = _run_transfer(command, lambda: size_of(app_command("stat", "-c", "%s", remote_path)),
+                                        growth(0.5), window_s)
         except BaseException as error:
             # Killing/joining an ADB client is not a device-writer exit receipt.
             # Retain the exact recovery asset rather than unlinking a live file.
-            raise RuntimeError(f"Android capture transfer outcome unconfirmed; device writer completion is unknown; "
-                               f"retain {shell_dir} and {remote_path}: {error}") from error
+            raise retain(f"Android capture transfer outcome unconfirmed; device writer completion is unknown; "
+                         f"retain {shell_dir} and {remote_path}", error) from error
         lines = str(transferred.stdout or "").splitlines()
         terminal = re.fullmatch(rf"{nonce}:DONE:(\d+)", lines[-1]) if lines else None
         if not (len(lines) == 2 and lines[0] == f"{nonce}:CREATED" and terminal):
-            raise RuntimeError(f"Android capture transfer outcome unconfirmed; device writer completion is unknown; "
-                               f"retain {shell_dir} and {remote_path}: "
-                               f"{transferred.stderr.strip() or 'missing matching device writer receipt'}")
+            raise retain(f"Android capture transfer outcome unconfirmed; device writer completion is unknown; "
+                         f"retain {shell_dir} and {remote_path}",
+                         transferred.stderr.strip() or "missing matching device writer receipt")
         owned_paths = [remote_path]
 
         def remove_owned(path: str) -> None:
@@ -599,6 +676,7 @@ class SessionManager:
                 if removed.returncode or str(removed.stdout or "").strip() != f"{nonce}:SHELL_REMOVED":
                     raise RuntimeError(f"ADB sync cleanup unconfirmed for {shell_dir}: {removed.stderr.strip()}")
             except Exception as error:
+                keep_shell_dir()
                 errors.append(str(error))
             return errors
 
