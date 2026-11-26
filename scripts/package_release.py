@@ -27,6 +27,9 @@ from scripts._shared import task_directory, write_text
 
 PACKAGE_PREFIX = "rdc-tool"
 ENTRYPOINTS = ["bin/rdc-tool.cmd", "bin/rdc-tool", "cli/run_cli.py", "install.cmd"]
+# The SBOM document identifier names the document kind, not a format revision;
+# the package version travels in the SBOM's own "version" field.
+SBOM_SCHEMA = "rdc-tool.sbom"
 EXCLUDE_DIRS = {
     ".git",
     ".mypy_cache",
@@ -183,7 +186,7 @@ def _write_release_metadata(staging_root: Path, files: list[dict[str, object]], 
     for name, tool in runtime_manifest.get("bundled_tools", {}).items():
         licenses.append({"name": name, **tool})
     sbom = {
-        "schema": "rdc-tool.sbom",
+        "schema": SBOM_SCHEMA,
         "name": PACKAGE_PREFIX,
         "version": TOOL_VERSION,
         "platform": platform_host.host_target(),

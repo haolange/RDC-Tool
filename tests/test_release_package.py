@@ -82,6 +82,7 @@ def test_package_release_builds_self_contained_zip(tmp_path: Path, monkeypatch) 
         sbom = json.loads(zf.read("rdc-tool/SBOM.json").decode("utf-8"))
     project_license = next(row for row in license_inventory if row["name"] == "rdc-tool")
     project_component = next(row for row in sbom["components"] if row["name"] == "rdc-tool")
+    assert sbom["schema"] == "rdc-tool.sbom"
     assert project_license["license"] == "Apache-2.0"
     assert project_license["path"] == "LICENSE"
     assert project_component["license"] == "Apache-2.0"
@@ -166,9 +167,16 @@ def test_verify_release_package_rejects_manifest_with_rdc_fixture(tmp_path: Path
 def test_verify_release_package_checks_license_inventory_and_sbom(tmp_path: Path) -> None:
     root = tmp_path / "rdc-tool"
     _write(root / "LICENSE_INVENTORY.json", json.dumps([{"name": "rdc-tool", "version": "1.0.0", "license": "Apache-2.0", "path": "LICENSE"}]))
-    _write(root / "SBOM.json", json.dumps({"components": [{"name": "rdc-tool", "version": "1.0.0", "license": "Apache-2.0", "path": "LICENSE"}]}))
+    components = [{"name": "rdc-tool", "version": "1.0.0", "license": "Apache-2.0", "path": "LICENSE"}]
+    _write(root / "SBOM.json", json.dumps({"schema": "rdc-tool.sbom", "components": components}))
 
     verify_release_package._verify_license_inventory(root)
+
+    # The SBOM identifier names the document kind; a versioned identifier is rejected.
+    _write(root / "SBOM.json", json.dumps({"schema": "rdc-tool.sbom.v1", "components": components}))
+    with pytest.raises(RuntimeError, match="SBOM schema"):
+        verify_release_package._verify_license_inventory(root)
+    _write(root / "SBOM.json", json.dumps({"schema": "rdc-tool.sbom", "components": components}))
 
     _write(root / "LICENSE_INVENTORY.json", json.dumps([{"name": "rdc-tool", "version": "1.0.0", "license": "MIT", "path": "LICENSE"}]))
     with pytest.raises(RuntimeError, match="license inventory mismatch"):

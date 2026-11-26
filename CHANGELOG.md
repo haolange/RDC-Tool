@@ -13,6 +13,7 @@
 - `rd.debug.run_to` 步进预算耗尽时与 `continue` 一致地成功返回 `stopped_reason: "timeout"`、当前状态、`target_pc` 与 `target_reached: false`，两者都如实报告 `effects_attempted` 与 `context_preserved`。删除 `rd.shader.debug_start` 未读取的 `timeout_ms`，以及 PixelHistory 的 20 秒假超时（`asyncio.wait_for` 包装、`PIXEL_HISTORY_TIMEOUT_S` 与相关分支）。
 - Android capture 传输：push 与设备端写入改为由 `platform` 启动的 adb 客户端，按目标文件大小增长判断进度并报告 `capture_transfer_progress`；停滞或取消时结束 adb 客户端并保留恢复路径。未确认释放的设备端临时目录登记到 context，由 `context clear` 清理。
 - 持久化的 context 状态不再写入 `schema_version` 标记；旧文件在下次保存时去掉该字段。
+- 发行包 SBOM 的文档标识由 `rdc-tool.sbom.v1` 改为不带版本号的 `rdc-tool.sbom`（包版本仍在其 `version` 字段），发行包校验要求该标识。
 - `version --json` 新增 `data.catalog`（`schema_version`、`fingerprint`、`tool_count`），与 `tools list --json` 报告的同一份 catalog 一致；RDC-Agent 据此把（版本，指纹）与其打包的 catalog 快照成对校验。发布包校验要求该字段存在。
 - 修复 Linux 本地回放在打开 capture 时段错误：POSIX 加载原语此前先用 ctypes 预加载 `librenderdoc.so`，RenderDoc 的库构造函数此时还看不到 Python 绑定导出的 `renderdoc__replay__marker`，便按"被注入的捕获目标"安装钩子，随后在 `WrappedVulkan::Serialise_vkCreateSwapchainKHR` 崩溃。Linux 主机布局把原生库移到 `lib/librenderdoc.so`（Vulkan layer 清单同在 `lib/`），由绑定自带的 RUNPATH `$ORIGIN/../lib/` 作为依赖加载，POSIX 不再预加载任何库。此前记为"lavapipe 上原生回放崩溃"的阻塞即此缺陷，与驱动无关。
 - 统一请求拒绝的无副作用证明：事件缺失等前置拒绝仅在未尝试原生效果且入口回放及关联状态逐项不变时返回 `validation` 与保全字段；无法证明时返回 `runtime`。事件不存在的分类由 `not_found` 改为 `validation` 或 `runtime`；仅有未尝试 shader replacement 不再证明整个回放未变。
