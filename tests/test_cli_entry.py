@@ -13,7 +13,7 @@ LAUNCHER = ROOT / "cli" / "run_cli.py"
 
 def _run(*args, code=None):
     command = [sys.executable, "-c", code, *args] if code else [sys.executable, str(LAUNCHER), *args]
-    return subprocess.run(command, capture_output=True, text=True, timeout=60, cwd=ROOT)
+    return subprocess.run(command, capture_output=True, encoding="utf-8", timeout=60, cwd=ROOT)
 
 
 def test_launcher_and_package_entry_share_one_version_payload():
@@ -56,7 +56,7 @@ def test_completion_covers_every_subcommand_and_long_option():
 def test_doctor_reports_missing_dependencies_without_crashing():
     # -S skips site-packages, so every third-party dependency is genuinely absent.
     code = f"import sys; sys.path.insert(0, {str(ROOT)!r}); sys.argv = ['rdc-tool', '--json', 'doctor']; from rdc_tool.cli import main; main()"
-    result = subprocess.run([sys.executable, "-S", "-c", code], capture_output=True, text=True, timeout=60, cwd=ROOT)
+    result = subprocess.run([sys.executable, "-S", "-c", code], capture_output=True, encoding="utf-8", timeout=60, cwd=ROOT)
     payload = json.loads(result.stdout)
     assert payload["result_kind"] == "rdc_tool.doctor"
     assert payload["ok"] is False
