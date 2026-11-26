@@ -1027,9 +1027,7 @@ def test_remote_capture_keeps_runtime_connection_ownership(monkeypatch):
     manager = SessionManager()
     remote = _FreshRemoteServer()
     state = SessionState(session_id='owned', backend_type=BackendType.REMOTE, remote_server=remote, remote_server_owned=False)
-    async def offload(fn, *args): return fn(*args)
     async def output(*args): pass
-    monkeypatch.setattr(manager, '_offload', offload)
     monkeypatch.setattr(manager, '_create_headless_output', output)
     monkeypatch.setattr(manager, '_open_remote_capture_sync', lambda *args: (remote, '/remote/capture.rdc', object()))
     asyncio.run(manager._open_remote_capture(state, 'capture.rdc'))
@@ -1196,8 +1194,6 @@ def test_failed_native_session_cleanup_retains_owner_and_is_not_retried(monkeypa
     state = SessionState(session_id='owned', backend_type=BackendType.REMOTE, controller=controller,
                          remote_server=remote, remote_server_owned=False)
     manager._sessions['owned'] = state
-    async def offload(fn, *args): return fn(*args)
-    monkeypatch.setattr(manager, '_offload', offload)
     try:
         with pytest.raises(RuntimeError, match='outcome unknown'):
             asyncio.run(manager.close_session('owned'))

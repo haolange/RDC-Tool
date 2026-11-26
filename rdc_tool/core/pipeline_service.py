@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Any, Dict, List, Optional, Protocol, Tuple, runtime_checkable
 
+from rdc_tool import native_calls
 from rdc_tool.core.native_values import native_value
 
 from rdc_tool.models import (
@@ -261,7 +261,7 @@ async def _extract_render_targets(
     colour_targets: List[RenderTargetInfo] = []
     depth_target: Optional[RenderTargetInfo] = None
 
-    textures = await asyncio.to_thread(controller.GetTextures)
+    textures = await native_calls.offload(controller.GetTextures)
     tex_by_id: Dict[Any, Any] = {tex.resourceId: tex for tex in textures}
 
     # ---- colour outputs ----
@@ -531,18 +531,18 @@ class PipelineService:
         selected = set(sections) if sections is not None else set(PIPELINE_SECTIONS)
         controller = session_manager.get_controller(session_id)
 
-        await asyncio.to_thread(controller.SetFrameEvent, event_id, True)
+        await native_calls.offload(controller.SetFrameEvent, event_id, True)
 
-        pipe = await asyncio.to_thread(controller.GetPipelineState)
-        api_props = await asyncio.to_thread(controller.GetAPIProperties)
+        pipe = await native_calls.offload(controller.GetPipelineState)
+        api_props = await native_calls.offload(controller.GetAPIProperties)
         api = _map_graphics_api(api_props.pipelineType)
 
         # API-specific state for blend / depth / viewport / topology.
         api_state = None
         if selected - {"shaders", "output_targets", "bindings", "vertex_input"}:
-            api_state = await asyncio.to_thread(_get_api_specific_state, controller, api_props.pipelineType)
+            api_state = await native_calls.offload(_get_api_specific_state, controller, api_props.pipelineType)
 
-        resources = await asyncio.to_thread(controller.GetResources) if "shaders" in selected else []
+        resources = await native_calls.offload(controller.GetResources) if "shaders" in selected else []
         shader_resources = {str(r.resourceId): r for r in resources}
         shaders: List[ShaderInfo] = []
         for rd_stage in (_rd_shader_stages() if "shaders" in selected else []):
@@ -650,9 +650,9 @@ class PipelineService:
         """Internal helper."""
         controller = session_manager.get_controller(session_id)
 
-        await asyncio.to_thread(controller.SetFrameEvent, event_id, True)
+        await native_calls.offload(controller.SetFrameEvent, event_id, True)
 
-        pipe = await asyncio.to_thread(controller.GetPipelineState)
+        pipe = await native_calls.offload(controller.GetPipelineState)
 
         entries: List[ResourceBindingEntry] = []
         for rd_stage in ([_our_stage_to_rd(stage)] if stage is not None else _rd_shader_stages()):

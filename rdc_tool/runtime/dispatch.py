@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from typing import Any, Dict, Optional
 
-from rdc_tool import runtime_process_identity
+from rdc_tool import progress, runtime_process_identity
 from rdc_tool.context_snapshot import normalize_context_id
 from rdc_tool.core.artifact_publisher import ArtifactPublisher
 from rdc_tool.core.contracts import canonical_error, canonical_success, collect_artifact_candidates
@@ -49,17 +49,20 @@ async def dispatch_operation(
     remote: bool = False,
     context_id: Optional[str] = None,
     progress_sink: Optional[ProgressSink] = None,
+    trace_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     await runtime_lifecycle.runtime_startup()
     call_args = dict(args or {})
     chosen_context_id = normalize_context_id(context_id or call_args.get("context_id") or live_state._runtime_context_id())
     ctx = live_state.ExecutionContext(transport=transport, remote=remote, metadata={"context_id": chosen_context_id})
+    if trace_id:
+        ctx.trace_id = str(trace_id)
     ctx.progress_reporter = ProgressReporter(trace_id=ctx.trace_id, operation=operation, sink=progress_sink)
     arg_keys = ",".join(sorted(call_args.keys())) if call_args else "-"
     live_state.logger.info("op.start transport=%s remote=%s op=%s trace_id=%s arg_keys=%s",
                            transport, remote, operation, ctx.trace_id, arg_keys)
     context_token = live_state._CURRENT_CONTEXT_ID.set(chosen_context_id)
-    progress_token = live_state._CURRENT_PROGRESS_REPORTER.set(ctx.progress_reporter)
+    progress_token = progress._CURRENT_PROGRESS_REPORTER.set(ctx.progress_reporter)
     parent_rejection_scope = live_state._CURRENT_EVENT_REJECTION_SCOPE.get()
     rejection_scope = replay_access._event_rejection_snapshot(str(call_args.get("session_id") or ""))
     rejection_token = live_state._CURRENT_EVENT_REJECTION_SCOPE.set(rejection_scope)
@@ -96,7 +99,7 @@ async def dispatch_operation(
         if parent_rejection_scope is not None and rejection_scope.get("effects_attempted"):
             parent_rejection_scope["effects_attempted"] = True
         live_state._CURRENT_EVENT_REJECTION_SCOPE.reset(rejection_token)
-        live_state._CURRENT_PROGRESS_REPORTER.reset(progress_token)
+        progress._CURRENT_PROGRESS_REPORTER.reset(progress_token)
         live_state._CURRENT_CONTEXT_ID.reset(context_token)
 
 

@@ -1,7 +1,6 @@
 ﻿from __future__ import annotations
 
 import asyncio
-import functools
 import hashlib
 import logging
 import re
@@ -12,6 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from rdc_tool import native_calls
 from rdc_tool.platform import process
 from rdc_tool.platform import host as platform_host
 from rdc_tool.core.errors import CoreError
@@ -174,11 +174,6 @@ class SessionManager:
         cls._instance = None
         cls._initialized = False
 
-    @staticmethod
-    async def _offload(fn: Any, *args: Any, **kwargs: Any) -> Any:
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, functools.partial(fn, *args, **kwargs))
-
     async def create_session(
         self,
         backend_config: Dict[str, Any],
@@ -230,7 +225,7 @@ class SessionManager:
                 raise SessionError(code="controller_missing", message=f"Session {session_id} has no replay controller")
 
             try:
-                props = await self._offload(controller.GetAPIProperties)
+                props = await native_calls.offload(controller.GetAPIProperties)
             except Exception:
                 props = None
             state.capabilities.api = _map_graphics_api(props)
@@ -240,7 +235,7 @@ class SessionManager:
             state.capabilities.counters_supported = True
 
             try:
-                roots = await self._offload(controller.GetRootActions)
+                roots = await native_calls.offload(controller.GetRootActions)
             except Exception:
                 roots = []
 
@@ -311,7 +306,7 @@ class SessionManager:
         if not hasattr(state.remote_server, "PresentReplay"):
             raise SessionError(code="remote_presentation_unsupported", message="Installed native binding lacks presentation acknowledgement; install the matching runtime and helper")
         resource = texture_id if texture_id is not None else _get_rd().ResourceId.Null()
-        status, sequence = await self._offload(state.remote_server.PresentReplay, event_id, resource)
+        status, sequence = await native_calls.offload(state.remote_server.PresentReplay, event_id, resource)
         _check_status(status, "remote.PresentReplay", backend_type="remote",
                       capture_context={"session_id": session_id, "event_id": event_id},
                       source_layer="native_presentation")
@@ -324,7 +319,7 @@ class SessionManager:
         if self._replay_initialized:
             return
         rd = _get_rd()
-        await self._offload(rd.InitialiseReplay, rd.GlobalEnvironment(), [])
+        await native_calls.offload(rd.InitialiseReplay, rd.GlobalEnvironment(), [])
         self._replay_initialized = True
         logger.debug("RenderDoc replay subsystem initialised")
 
@@ -352,7 +347,7 @@ class SessionManager:
             logger.debug("Reusing remote RenderDoc server connection at %s", url)
             return
 
-        status, remote = await self._offload(rd.CreateRemoteServerConnection, url)
+        status, remote = await native_calls.offload(rd.CreateRemoteServerConnection, url)
         _check_status(
             status,
             f"CreateRemoteServerConnection({url})",
@@ -368,8 +363,8 @@ class SessionManager:
 
     async def _open_local_capture(self, state: SessionState, rdc_path: str) -> None:
         rd = _get_rd()
-        cap = await self._offload(rd.OpenCaptureFile)
-        status = await self._offload(cap.OpenFile, rdc_path, "", None)
+        cap = await native_calls.offload(rd.OpenCaptureFile)
+        status = await native_calls.offload(cap.OpenFile, rdc_path, "", None)
         _check_status(
             status,
             f"OpenFile({rdc_path})",
@@ -379,8 +374,8 @@ class SessionManager:
             fix_hint="Verify that the .rdc file is valid and supported by this RenderDoc runtime.",
         )
         state.capture_file = cap
-        if await self._offload(cap.LocalReplaySupport) == rd.ReplaySupport.Unsupported:
-            capture_api = str(await self._offload(cap.DriverName))
+        if await native_calls.offload(cap.LocalReplaySupport) == rd.ReplaySupport.Unsupported:
+            capture_api = str(await native_calls.offload(cap.DriverName))
             raise CoreError(
                 code="local_replay_unsupported",
                 message=f"This host's RenderDoc runtime cannot replay {capture_api} captures locally",
@@ -394,7 +389,7 @@ class SessionManager:
                 },
             )
 
-        status, controller = await self._offload(cap.OpenCapture, rd.ReplayOptions(), None)
+        status, controller = await native_calls.offload(cap.OpenCapture, rd.ReplayOptions(), None)
         _check_status(
             status,
             "OpenCapture",
@@ -410,7 +405,7 @@ class SessionManager:
         if state.remote_server is None:
             raise SessionError(code="no_remote_server", message="Remote session has no active server connection")
         try:
-            remote_server, remote_rdc_path, controller = await self._offload(self._open_remote_capture_sync, state, rdc_path)
+            remote_server, remote_rdc_path, controller = await native_calls.offload(self._open_remote_capture_sync, state, rdc_path)
         finally:
             state.transfer_progress = None
         state.remote_server = remote_server
@@ -628,31 +623,31 @@ class SessionManager:
         rd = _get_rd()
         width = int(state.replay_config.get("width", 1920) or 1920)
         height = int(state.replay_config.get("height", 1080) or 1080)
-        windowing_data = await self._offload(rd.CreateHeadlessWindowingData, width, height)
-        state.output = await self._offload(controller.CreateOutput, windowing_data, rd.ReplayOutputType.Texture)
+        windowing_data = await native_calls.offload(rd.CreateHeadlessWindowingData, width, height)
+        state.output = await native_calls.offload(controller.CreateOutput, windowing_data, rd.ReplayOutputType.Texture)
         logger.debug("Created headless output (%dx%d) for session %s", width, height, state.session_id)
 
     async def _cleanup(self, state: SessionState) -> None:
         if state.output is not None:
-            await self._offload(state.output.Shutdown)
+            await native_calls.offload(state.output.Shutdown)
             state.output = None
 
         if state.controller is not None:
             if state.backend_type == BackendType.REMOTE and state.remote_server is not None:
-                await self._offload(state.remote_server.CloseCapture, state.controller)
+                await native_calls.offload(state.remote_server.CloseCapture, state.controller)
             else:
-                await self._offload(state.controller.Shutdown)
+                await native_calls.offload(state.controller.Shutdown)
             state.controller = None
 
         if state.capture_file is not None:
             if hasattr(state.capture_file, "CloseFile"):
-                await self._offload(state.capture_file.CloseFile)
+                await native_calls.offload(state.capture_file.CloseFile)
             elif hasattr(state.capture_file, "Shutdown"):
-                await self._offload(state.capture_file.Shutdown)
+                await native_calls.offload(state.capture_file.Shutdown)
             state.capture_file = None
 
         if state.remote_server is not None and state.remote_server_owned:
-            await self._offload(state.remote_server.ShutdownConnection)
+            await native_calls.offload(state.remote_server.ShutdownConnection)
         state.remote_server = None
         state.remote_server_owned = True
 
@@ -660,7 +655,7 @@ class SessionManager:
             remaining_local = any(s is not state and s.backend_type == BackendType.LOCAL for s in self._sessions.values())
             if not remaining_local and self._replay_initialized:
                 rd = _get_rd()
-                await self._offload(rd.ShutdownReplay)
+                await native_calls.offload(rd.ShutdownReplay)
                 self._replay_initialized = False
                 logger.debug("RenderDoc replay subsystem shut down")
 

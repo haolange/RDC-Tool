@@ -28,10 +28,10 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
+from rdc_tool import native_calls
 from rdc_tool.platform import process
 from rdc_tool.platform import dxc
 from rdc_tool.host_tools import HostToolUnavailableError, resolve_host_tool
-from rdc_tool.core.session_manager import SessionManager
 from rdc_tool.runtime_paths import cli_runtime_dir
 from rdc_tool.models import (
     PatchOp,
@@ -255,7 +255,7 @@ class PatchEngine:
 
         返回 :class:`PatchResult` 表示成功或失败。
         """
-        return await SessionManager._offload(
+        return await native_calls.offload(
             self._apply_patch_sync, session_id, event_id, stage, session_manager, patch_spec,
         )
 
@@ -1395,7 +1395,7 @@ class PatchEngine:
 
         成功返回 ``True``；若 patch 不存在或回滚失败则返回 ``False``。
         """
-        return await SessionManager._offload(self._revert_patch_sync, session_id, patch_id, session_manager)
+        return await native_calls.offload(self._revert_patch_sync, session_id, patch_id, session_manager)
 
     def _revert_patch_sync(self, session_id: str, patch_id: str, session_manager: Any) -> bool:
         record = self._patches.get(patch_id)

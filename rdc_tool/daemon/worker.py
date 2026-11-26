@@ -16,7 +16,7 @@ from rdc_tool.daemon.state import load_json_with_status
 from rdc_tool.io_utils import safe_json_text
 from rdc_tool.platform import process
 from rdc_tool.platform.process import ProcessIdentity, SpawnProfile
-from rdc_tool.progress import ProgressEvent, ProgressSink
+from rdc_tool.progress import FrameSink, NativeCallFrame, ProgressEvent
 from rdc_tool.runtime_paths import binaries_root, child_python_argv, child_python_env, pymodules_dir, tools_root
 from rdc_tool.runtime_worker_state import clear_worker_state, save_worker_state, worker_state_path
 from rdc_tool.runtime_identity import native_manifest_status
@@ -40,6 +40,18 @@ def _decode_progress_event(payload: Any, operation: str) -> ProgressEvent:
     if not isinstance(payload["details"], dict) or type(payload["ts_ms"]) is not int or payload["ts_ms"] <= 0:
         raise RuntimeError("Invalid worker progress event details")
     return ProgressEvent(**payload)
+
+
+def _decode_native_call_frame(payload: Dict[str, Any]) -> NativeCallFrame:
+    if set(payload) != {"id", "kind", "trace_id", "name", "phase", "ts_ms"}:
+        raise RuntimeError("Invalid worker native-call frame fields")
+    if not isinstance(payload["trace_id"], str) or not payload["trace_id"].strip():
+        raise RuntimeError("Invalid worker native-call frame trace")
+    if not isinstance(payload["name"], str) or not payload["name"].strip() or payload["phase"] not in {"enter", "exit"}:
+        raise RuntimeError("Invalid worker native-call frame call")
+    if type(payload["ts_ms"]) is not int or payload["ts_ms"] <= 0:
+        raise RuntimeError("Invalid worker native-call frame time")
+    return NativeCallFrame(payload["trace_id"], payload["name"], payload["phase"], payload["ts_ms"])
 
 
 class RuntimeWorkerProcess:
@@ -178,7 +190,7 @@ class RuntimeWorkerProcess:
         self.stop()
         self._spawn()
 
-    def request(self, method: str, params: Optional[Dict[str, Any]] = None, *, timeout: float = REQUEST_TIMEOUT_S, progress_sink: ProgressSink | None = None) -> Dict[str, Any]:
+    def request(self, method: str, params: Optional[Dict[str, Any]] = None, *, timeout: float = REQUEST_TIMEOUT_S, frame_sink: FrameSink | None = None) -> Dict[str, Any]:
         with self._io_lock:
             if not self.is_running():
                 raise RuntimeError("worker process is unavailable; use the owning daemon lifecycle")
@@ -204,18 +216,22 @@ class RuntimeWorkerProcess:
                     raise RuntimeError("worker exited before responding")
                 if str(payload.get("id") or "") != req_id:
                     continue
-                if payload.get("kind") == "progress":
+                if payload.get("kind") in {"progress", "native_call"}:
                     if method != "exec":
-                        raise RuntimeError("Unexpected worker progress for lifecycle request")
-                    event = _decode_progress_event(payload.get("event"), str((params or {}).get("operation") or ""))
-                    if trace_id and event.trace_id != trace_id:
-                        raise RuntimeError("Worker progress trace changed within a request")
-                    trace_id = event.trace_id
-                    if progress_sink is not None:
+                        raise RuntimeError("Unexpected worker frame for lifecycle request")
+                    frame = (_decode_progress_event(payload.get("event"), str((params or {}).get("operation") or ""))
+                             if payload["kind"] == "progress" else _decode_native_call_frame(payload))
+                    if trace_id and frame.trace_id != trace_id:
+                        raise RuntimeError("Worker frame trace changed within a request")
+                    trace_id = frame.trace_id
+                    if frame_sink is not None:
                         try:
-                            progress_sink.publish(event)
+                            if isinstance(frame, ProgressEvent):
+                                frame_sink.publish(frame)
+                            else:
+                                frame_sink.native_call(frame)
                         except Exception:
-                            logging.getLogger(__name__).warning("Daemon progress delivery failed", exc_info=True)
+                            logging.getLogger(__name__).warning("Daemon frame delivery failed", exc_info=True)
                     continue
                 if payload.get("kind") is not None:
                     raise RuntimeError("Unexpected worker response type")

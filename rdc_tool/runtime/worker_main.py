@@ -8,15 +8,18 @@ import json
 import logging
 import os
 import sys
+import threading
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
-from typing import Any, Dict
+from typing import Any, Awaitable, Dict
 
 from rdc_tool.context_snapshot import normalize_context_id
 from rdc_tool.io_utils import safe_json_text, safe_stream_write
 from rdc_tool.platform import process
 from rdc_tool.platform.process import ProcessIdentity
-from rdc_tool.progress import ProgressEvent, ProgressSink
+from rdc_tool import progress
+from rdc_tool.progress import NativeCallFrame, ProgressEvent, RequestScope
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -26,20 +29,44 @@ if hasattr(sys.stdin, "reconfigure"):
     sys.stdin.reconfigure(encoding="utf-8")
 
 
+# The event loop thread and the replay thread (native transfer callbacks) both
+# write frames; one line must never interleave with another.
+_EMIT_LOCK = threading.Lock()
+
+
 def _emit(payload: Dict[str, Any]) -> None:
-    safe_stream_write(safe_json_text(payload) + "\n", sys.stdout)
+    text = safe_json_text(payload) + "\n"
+    with _EMIT_LOCK:
+        safe_stream_write(text, sys.stdout)
 
 
-class _WorkerProgressSink(ProgressSink):
+class _WorkerFrameSink:
+    """Carries one request's progress and native-call frames to the daemon."""
+
     def __init__(self, request_id: str) -> None:
         self.request_id = request_id
 
-    def publish(self, event: ProgressEvent) -> None:
+    def _send(self, payload: Dict[str, Any]) -> None:
         try:
-            _emit({"id": self.request_id, "kind": "progress", "event": asdict(event)})
+            _emit({"id": self.request_id, **payload})
         except Exception:
-            # Progress delivery cannot change the native operation outcome.
-            logging.getLogger(__name__).warning("Worker progress delivery failed", exc_info=True)
+            # Frame delivery cannot change the native operation outcome.
+            logging.getLogger(__name__).warning("Worker frame delivery failed", exc_info=True)
+
+    def publish(self, event: ProgressEvent) -> None:
+        self._send({"kind": "progress", "event": asdict(event)})
+
+    def native_call(self, frame: NativeCallFrame) -> None:
+        self._send({"kind": "native_call", "trace_id": frame.trace_id, "name": frame.name,
+                    "phase": frame.phase, "ts_ms": frame.ts_ms})
+
+
+async def _in_request(scope: RequestScope, work: Awaitable[Any]) -> Any:
+    token = progress._CURRENT_REQUEST.set(scope)
+    try:
+        return await work
+    finally:
+        progress._CURRENT_REQUEST.reset(token)
 
 
 def _context_id() -> str:
@@ -113,16 +140,20 @@ def main(argv: list[str] | None = None) -> int:
                         cleanup = operation in {"rd.core.shutdown", "rd.capture.close_replay", "rd.remote.disconnect"}
                         if not cleanup and loaded_runtime()["status"] == "mismatch":
                             raise RuntimeError("Loaded RenderDoc paths differ from the configured runtime")
-                        result = runner.run(
+                        sink = _WorkerFrameSink(req_id)
+                        scope = RequestScope(request_id=req_id, sink=sink,
+                                             trace_id=str(params.get("trace_id") or f"trc_{uuid.uuid4().hex[:12]}"))
+                        result = runner.run(_in_request(scope,
                             dispatch.dispatch_operation(
                                 operation,
                                 dict(params.get("args") or {}),
                                 transport=str(params.get("transport") or "daemon"),
                                 remote=bool(params.get("remote", False)),
                                 context_id=context_id,
-                                progress_sink=_WorkerProgressSink(req_id),
+                                progress_sink=sink,
+                                trace_id=scope.trace_id,
                             )
-                        )
+                        ))
                         observed = loaded_runtime()
                         if not cleanup and observed["status"] == "mismatch":
                             raise RuntimeError("Loaded RenderDoc paths differ from the configured runtime")

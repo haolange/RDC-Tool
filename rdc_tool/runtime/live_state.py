@@ -27,10 +27,6 @@ logger = logging.getLogger("rdc_tool.runtime")
 _CURRENT_REPLAY_HEALTH_SCOPE: contextvars.ContextVar[Dict[str, Any] | None] = contextvars.ContextVar("rdc_tool_replay_health_scope", default=None)
 _CURRENT_EVENT_REJECTION_SCOPE: contextvars.ContextVar[Dict[str, Any] | None] = contextvars.ContextVar("rdc_tool_event_rejection_scope", default=None)
 _CURRENT_CONTEXT_ID: contextvars.ContextVar[str | None] = contextvars.ContextVar('rdc_tool_current_context_id', default=None)
-_CURRENT_PROGRESS_REPORTER: contextvars.ContextVar[ProgressReporter | None] = contextvars.ContextVar(
-    "rdc_tool_current_progress_reporter",
-    default=None,
-)
 
 
 def _runtime_context_id() -> str:
@@ -182,6 +178,3 @@ _runtime_bootstrapped: bool = False
 _PREVIEW_SCREEN_CAP_RATIO = 0.5
 _PREVIEW_FIT_MODE = "fit_with_screen_cap"
 _PREVIEW_REGION_MARKER_MODE = "viewport_scissor_overlay"
-
-def _current_progress_reporter() -> ProgressReporter | None:
-    return _CURRENT_PROGRESS_REPORTER.get()

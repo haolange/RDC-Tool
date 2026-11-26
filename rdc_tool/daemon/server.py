@@ -21,7 +21,7 @@ from rdc_tool.daemon.ownership import OwnerLease
 from rdc_tool.daemon.worker import RuntimeWorkerProcess
 from rdc_tool.platform import ipc, process
 from rdc_tool.platform.ipc import Endpoint
-from rdc_tool.progress import ProgressEvent, ProgressSink
+from rdc_tool.progress import NativeCallFrame, ProgressEvent
 from rdc_tool.runtime_state import load_context_state, save_context_state
 from rdc_tool.runtime_worker_state import load_worker_state
 from rdc_tool.timeout_policy import worker_exec_timeout_s
@@ -42,7 +42,7 @@ def _resolved_birth(pid: int) -> str:
         return ""
 
 
-class DaemonRuntime(ProgressSink):
+class DaemonRuntime:
     def __init__(
         self,
         *,
@@ -210,18 +210,19 @@ class DaemonRuntime(ProgressSink):
         details: Dict[str, Any] | None = None,
     ) -> None:
         existing = self.state.get("active_operation")
-        started_at_ms = 0
-        if isinstance(existing, dict):
-            started_at_ms = int(existing.get("started_at_ms") or 0)
+        existing = existing if isinstance(existing, dict) else {}
+        now_ms = epoch_ms()
         self.state["active_operation"] = {
-            "trace_id": str(trace_id or (existing.get("trace_id") if isinstance(existing, dict) else "") or ""),
+            "trace_id": str(trace_id or existing.get("trace_id") or ""),
             "operation": str(operation),
             "stage": str(stage),
             "message": str(message),
             "progress_pct": progress_pct,
             "details": dict(details or {}),
-            "started_at_ms": started_at_ms or epoch_ms(),
-            "updated_at_ms": epoch_ms(),
+            "native_call": existing.get("native_call"),
+            "started_at_ms": int(existing.get("started_at_ms") or 0) or now_ms,
+            "updated_at_ms": now_ms,
+            "last_progress_ms": now_ms,
         }
 
     def _clear_active_operation_locked(self) -> None:
@@ -239,6 +240,16 @@ class DaemonRuntime(ProgressSink):
             )
             self.state["last_activity_at"] = utc_now_iso()
         self._persist_state()
+
+    def native_call(self, frame: NativeCallFrame) -> None:
+        # Native-call frames are frequent; they refresh the in-memory view and are
+        # published only with the next state write, never one write per frame.
+        with self._state_lock:
+            active = self.state.get("active_operation")
+            if isinstance(active, dict) and active:
+                active["native_call"] = {"name": frame.name, "phase": frame.phase, "at_ms": frame.ts_ms}
+                active["trace_id"] = active.get("trace_id") or frame.trace_id
+                active["last_progress_ms"] = epoch_ms()
 
     def _sync_context_snapshot_locked(self, params: Dict[str, Any]) -> None:
         mapping = {
@@ -337,7 +348,7 @@ class DaemonRuntime(ProgressSink):
     def _request_worker(self, method: str, params: Dict[str, Any], *, timeout: float = 30.0) -> Dict[str, Any]:
         worker = self._ensure_worker()
         try:
-            response = worker.request(method, params, timeout=timeout, progress_sink=self)
+            response = worker.request(method, params, timeout=timeout, frame_sink=self)
             if not bool(response.get("ok")):
                 error = response.get("error") if isinstance(response.get("error"), dict) else {}
                 raise RuntimeError(str(error.get("message") or f"worker {method} failed"))

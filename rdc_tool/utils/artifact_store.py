@@ -12,7 +12,6 @@ Artifacts 通过 ``rdc-tool://`` URI 引用，并由 :class:`rdc_tool.models.Art
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import logging
 import time
@@ -22,6 +21,7 @@ from typing import Any, Dict, List, Optional
 import aiofiles
 import aiofiles.os
 
+from rdc_tool import native_calls
 from rdc_tool.models import ArtifactRef
 from rdc_tool.io_utils import sha256_file
 
@@ -179,7 +179,7 @@ class ArtifactStore:
         if not path.is_file():
             raise FileNotFoundError(f"Source file does not exist: {path}")
 
-        sha = await asyncio.to_thread(sha256_file, path)
+        sha = await native_calls.offload(sha256_file, path)
         dest = _shard_path(self._root, sha)
         file_size = path.stat().st_size
 

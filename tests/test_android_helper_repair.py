@@ -171,6 +171,7 @@ def test_native_mismatch_refreshes_owned_helper_once_and_pings(monkeypatch):
 
 @pytest.mark.parametrize("install_timeout", [False, True])
 def test_connect_cancel_after_package_commit_publishes_joined_installation_receipt(monkeypatch, tmp_path, install_timeout):
+    from rdc_tool import progress
     from rdc_tool.progress import ProgressReporter
     current = result(tmp_path)
     current.uninstalled_existing = install_timeout
@@ -200,7 +201,7 @@ def test_connect_cancel_after_package_commit_publishes_joined_installation_recei
         await runtime_lifecycle.runtime_startup()
         oplog._record_operation_start(live_state._runtime_context_id(), trace_id="cancel-install", operation="rd.remote.connect", transport="test", args={})
         reporter = ProgressReporter(trace_id="cancel-install", operation="rd.remote.connect", sink=Sink())
-        token = live_state._CURRENT_PROGRESS_REPORTER.set(reporter)
+        token = progress._CURRENT_PROGRESS_REPORTER.set(reporter)
         try:
             task = asyncio.create_task(remote_target._connect_remote_endpoint("host", 1, "adb_android", {"device_serial": "device"}, 3000))
             while not entered.is_set():
@@ -230,7 +231,7 @@ def test_connect_cancel_after_package_commit_publishes_joined_installation_recei
                 assert final["details"]["device_action"] == receipt.details["device_action"]
         finally:
             release.set()
-            live_state._CURRENT_PROGRESS_REPORTER.reset(token)
+            progress._CURRENT_PROGRESS_REPORTER.reset(token)
     asyncio.run(run())
 
 
