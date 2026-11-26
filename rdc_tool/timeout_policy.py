@@ -1,115 +1,86 @@
-﻿"""Timeout policy helpers shared by CLI and contract harnesses."""
+﻿"""The single source of execution budgets and control deadlines.
+
+Operation work is never bounded by a fixed duration. It is bounded by how long
+it may run without reporting progress: a progress event or a native-call frame
+moves its deadline forward. The budget is chosen per request (``no_progress_ms``)
+within the range every catalog entry publishes as ``execution_budget``.
+
+Inside one budget the layers fire in a fixed order, so the most informative
+outcome always wins: cooperative deadlines (remote connection, device transfer)
+end with a structured error first, the worker then dumps every thread's stack,
+and only after that does the daemon terminate the worker tree.
+
+Control methods (status, cancel, lifecycle requests) do no operation work and
+keep short fixed deadlines.
+"""
 
 from __future__ import annotations
 
-import math
 from typing import Any
 
-REMOTE_CONNECT_DEFAULT_TIMEOUT_MS = 200000
-REMOTE_CONNECT_DAEMON_BUFFER_S = 90.0
-DAEMON_RESPONSE_BUFFER_S = 5.0
-REMOTE_CONNECT_WORKER_GRACE_S = REMOTE_CONNECT_DAEMON_BUFFER_S - DAEMON_RESPONSE_BUFFER_S
-REMOTE_CONNECT_TRANSPORT_GRACE_S = DAEMON_RESPONSE_BUFFER_S
-REMOTE_CONNECT_PROCESS_GRACE_S = DAEMON_RESPONSE_BUFFER_S
-REMOTE_OPEN_REPLAY_TIMEOUT_S = 200.0
-LOCAL_OPEN_FILE_TIMEOUT_S = 120.0
-LOCAL_OPEN_REPLAY_TIMEOUT_S = 120.0
-# Session observations serialize replay navigation, target selection, and image
-# export in one context. Keep enough budget for real captures while deriving the
-# CLI transport deadline from this operation budget below.
-SESSION_CONTEXT_TIMEOUT_S = 60.0
+DEFAULT_NO_PROGRESS_MS = 300_000
+MIN_NO_PROGRESS_MS = 30_000
+MAX_NO_PROGRESS_MS = 3_600_000
+
+# The watchdog margin separates the cooperative deadline, the stack dump and
+# the kill: at most 5 s, at most a tenth of the budget.
+_WATCHDOG_MARGIN_CAP_S = 5.0
+
+# Daemon control requests (status, attach, heartbeat, context status, ...).
+CONTROL_REQUEST_TIMEOUT_S = 10.0
+# The daemon sends a heartbeat on every open exec connection at this interval,
+# and the client declares the daemon unresponsive after this silence.
+DAEMON_HEARTBEAT_INTERVAL_S = 2.0
+DAEMON_HEARTBEAT_GAP_S = 15.0
+# A queued exec waits for the execution lock in slices, so it keeps answering
+# cancellation and heartbeats while another request runs.
+EXEC_LOCK_SLICE_S = 1.0
+# Worker process lifecycle: ready report, status and shutdown requests.
+WORKER_READY_TIMEOUT_S = 10.0
+WORKER_CONTROL_TIMEOUT_S = 5.0
+WORKER_EXIT_TIMEOUT_S = 5.0
 PIXEL_HISTORY_TIMEOUT_S = 20.0
-DEFAULT_DAEMON_REQUEST_TIMEOUT_S = 30.0
-HEAVY_DAEMON_REQUEST_TIMEOUT_S = 60.0
-VERY_HEAVY_DAEMON_REQUEST_TIMEOUT_S = 180.0
-
-HEAVY_TIMEOUT_PREFIXES = (
-    "rd.event.",
-    "rd.pipeline.",
-    "rd.resource.",
-    "rd.texture.",
-    "rd.buffer.",
-    "rd.mesh.",
-    "rd.shader.",
-    "rd.debug.",
-    "rd.perf.",
-    "rd.export.",
-    "rd.diag.",
-    "rd.macro.",
-    "rd.vfs.",
-)
-
-VERY_HEAVY_TIMEOUT_PREFIXES = (
-    "rd.macro.",
-    "rd.vfs.",
-)
 
 
-def _coerce_timeout_ms(value: Any, default: int) -> int:
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        return int(default)
-    return parsed if parsed > 0 else int(default)
+class NoProgressBudgetError(ValueError):
+    code = "invalid_no_progress_ms"
+    category = "validation"
+
+    def __init__(self, value: Any) -> None:
+        super().__init__(f"no_progress_ms must be an integer from {MIN_NO_PROGRESS_MS} to {MAX_NO_PROGRESS_MS}, "
+                         f"got {value!r}")
+        self.details = {"no_progress_ms": value, **execution_budget()}
 
 
-def remote_connect_timeout_policy() -> dict[str, Any]:
-    """Public operation metadata, derived from the runtime's only timeout policy."""
-    return {"argument": "timeout_ms", "default_timeout_ms": REMOTE_CONNECT_DEFAULT_TIMEOUT_MS,
-        "worker_grace_ms": int(REMOTE_CONNECT_WORKER_GRACE_S * 1000),
-        "transport_grace_ms": int(REMOTE_CONNECT_TRANSPORT_GRACE_S * 1000),
-        "process_grace_ms": int(REMOTE_CONNECT_PROCESS_GRACE_S * 1000)}
+def execution_budget() -> dict[str, Any]:
+    """The budget rule every catalog operation publishes."""
+    return {"rule": "no_progress", "default_no_progress_ms": DEFAULT_NO_PROGRESS_MS,
+            "min_no_progress_ms": MIN_NO_PROGRESS_MS, "max_no_progress_ms": MAX_NO_PROGRESS_MS}
 
 
-def remote_connect_timeout_ms(args: dict[str, Any] | None) -> int:
-    payload = args if isinstance(args, dict) else {}
-    return _coerce_timeout_ms(payload.get("timeout_ms"), REMOTE_CONNECT_DEFAULT_TIMEOUT_MS)
+def validate_no_progress_ms(value: Any) -> int:
+    """A request's budget; ``None`` selects the default, anything outside the published range is rejected."""
+    if value is None:
+        return DEFAULT_NO_PROGRESS_MS
+    if type(value) is not int or not MIN_NO_PROGRESS_MS <= value <= MAX_NO_PROGRESS_MS:
+        raise NoProgressBudgetError(value)
+    return value
 
 
-def operation_timeout_s(operation: str, args: dict[str, Any] | None) -> float:
-    payload = args if isinstance(args, dict) else {}
-
-    if operation == "rd.remote.connect":
-        timeout_ms = remote_connect_timeout_ms(payload)
-        return float(math.ceil(timeout_ms / 1000.0))
-
-    if operation == "rd.capture.open_replay":
-        options = payload.get("options")
-        if isinstance(options, dict) and str(options.get("remote_id") or "").strip():
-            return REMOTE_OPEN_REPLAY_TIMEOUT_S
-        return LOCAL_OPEN_REPLAY_TIMEOUT_S
-
-    if operation == "rd.capture.open_file":
-        return LOCAL_OPEN_FILE_TIMEOUT_S
-
-    if operation.startswith("rd.session."):
-        return SESSION_CONTEXT_TIMEOUT_S
-
-    if operation in {"rd.capture.close_replay", "rd.remote.disconnect"}:
-        return 90.0
-
-    if operation.startswith(VERY_HEAVY_TIMEOUT_PREFIXES):
-        return VERY_HEAVY_DAEMON_REQUEST_TIMEOUT_S
-
-    if operation.startswith(HEAVY_TIMEOUT_PREFIXES):
-        return HEAVY_DAEMON_REQUEST_TIMEOUT_S
-
-    return DEFAULT_DAEMON_REQUEST_TIMEOUT_S
+def _margin_s(no_progress_ms: int) -> float:
+    return min(_WATCHDOG_MARGIN_CAP_S, no_progress_ms / 10_000)
 
 
-def transport_timeout_s(operation: str, args: dict[str, Any] | None) -> float:
-    base = operation_timeout_s(operation, args)
-    if operation == "rd.remote.connect":
-        return worker_exec_timeout_s(operation, args) + REMOTE_CONNECT_TRANSPORT_GRACE_S
-    return base + DAEMON_RESPONSE_BUFFER_S
+def watchdog_s(no_progress_ms: int) -> float:
+    """The daemon terminates a worker that reported nothing for this long."""
+    return no_progress_ms / 1000
 
 
-def daemon_exec_timeout_s(operation: str, args: dict[str, Any] | None) -> float:
-    return transport_timeout_s(operation, args)
+def stack_dump_after_s(no_progress_ms: int) -> float:
+    """The worker dumps every thread's stack after this much silence, just before the daemon's watchdog."""
+    return watchdog_s(no_progress_ms) - _margin_s(no_progress_ms)
 
 
-def worker_exec_timeout_s(operation: str, args: dict[str, Any] | None) -> float:
-    native = operation_timeout_s(operation, args)
-    return native + REMOTE_CONNECT_WORKER_GRACE_S if operation == "rd.remote.connect" else native
-
-
+def cooperative_no_progress_s(no_progress_ms: int) -> float:
+    """Cooperative loops inside the worker give up after this much silence, before the stack dump."""
+    return watchdog_s(no_progress_ms) - 2 * _margin_s(no_progress_ms)

@@ -18,7 +18,6 @@ from rdc_tool.runtime import (
     renderdoc_api,
     settings,
 )
-from rdc_tool.timeout_policy import remote_connect_timeout_ms
 
 
 def _assert_remote_handle_context(
@@ -233,7 +232,7 @@ async def _rehydrate_remote_handle_from_snapshot(remote_id: str) -> live_state.R
         bootstrap_result, remote_server, server_info = await remote_target._connect_remote_endpoint(
             "127.0.0.1" if transport == "adb_android" else host,
             requested_port if transport == "adb_android" else port,
-            transport, {**options, "device_serial": device_serial}, remote_connect_timeout_ms({}))
+            transport, {**options, "device_serial": device_serial})
         if bootstrap_result is not None:
             if prior_android is not None:
                 await _retain_recovered_android_ownership(bootstrap_result, prior_android, remote_server)

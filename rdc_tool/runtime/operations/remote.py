@@ -23,7 +23,6 @@ from rdc_tool.runtime import (
     renderdoc_api,
     replay_access,
 )
-from rdc_tool.timeout_policy import remote_connect_timeout_ms
 
 
 @replay_access._guard_rejection
@@ -49,7 +48,6 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
         if not host:
             host = "127.0.0.1"
         port = coerce._as_int(args.get("port"), 38920)
-        timeout_ms = remote_connect_timeout_ms(args)
         if not live_state._runtime.enable_remote:
             return envelope.capability_failure(
                 "remote_disabled",
@@ -75,7 +73,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
         try:
             if transport == "adb_android" and host not in {"", "127.0.0.1", "localhost"}:
                 return envelope.failure("Android adb transport requires host=127.0.0.1 or localhost", code="android_remote_host_invalid", category="runtime")
-            bootstrap_result, remote_server, server_info = await remote_target._connect_remote_endpoint(host, port, transport, options, timeout_ms)
+            bootstrap_result, remote_server, server_info = await remote_target._connect_remote_endpoint(host, port, transport, options)
             if bootstrap_result is not None:
                 bootstrap_detail = remote_bootstrap.describe_android_remote(bootstrap_result)
                 endpoint_host, endpoint_port = bootstrap_result.host, bootstrap_result.port

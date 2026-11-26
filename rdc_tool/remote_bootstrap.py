@@ -17,15 +17,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
+from rdc_tool import progress, timeout_policy
 from rdc_tool.platform import process
 from rdc_tool.platform.process import SpawnProfile
 from rdc_tool.runtime_paths import android_binaries_root, runtime_root
 from rdc_tool.android_apk_identity import read_apk_identity
 from rdc_tool.android_install_state import parse_active_install_sessions
-from rdc_tool.timeout_policy import DEFAULT_DAEMON_REQUEST_TIMEOUT_S
 
 DEFAULT_ANDROID_REMOTE_PORT = 38920
-DEFAULT_ANDROID_TIMEOUT_MS = 120000
 _PACKAGE_MAP = {
     "arm32": "org.renderdoc.renderdoccmd.arm32",
     "arm64": "org.renderdoc.renderdoccmd.arm64",
@@ -47,10 +46,19 @@ class AndroidRemoteBootstrapError(RuntimeError):
 
 
 class ConnectionBudget:
-    """One deadline and cancellation signal for one remote connection attempt."""
-    def __init__(self, timeout_ms: int, cancelled: Optional[threading.Event] = None):
-        self.deadline = time.monotonic() + max(timeout_ms, 1) / 1000
+    """One no-progress window and cancellation signal for one remote connection attempt.
+
+    The deadline is not a total duration: every progress report of the attempt
+    moves it forward by the window, so a slow but advancing bootstrap continues
+    while a silent one ends with remote_connect_timeout.
+    """
+    def __init__(self, window_ms: int, cancelled: Optional[threading.Event] = None):
+        self.window_s = max(window_ms, 1) / 1000
+        self.deadline = time.monotonic() + self.window_s
         self.cancelled = cancelled or threading.Event()
+
+    def progressed(self) -> None:
+        self.deadline = time.monotonic() + self.window_s
 
     def remaining(self, maximum: float = float("inf")) -> float:
         if self.cancelled.is_set():
@@ -62,6 +70,19 @@ class ConnectionBudget:
 
 
 _connection_budget: contextvars.ContextVar[Optional[ConnectionBudget]] = contextvars.ContextVar("android_connection_budget", default=None)
+
+
+def _request_budget(cancelled: Optional[threading.Event] = None) -> ConnectionBudget:
+    """A connection budget for the running request: its cooperative no-progress window."""
+    window_s = timeout_policy.cooperative_no_progress_s(progress.current_no_progress_ms())
+    return ConnectionBudget(int(window_s * 1000), cancelled)
+
+
+def connection_progressed() -> None:
+    """Move the running connection attempt's deadline forward; called on every reported progress."""
+    budget = _connection_budget.get()
+    if budget is not None:
+        budget.progressed()
 
 
 def _remaining(maximum: float) -> float:
@@ -267,11 +288,11 @@ def _wait_for_android_install(result: AndroidBootstrapResult, *, require_target:
                             receipt: Optional[dict[str, object]] = None) -> None:
     """Resolve device-side completion inside the original connection budget, without reinstalling."""
     observed = None
-    deadline = time.monotonic() + DEFAULT_ANDROID_TIMEOUT_MS / 1000
+    unbudgeted = _request_budget() if _connection_budget.get() is None else None
     def remaining():
         value = _remaining(1.0)
-        if _connection_budget.get() is None:
-            value = min(value, deadline - time.monotonic())
+        if unbudgeted is not None:
+            value = min(value, unbudgeted.deadline - time.monotonic())
             if value <= 0:
                 raise AndroidRemoteBootstrapError("remote_connect_timeout", "Installation verification deadline exceeded")
         return value
@@ -800,7 +821,7 @@ def inspect_android_installation(device_serial: str) -> dict[str, object]:
         raise AndroidRemoteBootstrapError("adb_device_serial_invalid", "Installation inspection requires an exact device serial")
     token = None
     if _connection_budget.get() is None:
-        token = _connection_budget.set(ConnectionBudget(int(DEFAULT_DAEMON_REQUEST_TIMEOUT_S * 1000)))
+        token = _connection_budget.set(_request_budget())
     try:
         adb_path = resolve_adb_path()
         device = _select_android_device(adb_path, device_serial)
@@ -819,7 +840,7 @@ def inspect_android_installation(device_serial: str) -> dict[str, object]:
 def bootstrap_android_remote(*, remote_port: int = DEFAULT_ANDROID_REMOTE_PORT, options: Optional[AndroidBootstrapOptions] = None) -> AndroidBootstrapResult:
     token = None
     if _connection_budget.get() is None:
-        token = _connection_budget.set(ConnectionBudget(DEFAULT_ANDROID_TIMEOUT_MS))
+        token = _connection_budget.set(_request_budget())
     try:
         return _bootstrap_android_remote(remote_port=remote_port, options=options)
     finally:
@@ -891,7 +912,7 @@ def _start_android_helper(result: AndroidBootstrapResult, activity_component: st
     adb_path, package_name = result.adb_path, result.package_name
     device = AdbDevice(serial=result.device_serial, state="device", detail="")
     budget = _connection_budget.get()
-    deadline = budget.deadline if budget else time.monotonic() + DEFAULT_ANDROID_TIMEOUT_MS / 1000
+    deadline = (budget or _request_budget()).deadline
     result.stage = "starting"
     if opts.progress: opts.progress("starting")
     launch_error: AndroidRemoteBootstrapError | None = None

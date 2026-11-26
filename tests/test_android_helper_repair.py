@@ -19,7 +19,7 @@ def no_pending_package_manager(monkeypatch):
     # These tests isolate helper repair and cancellation. Active-session parsing
     # and its actual install boundary are exercised in test_android_install_state.
     monkeypatch.setattr(rb, "_preflight_android_install", lambda result: None)
-    monkeypatch.setattr(rb, "DEFAULT_ANDROID_TIMEOUT_MS", 5)
+    monkeypatch.setattr(rb, "_request_budget", lambda cancelled=None: rb.ConnectionBudget(5, cancelled))
 
 
 def result(tmp_path):
@@ -125,7 +125,7 @@ def test_native_busy_does_not_enter_repair(monkeypatch):
     monkeypatch.setattr(remote_bootstrap, "repair_incompatible_android_helper", lambda *a: pytest.fail("busy cannot repair"))
     monkeypatch.setattr(remote_bootstrap, "cleanup_android_remote", lambda _: [])
     with pytest.raises(CoreError) as error:
-        asyncio.run(remote_target._connect_remote_endpoint("host", 38920, "adb_android", {"device_serial": "device"}, 3000))
+        asyncio.run(remote_target._connect_remote_endpoint("host", 38920, "adb_android", {"device_serial": "device"}))
     assert error.value.code == "remote_busy"
 
 
@@ -165,7 +165,7 @@ def test_native_mismatch_refreshes_owned_helper_once_and_pings(monkeypatch):
     monkeypatch.setattr(remote_target, "_create_remote_server_connection", lambda *a: remote)
     monkeypatch.setattr(renderdoc_api, "_status_ok", lambda _: True)
     monkeypatch.setattr(remote_target, "_collect_remote_server_info", lambda *a, **k: {})
-    assert asyncio.run(remote_target._connect_remote_endpoint("host", 38920, "adb_android", {}, 3000))[1] is remote
+    assert asyncio.run(remote_target._connect_remote_endpoint("host", 38920, "adb_android", {}))[1] is remote
     assert observed == ["verify", "repair", "verify"]
 
 
@@ -195,6 +195,7 @@ def test_connect_cancel_after_package_commit_publishes_joined_installation_recei
     monkeypatch.setattr(rb, "cleanup_android_remote", lambda item: cleaned.append(item) or [])
     monkeypatch.setattr(remote_bootstrap, "bootstrap_android_remote", bootstrap)
     monkeypatch.setattr(remote_target, "_create_remote_server_connection", lambda *a: pytest.fail("cancelled install cannot connect"))
+    monkeypatch.setattr(rb, "_request_budget", lambda cancelled=None: rb.ConnectionBudget(3000, cancelled))
     # Exercise the actual install and bootstrap error receipt through the full
     # async connect boundary, including cancellation while PackageManager runs.
     async def run():
@@ -203,7 +204,7 @@ def test_connect_cancel_after_package_commit_publishes_joined_installation_recei
         reporter = ProgressReporter(trace_id="cancel-install", operation="rd.remote.connect", sink=Sink())
         token = progress._CURRENT_PROGRESS_REPORTER.set(reporter)
         try:
-            task = asyncio.create_task(remote_target._connect_remote_endpoint("host", 1, "adb_android", {"device_serial": "device"}, 3000))
+            task = asyncio.create_task(remote_target._connect_remote_endpoint("host", 1, "adb_android", {"device_serial": "device"}))
             while not entered.is_set():
                 await asyncio.sleep(0)
             task.cancel()

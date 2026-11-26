@@ -18,7 +18,7 @@ from rdc_tool.context_snapshot import normalize_context_id
 from rdc_tool.io_utils import safe_json_text, safe_stream_write
 from rdc_tool.platform import process
 from rdc_tool.platform.process import ProcessIdentity
-from rdc_tool import progress
+from rdc_tool import progress, timeout_policy
 from rdc_tool.progress import NativeCallFrame, ProgressEvent, RequestScope
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -141,8 +141,10 @@ def main(argv: list[str] | None = None) -> int:
                         if not cleanup and loaded_runtime()["status"] == "mismatch":
                             raise RuntimeError("Loaded RenderDoc paths differ from the configured runtime")
                         sink = _WorkerFrameSink(req_id)
-                        scope = RequestScope(request_id=req_id, sink=sink,
-                                             trace_id=str(params.get("trace_id") or f"trc_{uuid.uuid4().hex[:12]}"))
+                        scope = RequestScope(
+                            request_id=str(params.get("request_id") or req_id), sink=sink,
+                            trace_id=str(params.get("trace_id") or f"trc_{uuid.uuid4().hex[:12]}"),
+                            no_progress_ms=int(params.get("no_progress_ms") or timeout_policy.DEFAULT_NO_PROGRESS_MS))
                         result = runner.run(_in_request(scope,
                             dispatch.dispatch_operation(
                                 operation,

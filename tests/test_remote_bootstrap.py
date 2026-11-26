@@ -898,4 +898,4 @@ def test_selected_device_queries_only_its_frozen_serial_before_helper_preparatio
 
 @pytest.fixture(autouse=True)
 def short_install_wait_budget(monkeypatch):
-    monkeypatch.setattr(remote_bootstrap, "DEFAULT_ANDROID_TIMEOUT_MS", 5)
+    monkeypatch.setattr(remote_bootstrap, "_request_budget", lambda cancelled=None: remote_bootstrap.ConnectionBudget(5, cancelled))

@@ -8,8 +8,9 @@ import subprocess
 import time
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, Optional, Tuple
 
+from rdc_tool import timeout_policy
 from rdc_tool.context_snapshot import clear_context_snapshot, context_snapshot_path, normalize_context_id
 from rdc_tool.daemon.ownership import DaemonOwnerUnavailable, owner_is_busy, wait_for_owner_exit
 from rdc_tool.daemon.state import (
@@ -68,6 +69,60 @@ class DaemonRequestTimeout(TimeoutError):
         self.code = "daemon_timeout"
         self.category = "runtime"
         self.details = dict(details)
+
+
+class DaemonExecInterrupted(RuntimeError):
+    """The daemon stopped answering a request whose outcome is therefore unknown."""
+
+    category = "runtime"
+
+    def __init__(self, code: str, message: str, *, details: dict[str, Any]) -> None:
+        super().__init__(message)
+        self.code = code
+        self.details = dict(details)
+
+
+# Requests that run operation work: the client waits for their reply without a
+# fixed deadline, as long as the daemon lives and keeps sending heartbeats.
+_STREAMED_METHODS = frozenset({"exec", "clear_context"})
+
+
+def _await_streamed_reply(conn: Any, state: Dict[str, Any], method: str, params: Dict[str, Any],
+                          context: Optional[str], on_frame: Optional[Callable[[Dict[str, Any]], None]]) -> Any:
+    daemon = daemon_process(state)
+    last_message = time.monotonic()
+
+    def interrupted(code: str, reason: str, message: str, **extra: Any) -> DaemonExecInterrupted:
+        exited = process.probe(daemon) is process.Liveness.EXITED
+        return DaemonExecInterrupted(code, message, details={
+            "failure_stage": "await_daemon_reply", "reason": reason, "outcome": "unknown",
+            "operation": str(params.get("operation") or method), "request_id": str(params.get("request_id") or ""),
+            "context_id": normalize_context_id(context),
+            "daemon": {"pid": daemon.pid, "start_generation": daemon.birth}, "daemon_exit_confirmed": exited,
+            **extra,
+            "recovery_hint": "Inspect `rdc-tool context status`; the request may have completed or still be running.",
+        })
+
+    while True:
+        if conn.poll(1.0):
+            try:
+                message = conn.recv()
+            except (EOFError, OSError) as exc:
+                raise interrupted("daemon_lost", "connection_closed",
+                                  f"The daemon connection closed before {method} replied: {exc}") from exc
+            last_message = time.monotonic()
+            if isinstance(message, dict) and "kind" in message:
+                if on_frame is not None:
+                    on_frame(message)
+                continue
+            return message
+        if process.probe(daemon) is process.Liveness.EXITED:
+            raise interrupted("daemon_lost", "daemon_exited", f"The daemon exited before {method} replied")
+        silence = time.monotonic() - last_message
+        if silence > timeout_policy.DAEMON_HEARTBEAT_GAP_S:
+            raise interrupted("daemon_unresponsive", "heartbeat_gap",
+                              f"The daemon sent no heartbeat for {silence:.0f} s while {method} was pending",
+                              heartbeat_gap_ms=int(silence * 1000))
 
 
 def _active_operation_excerpt(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -331,10 +386,13 @@ def daemon_request(
     method: str,
     *,
     params: Optional[Dict[str, Any]] = None,
-    timeout: float = 10.0,
+    timeout: float = timeout_policy.CONTROL_REQUEST_TIMEOUT_S,
     state: Optional[Dict[str, Any]] = None,
     context: Optional[str] = "default",
+    on_frame: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> Dict[str, Any]:
+    """One daemon request. Control methods have a short deadline; exec and
+    clear_context wait for as long as the daemon lives and sends heartbeats."""
     st = state or load_state(context=context)
     if not is_complete(st):
         raise RuntimeError("No active daemon state. Run `rdc-tool daemon start` first.")
@@ -342,7 +400,9 @@ def daemon_request(
     conn = ipc.connect(Endpoint(st["endpoint"]), authkey=st["token"].encode("utf-8"))
     try:
         conn.send(payload)
-        if timeout:
+        if method in _STREAMED_METHODS:
+            response = _await_streamed_reply(conn, st, method, payload["params"], context, on_frame)
+        elif timeout:
             deadline = time.time() + timeout
             while time.time() < deadline:
                 if conn.poll(0.1):
@@ -367,7 +427,9 @@ def daemon_request(
                         "recovery_hint": "Run `rdc-tool context clear` or `rd.core.shutdown` on the same context before retrying.",
                     },
                 )
-        response = conn.recv()
+            response = conn.recv()
+        else:
+            response = conn.recv()
     finally:
         conn.close()
     if not isinstance(response, dict):

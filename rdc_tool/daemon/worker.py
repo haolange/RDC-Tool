@@ -12,6 +12,7 @@ import threading
 import time
 from typing import Any, Dict, Optional
 
+from rdc_tool import timeout_policy
 from rdc_tool.daemon.state import load_json_with_status
 from rdc_tool.io_utils import safe_json_text
 from rdc_tool.platform import process
@@ -20,10 +21,6 @@ from rdc_tool.progress import FrameSink, NativeCallFrame, ProgressEvent
 from rdc_tool.runtime_paths import binaries_root, child_python_argv, child_python_env, pymodules_dir, tools_root
 from rdc_tool.runtime_worker_state import clear_worker_state, save_worker_state, worker_state_path
 from rdc_tool.runtime_identity import native_manifest_status
-
-
-READY_TIMEOUT_S = 10.0
-REQUEST_TIMEOUT_S = 30.0
 
 
 def _decode_progress_event(payload: Any, operation: str) -> ProgressEvent:
@@ -166,7 +163,7 @@ class RuntimeWorkerProcess:
         self._save_state()
 
     def _await_ready(self) -> None:
-        deadline = time.time() + READY_TIMEOUT_S
+        deadline = time.time() + timeout_policy.WORKER_READY_TIMEOUT_S
         while time.time() < deadline:
             timeout = max(0.1, min(0.5, deadline - time.time()))
             try:
@@ -190,7 +187,13 @@ class RuntimeWorkerProcess:
         self.stop()
         self._spawn()
 
-    def request(self, method: str, params: Optional[Dict[str, Any]] = None, *, timeout: float = REQUEST_TIMEOUT_S, frame_sink: FrameSink | None = None) -> Dict[str, Any]:
+    def request(self, method: str, params: Optional[Dict[str, Any]] = None, *, no_progress_s: float,
+                frame_sink: FrameSink | None = None) -> Dict[str, Any]:
+        """Send one request and wait for its reply while frames keep arriving.
+
+        There is no total deadline: every frame of this request moves the
+        deadline forward by ``no_progress_s``.
+        """
         with self._io_lock:
             if not self.is_running():
                 raise RuntimeError("worker process is unavailable; use the owning daemon lifecycle")
@@ -204,10 +207,11 @@ class RuntimeWorkerProcess:
             )
             proc.stdin.flush()
 
-            deadline = time.time() + max(1.0, float(timeout))
+            window = max(1.0, float(no_progress_s))
+            deadline = time.monotonic() + window
             trace_id = ""
-            while time.time() < deadline:
-                remaining = max(0.1, min(0.5, deadline - time.time()))
+            while time.monotonic() < deadline:
+                remaining = max(0.1, min(0.5, deadline - time.monotonic()))
                 try:
                     payload = self._queue.get(timeout=remaining)
                 except queue.Empty:
@@ -224,6 +228,7 @@ class RuntimeWorkerProcess:
                     if trace_id and frame.trace_id != trace_id:
                         raise RuntimeError("Worker frame trace changed within a request")
                     trace_id = frame.trace_id
+                    deadline = time.monotonic() + window
                     if frame_sink is not None:
                         try:
                             if isinstance(frame, ProgressEvent):
@@ -239,7 +244,7 @@ class RuntimeWorkerProcess:
                     self._runtime["loaded_runtime"] = payload["loaded_runtime"]
                 self._save_state()
                 return payload
-            raise TimeoutError(f"worker request timed out: {method}")
+            raise TimeoutError(f"worker reported no progress for {window:.0f} s: {method}")
 
     def stop(self) -> None:
         proc = self._proc
@@ -250,11 +255,11 @@ class RuntimeWorkerProcess:
         try:
             if proc.poll() is None:
                 try:
-                    self.request("shutdown", {}, timeout=5.0)
+                    self.request("shutdown", {}, no_progress_s=timeout_policy.WORKER_CONTROL_TIMEOUT_S)
                 except Exception:
                     pass
                 try:
-                    proc.wait(timeout=5.0)
+                    proc.wait(timeout=timeout_policy.WORKER_EXIT_TIMEOUT_S)
                 except Exception:
                     proc.kill()
                     proc.wait(timeout=3.0)

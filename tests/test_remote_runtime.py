@@ -95,7 +95,7 @@ def test_remote_capability_probe_does_not_block_target_draw_from_present_event(m
 def test_android_recovery_uses_discovered_socket_and_fresh_local_forward(monkeypatch) -> None:
     observed = []
 
-    async def connect(host, port, transport, options, timeout_ms):
+    async def connect(host, port, transport, options):
         observed.append((host, port, transport, dict(options)))
         bootstrap = AndroidBootstrapResult(
             'adb-test', 'test-device', 'test-helper', '', '', '127.0.0.1',
@@ -154,7 +154,7 @@ def test_android_snapshot_rehydration_rejects_missing_forward_ownership(monkeypa
         'options': {'local_port': 58884, 'remote_port': 39920},
         'bootstrap': {'remote_port': 39920},
     }}
-    async def connect(host, port, transport, options, timeout_ms):
+    async def connect(host, port, transport, options):
         observed.append((port, dict(options)))
         bootstrap = SimpleNamespace(host='127.0.0.1', port=62000, remote_port=39920)
         return bootstrap, DummyRemoteServer(), {}
@@ -191,7 +191,7 @@ def test_android_snapshot_recovery_retires_only_verified_owned_forward(
     }}
     actions = []
     async def offload(fn, *args): return fn(*args)
-    async def connect(host, port, transport, options, timeout_ms):
+    async def connect(host, port, transport, options):
         actions.append(('connect', options['local_port']))
         return AndroidBootstrapResult(
             'adb-test', 'test-device', 'test-helper', '', '', '127.0.0.1',
@@ -505,7 +505,7 @@ def test_dispatch_remote_connect_returns_live_handle_and_server_info(monkeypatch
     clear_context_snapshot()
     live_state._runtime.context_snapshots.clear()
     try:
-        payload = asyncio.run(remote_ops.dispatch("connect", {"host": "127.0.0.1", "port": 38920, "timeout_ms": 1000}))
+        payload = asyncio.run(remote_ops.dispatch("connect", {"host": "127.0.0.1", "port": 38920}))
         assert payload.ok is True
         assert payload.data['detail']["connected"] is True
         assert payload.data['server_info']["capabilities"]["supported_replays"] == ["Vulkan"]
@@ -537,7 +537,7 @@ def test_dispatch_remote_connect_failure_does_not_allocate_remote_id(monkeypatch
     live_state._runtime.remotes.clear()
     live_state._runtime.enable_remote = True
     try:
-        payload = asyncio.run(remote_ops.dispatch("connect", {"host": "127.0.0.1", "port": 38920, "timeout_ms": 1000}))
+        payload = asyncio.run(remote_ops.dispatch("connect", {"host": "127.0.0.1", "port": 38920}))
         assert payload.ok is False
         assert "remote_id" not in payload.details
         assert live_state._runtime.remotes == {}
@@ -581,7 +581,6 @@ def test_dispatch_remote_connect_allows_omitting_host_for_adb_android(monkeypatc
                             "transport": "adb_android",
                             "device_serial": "e38b8019",
                         },
-                        "timeout_ms": 1000,
                     },
                 )
             )
@@ -978,7 +977,7 @@ def test_remote_ping_failure_releases_acquired_connection(monkeypatch):
     monkeypatch.setattr(remote_target, '_wait_for_remote_endpoint', lambda *a: None)
     monkeypatch.setattr(remote_target, '_create_remote_server_connection', lambda *a: remote)
     with pytest.raises(Exception, match='Ping'):
-        asyncio.run(remote_target._connect_remote_endpoint('host', 1, 'renderdoc', {}, 1000))
+        asyncio.run(remote_target._connect_remote_endpoint('host', 1, 'renderdoc', {}))
     assert remote.shutdown_called
 
 
@@ -1001,7 +1000,7 @@ def test_remote_connect_cancel_joins_worker_and_releases_late_connection(monkeyp
         return remote
     monkeypatch.setattr(remote_target, '_create_remote_server_connection', create)
     async def run():
-        task = asyncio.create_task(remote_target._connect_remote_endpoint('host', 1, 'renderdoc', {}, 3000))
+        task = asyncio.create_task(remote_target._connect_remote_endpoint('host', 1, 'renderdoc', {}))
         while not entered.is_set():
             await asyncio.sleep(0)
         task.cancel()

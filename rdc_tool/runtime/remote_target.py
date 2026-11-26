@@ -14,7 +14,6 @@ from rdc_tool.core.renderdoc_status import build_renderdoc_error_details, status
 from rdc_tool.remote_bootstrap import (
     AndroidBootstrapOptions,
     AndroidRemoteBootstrapError,
-    ConnectionBudget,
     _connection_budget,
 )
 from rdc_tool.runtime import coerce, live_state, oplog, remote_records, renderdoc_api, settings
@@ -119,9 +118,13 @@ def _collect_remote_server_info(
     return info
 
 
-async def _connect_remote_endpoint(host: str, port: int, transport: str, options: Dict[str, Any], timeout_ms: int) -> tuple[Any, Any, Dict[str, Any]]:
-    """Join cancellation before publishing a connection; roll back only acquired resources."""
-    budget = ConnectionBudget(timeout_ms)
+async def _connect_remote_endpoint(host: str, port: int, transport: str, options: Dict[str, Any]) -> tuple[Any, Any, Dict[str, Any]]:
+    """Join cancellation before publishing a connection; roll back only acquired resources.
+
+    The attempt runs under the request's no-progress budget: each reported
+    bootstrap stage moves its deadline forward.
+    """
+    budget = remote_bootstrap._request_budget()
     def connect() -> tuple[Any, Any, Dict[str, Any]]:
         token = _connection_budget.set(budget)
         bootstrap = None

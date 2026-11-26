@@ -189,7 +189,7 @@ def test_request_does_not_implicitly_spawn_a_missing_worker(monkeypatch):
     worker = daemon_worker.RuntimeWorkerProcess(context_id="owned-context")
     monkeypatch.setattr(worker, "ensure_started", lambda: pytest.fail("request must not replace its controller"))
     with pytest.raises(RuntimeError, match="unavailable"):
-        worker.request("exec", {"operation": "rd.export.texture"})
+        worker.request("exec", {"operation": "rd.export.texture"}, no_progress_s=5)
 
 
 def test_worker_shutdown_uses_real_facade_and_preserves_daemon_context(monkeypatch):

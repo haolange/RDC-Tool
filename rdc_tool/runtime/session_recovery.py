@@ -24,7 +24,6 @@ from rdc_tool.runtime import (
     shader_patches,
     visual_target,
 )
-from rdc_tool.timeout_policy import remote_connect_timeout_ms
 
 
 async def _pipeline_snapshot(session_id: str, event_id: Optional[int] = None) -> Any:
@@ -125,7 +124,7 @@ async def _restore_remote_handle_from_session_record(
     bootstrap_result, remote_server, server_info = await remote_target._connect_remote_endpoint(
         "127.0.0.1" if transport == "adb_android" else endpoint_host,
         requested_port if transport == "adb_android" else endpoint_port,
-        transport, {**options, "device_serial": device_serial}, remote_connect_timeout_ms({}))
+        transport, {**options, "device_serial": device_serial})
     if bootstrap_result is not None:
         if prior_android is not None:
             await remote_session._retain_recovered_android_ownership(bootstrap_result, prior_android, remote_server)

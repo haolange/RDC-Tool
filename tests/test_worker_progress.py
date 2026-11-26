@@ -46,14 +46,14 @@ def test_correlated_worker_progress_reaches_daemon_status_before_final(monkeypat
         for stage in ("checking", "installing", "starting", "verifying", "cancelled")]
     final = {"id": "wrk_1", "ok": True, "result": {"ok": False, "error": {"code": "remote_connect_cancelled"}}}
     process = worker(monkeypatch, frames + [final])
-    assert process.request("exec", {"operation": "rd.remote.connect"}, frame_sink=Sink()) == final
+    assert process.request("exec", {"operation": "rd.remote.connect"}, no_progress_s=5, frame_sink=Sink()) == final
     assert [item["stage"] for item in observed] == ["checking", "installing", "starting", "verifying", "cancelled"]
     assert all(item["trace_id"] == "trace-owned" for item in observed)
     assert observed[-1]["details"]["installation"]["installed_apk"] is True
     # A delayed old frame cannot contaminate the following request.
     process._queue.put({"id": "wrk_1", "kind": "progress", "event": event("late")})
     process._queue.put({"id": "wrk_2", "ok": True, "result": {"done": True}})
-    assert process.request("exec", {"operation": "rd.remote.connect"}, frame_sink=Sink())["result"] == {"done": True}
+    assert process.request("exec", {"operation": "rd.remote.connect"}, no_progress_s=5, frame_sink=Sink())["result"] == {"done": True}
     assert len(observed) == 5
 
 
@@ -66,7 +66,7 @@ def test_invalid_progress_frame_is_not_published(monkeypatch, change):
         def publish(self, progress):
             pytest.fail("invalid event published")
     with pytest.raises(RuntimeError, match="progress"):
-        process.request("exec", {"operation": "rd.remote.connect"}, frame_sink=Sink())
+        process.request("exec", {"operation": "rd.remote.connect"}, no_progress_s=5, frame_sink=Sink())
 
 
 def test_sink_failure_does_not_lose_final_operation_receipt(monkeypatch):
@@ -75,7 +75,7 @@ def test_sink_failure_does_not_lose_final_operation_receipt(monkeypatch):
     class Sink:
         def publish(self, progress):
             raise OSError("status persistence unavailable")
-    assert process.request("exec", {"operation": "rd.remote.connect"}, frame_sink=Sink()) == final
+    assert process.request("exec", {"operation": "rd.remote.connect"}, no_progress_s=5, frame_sink=Sink()) == final
 
 
 @pytest.mark.parametrize("sink_write_fails", [False, True])
@@ -118,7 +118,7 @@ def test_reader_thread_exit_retains_progress_and_final_reply(monkeypatch):
     assert not reader.is_alive()
     observed = []
     sink = SimpleNamespace(publish=observed.append)
-    assert process.request("exec", {"operation": "rd.remote.connect"}, frame_sink=sink) == final
+    assert process.request("exec", {"operation": "rd.remote.connect"}, no_progress_s=5, frame_sink=sink) == final
     assert observed[0].stage == "cancelled"
     assert process._queue.get_nowait() == {"kind": "eof"}
 
@@ -129,7 +129,7 @@ def test_trace_change_inside_request_is_rejected(monkeypatch):
     process = worker(monkeypatch, [{"id": "wrk_1", "kind": "progress", "event": item} for item in (first, second)])
     observed = []
     with pytest.raises(RuntimeError, match="trace changed"):
-        process.request("exec", {"operation": "rd.remote.connect"}, frame_sink=SimpleNamespace(publish=observed.append))
+        process.request("exec", {"operation": "rd.remote.connect"}, no_progress_s=5, frame_sink=SimpleNamespace(publish=observed.append))
     assert len(observed) == 1
 
 
@@ -145,7 +145,7 @@ def test_native_call_frames_reach_the_daemon_in_memory_without_a_state_write(mon
     monkeypatch.setattr(daemon, "_persist_state", lambda: pytest.fail("native-call frames are not persisted per frame"))
     final = {"id": "wrk_1", "ok": True, "result": {"done": True}}
     process = worker(monkeypatch, [native(), native("OpenCapture", phase="exit"), final])
-    assert process.request("exec", {"operation": "rd.remote.connect"}, frame_sink=daemon) == final
+    assert process.request("exec", {"operation": "rd.remote.connect"}, no_progress_s=5, frame_sink=daemon) == final
     active = daemon.state["active_operation"]
     assert active["native_call"] == {"name": "OpenCapture", "phase": "exit", "at_ms": 1700000000000}
     assert active["trace_id"] == "trace-owned"
@@ -159,14 +159,14 @@ def test_invalid_native_call_frame_is_rejected(monkeypatch, change):
     sink = SimpleNamespace(publish=lambda event: pytest.fail("published"),
                            native_call=lambda frame: pytest.fail("invalid frame published"))
     with pytest.raises(RuntimeError, match="native-call frame"):
-        process.request("exec", {"operation": "rd.remote.connect"}, frame_sink=sink)
+        process.request("exec", {"operation": "rd.remote.connect"}, no_progress_s=5, frame_sink=sink)
 
 
 def test_native_call_trace_must_match_the_request_progress_trace(monkeypatch):
     frames = [{"id": "wrk_1", "kind": "progress", "event": event()}, native(trace_id="other-trace")]
     process = worker(monkeypatch, frames)
     with pytest.raises(RuntimeError, match="trace changed"):
-        process.request("exec", {"operation": "rd.remote.connect"},
+        process.request("exec", {"operation": "rd.remote.connect"}, no_progress_s=5,
                         frame_sink=SimpleNamespace(publish=lambda event: None, native_call=lambda frame: None))
 
 

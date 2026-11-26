@@ -8,9 +8,12 @@ import os
 import signal
 import sys
 import threading
+import uuid
+from dataclasses import asdict
 from multiprocessing import AuthenticationError
 from typing import Any, Dict
 
+from rdc_tool import timeout_policy
 from rdc_tool.context_snapshot import normalize_context_id
 from rdc_tool.daemon.client import context_has_unreleased_resources, owner_lost_should_stop
 from rdc_tool.daemon.state import (
@@ -24,12 +27,76 @@ from rdc_tool.platform.ipc import Endpoint
 from rdc_tool.progress import NativeCallFrame, ProgressEvent
 from rdc_tool.runtime_state import load_context_state, save_context_state
 from rdc_tool.runtime_worker_state import load_worker_state
-from rdc_tool.timeout_policy import worker_exec_timeout_s
 
 logger = logging.getLogger("rdc_tool.daemon")
 # Do not release an owner's kernel lock while this process is still alive,
 # including listener/worker teardown and interpreter shutdown.
 _PROCESS_OWNER_LEASES: list[OwnerLease] = []
+
+
+class _ClientChannel:
+    """The open connection of one exec or clear_context request until its reply.
+
+    It carries a heartbeat every few seconds while the request is queued or
+    running, and, when the client asked for a stream, the request's progress and
+    native-call frames. A departed client never interrupts the request.
+    """
+
+    def __init__(self, conn: Any, request_id: str, *, stream: bool) -> None:
+        self._conn = conn
+        self._lock = threading.Lock()
+        self._open = conn is not None
+        self._stopped = threading.Event()
+        self.request_id = request_id
+        self.stream = stream
+        self.state = "queued"
+
+    def _send(self, message: Dict[str, Any]) -> None:
+        with self._lock:
+            if not self._open:
+                return
+            try:
+                self._conn.send(message)
+            except Exception:
+                self._open = False
+
+    def heartbeat(self) -> None:
+        self._send({"kind": "heartbeat", "request_id": self.request_id, "ts_ms": epoch_ms(), "state": self.state})
+
+    def frame(self, frame: Dict[str, Any]) -> None:
+        if self.stream:
+            self._send({**frame, "request_id": self.request_id})
+
+    def start_heartbeats(self) -> None:
+        def beat() -> None:
+            self.heartbeat()
+            while not self._stopped.wait(timeout_policy.DAEMON_HEARTBEAT_INTERVAL_S):
+                self.heartbeat()
+
+        threading.Thread(target=beat, name=f"rdc-tool-daemon-heartbeat-{self.request_id}", daemon=True).start()
+
+    def reply(self, response: Dict[str, Any]) -> None:
+        self._stopped.set()
+        self._send(response)
+        with self._lock:
+            self._open = False
+
+
+class _RequestFrames:
+    """Frame sink of one running request: the daemon's live view first, then the client stream."""
+
+    def __init__(self, daemon: "DaemonRuntime", channel: _ClientChannel) -> None:
+        self._daemon = daemon
+        self._channel = channel
+
+    def publish(self, event: ProgressEvent) -> None:
+        self._daemon.publish(event)
+        self._channel.frame({"kind": "progress", **asdict(event)})
+
+    def native_call(self, frame: NativeCallFrame) -> None:
+        self._daemon.native_call(frame)
+        self._channel.frame({"kind": "native_call", "trace_id": frame.trace_id, "name": frame.name,
+                             "phase": frame.phase, "ts_ms": frame.ts_ms})
 
 
 def _resolved_birth(pid: int) -> str:
@@ -108,6 +175,8 @@ class DaemonRuntime:
         self._exec_lock = threading.Lock()
         self._worker: RuntimeWorkerProcess | None = None
         self._owner_lease: OwnerLease | None = None
+        self._requests_lock = threading.Lock()
+        self._requests: Dict[str, _ClientChannel] = {}
 
     def _persist_state(self) -> None:
         with self._state_lock:
@@ -345,10 +414,11 @@ class DaemonRuntime:
                 "degraded_session_ids": list(sessions)}
             save_context_state(state, self.daemon_context)
 
-    def _request_worker(self, method: str, params: Dict[str, Any], *, timeout: float = 30.0) -> Dict[str, Any]:
+    def _request_worker(self, method: str, params: Dict[str, Any], *, no_progress_s: float,
+                        frames: Any = None) -> Dict[str, Any]:
         worker = self._ensure_worker()
         try:
-            response = worker.request(method, params, timeout=timeout, frame_sink=self)
+            response = worker.request(method, params, no_progress_s=no_progress_s, frame_sink=frames or self)
             if not bool(response.get("ok")):
                 error = response.get("error") if isinstance(response.get("error"), dict) else {}
                 raise RuntimeError(str(error.get("message") or f"worker {method} failed"))
@@ -446,19 +516,29 @@ class DaemonRuntime:
         self._persist_state()
         return self._status_payload()
 
-    def _run_exec(self, operation: str, args: Dict[str, Any], *, transport: str, remote: bool) -> Dict[str, Any]:
-        with self._exec_lock:
+    def _acquire_exec_lock(self, channel: _ClientChannel) -> None:
+        # Slices keep a queued request observable while another one runs.
+        while not self._exec_lock.acquire(timeout=timeout_policy.EXEC_LOCK_SLICE_S):
+            pass
+        channel.state = "running"
+
+    def _run_exec(self, operation: str, args: Dict[str, Any], *, transport: str, remote: bool, request_id: str,
+                  no_progress_ms: int, channel: _ClientChannel) -> Dict[str, Any]:
+        trace_id = f"trc_{uuid.uuid4().hex[:12]}"
+        self._acquire_exec_lock(channel)
+        try:
             with self._state_lock:
                 self.state["active_request_count"] = int(self.state.get("active_request_count") or 0) + 1
                 self.state["last_activity_at"] = utc_now_iso()
                 self._set_active_operation_locked(
                     operation=operation,
                     stage="starting",
-                    message="Operation queued in daemon",
+                    message="Operation started in daemon",
+                    trace_id=trace_id,
                 )
+                self.state["active_operation"].update(request_id=request_id, no_progress_ms=no_progress_ms)
             self._persist_state()
             try:
-                worker_timeout_s = worker_exec_timeout_s(operation, args)
                 response = self._request_worker(
                     "exec",
                     {
@@ -467,8 +547,12 @@ class DaemonRuntime:
                         "transport": transport,
                         "remote": remote,
                         "context_id": self.daemon_context,
+                        "request_id": request_id,
+                        "trace_id": trace_id,
+                        "no_progress_ms": no_progress_ms,
                     },
-                    timeout=worker_timeout_s,
+                    no_progress_s=timeout_policy.watchdog_s(no_progress_ms),
+                    frames=_RequestFrames(self, channel),
                 )
                 result = response.get("result")
                 with self._state_lock:
@@ -487,9 +571,13 @@ class DaemonRuntime:
                     self._clear_active_operation_locked()
                     self.state["last_activity_at"] = utc_now_iso()
                 self._persist_state()
+        finally:
+            self._exec_lock.release()
 
-    def _run_clear_context(self) -> Dict[str, Any]:
-        with self._exec_lock:
+    def _run_clear_context(self, channel: _ClientChannel | None = None) -> Dict[str, Any]:
+        channel = channel or _ClientChannel(None, "", stream=False)
+        self._acquire_exec_lock(channel)
+        try:
             with self._state_lock:
                 self.state["active_request_count"] = int(self.state.get("active_request_count") or 0) + 1
                 self.state["last_activity_at"] = utc_now_iso()
@@ -502,7 +590,10 @@ class DaemonRuntime:
             released: Dict[str, Any] = {}
             cleared = False
             try:
-                response = self._request_worker("clear_context", {"context_id": self.daemon_context}, timeout=15.0)
+                response = self._request_worker(
+                    "clear_context", {"context_id": self.daemon_context},
+                    no_progress_s=timeout_policy.watchdog_s(timeout_policy.DEFAULT_NO_PROGRESS_MS),
+                    frames=_RequestFrames(self, channel))
                 result = response.get("result")
                 if not isinstance(result, dict) or result.get("ok") is not True:
                     error = result.get("error") if isinstance(result, dict) else None
@@ -527,6 +618,8 @@ class DaemonRuntime:
                     self.state["last_activity_at"] = utc_now_iso()
                 self._persist_state()
             return {"ok": True, "result": {"released": released, "state": public_view(self._snapshot_state())}}
+        finally:
+            self._exec_lock.release()
 
     def _watch_lifecycle(self) -> None:
         while self.running:
@@ -607,41 +700,74 @@ class DaemonRuntime:
             self._touch_activity()
             self._persist_state()
             return {"ok": True, "result": {"state": public_view(self._snapshot_state())}}
-        if method == "clear_context":
-            return self._run_clear_context()
-        if method == "exec":
-            operation = str(params.get("operation") or "").strip()
-            args = params.get("args")
-            if not isinstance(args, dict):
-                args = {}
-            transport = str(params.get("transport") or "daemon")
-            remote = bool(params.get("remote", False))
-            arg_keys = ",".join(sorted(args.keys())) if args else "-"
-            logger.info(
-                "daemon.exec op=%s transport=%s remote=%s arg_keys=%s",
-                operation,
-                transport,
-                remote,
-                arg_keys,
-            )
-            result = self._run_exec(operation, args, transport=transport, remote=remote)
-            payload = result.get("result")
-            if isinstance(payload, dict):
-                meta = payload.get("meta", {})
-                logger.info(
-                    "daemon.exec.done op=%s trace_id=%s ok=%s duration_ms=%s",
-                    operation,
-                    (meta.get("trace_id") if isinstance(meta, dict) else ""),
-                    bool(payload.get("ok")),
-                    (meta.get("duration_ms") if isinstance(meta, dict) else None),
-                )
-            return result
         return {"ok": False, "error": {"code": "unknown_method", "message": f"unknown method: {method}"}}
+
+    def _register_request(self, channel: _ClientChannel) -> bool:
+        with self._requests_lock:
+            if channel.request_id in self._requests:
+                return False
+            self._requests[channel.request_id] = channel
+            return True
+
+    def _unregister_request(self, channel: _ClientChannel) -> None:
+        with self._requests_lock:
+            if self._requests.get(channel.request_id) is channel:
+                del self._requests[channel.request_id]
+
+    def _serve_exec(self, conn: Any, params: Dict[str, Any]) -> None:
+        operation = str(params.get("operation") or "").strip()
+        args = params.get("args") if isinstance(params.get("args"), dict) else {}
+        transport = str(params.get("transport") or "daemon")
+        remote = bool(params.get("remote", False))
+        request_id = str(params.get("request_id") or "").strip() or f"req_{uuid.uuid4().hex[:16]}"
+        try:
+            no_progress_ms = timeout_policy.validate_no_progress_ms(params.get("no_progress_ms"))
+        except timeout_policy.NoProgressBudgetError as exc:
+            conn.send({"ok": False, "error": {"code": exc.code, "category": exc.category, "message": str(exc),
+                                              "details": exc.details}})
+            return
+        channel = _ClientChannel(conn, request_id, stream=bool(params.get("stream")))
+        if not self._register_request(channel):
+            conn.send({"ok": False, "error": {"code": "request_id_conflict", "category": "validation",
+                                              "message": f"request {request_id} is already queued or running",
+                                              "details": {"request_id": request_id}}})
+            return
+        logger.info("daemon.exec op=%s request_id=%s transport=%s remote=%s no_progress_ms=%s arg_keys=%s",
+                    operation, request_id, transport, remote, no_progress_ms, ",".join(sorted(args)) or "-")
+        channel.start_heartbeats()
+        response: Dict[str, Any] = {"ok": False, "error": {"code": "daemon_error", "message": "exec did not complete"}}
+        try:
+            response = self._run_exec(operation, args, transport=transport, remote=remote, request_id=request_id,
+                                      no_progress_ms=no_progress_ms, channel=channel)
+            payload = response.get("result")
+            meta = payload.get("meta") if isinstance(payload, dict) and isinstance(payload.get("meta"), dict) else {}
+            logger.info("daemon.exec.done op=%s request_id=%s trace_id=%s ok=%s duration_ms=%s", operation, request_id,
+                        meta.get("trace_id", ""), bool(isinstance(payload, dict) and payload.get("ok")),
+                        meta.get("duration_ms"))
+        finally:
+            self._unregister_request(channel)
+            channel.reply(response)
+
+    def _serve_clear_context(self, conn: Any) -> None:
+        channel = _ClientChannel(conn, f"clear_{uuid.uuid4().hex[:12]}", stream=False)
+        channel.start_heartbeats()
+        response: Dict[str, Any] = {"ok": False, "error": {"code": "daemon_error", "message": "clear did not complete"}}
+        try:
+            response = self._run_clear_context(channel)
+        finally:
+            channel.reply(response)
 
     def _serve_connection(self, conn: Any) -> None:
         try:
             request = conn.recv()
-            conn.send(self.handle_request(request))
+            method = str(request.get("method") or "").strip().lower() if isinstance(request, dict) else ""
+            params = request.get("params") if isinstance(request, dict) and isinstance(request.get("params"), dict) else {}
+            if method == "exec":
+                self._serve_exec(conn, params)
+            elif method == "clear_context":
+                self._serve_clear_context(conn)
+            else:
+                conn.send(self.handle_request(request))
         except Exception as exc:  # noqa: BLE001
             try:
                 conn.send({"ok": False, "error": {"code": "daemon_error", "message": str(exc)}})

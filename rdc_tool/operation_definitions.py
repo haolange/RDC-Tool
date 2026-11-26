@@ -1,6 +1,6 @@
 """Canonical public operation definitions. Catalogs and manuals are generated from this module."""
 from __future__ import annotations
-from rdc_tool.timeout_policy import REMOTE_CONNECT_DEFAULT_TIMEOUT_MS, remote_connect_timeout_policy
+from rdc_tool.timeout_policy import execution_budget
 
 OPERATIONS = [{'name': 'rd.buffer.get_data',
   'group': '3.7，缓冲区与网格数据访问 (Buffer & Mesh Data Access)',
@@ -2043,12 +2043,11 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'scope': 'global', 'effects': [], 'evidence_kind': None, 'path_inputs': []},
  {'name': 'rd.remote.connect',
   'preparation_policy': 'automatic',
-  'timeout_policy': remote_connect_timeout_policy(),
   'group': '3.12，远程连接与自动化抓帧 (Remote Capture & Target Control)',
   'description': '连接远程 RenderDoc server。选择 Android 设备即自动准备：缺失时安装、兼容时启动或借用、不兼容时覆盖，必要时降级或卸载重装目标辅助程序（可能清除其数据）。busy 和未知归属服务不抢占。',
-  'parameter_raw': 'host (string, optional)<br>port (integer, optional): default 38920<br>timeout_ms (integer, optional): total preparation and connection budget<br>options (object, optional): {transport, device_serial, local_port, push_config}',
-  'returns_raw': 'data: {context_id, remote_id, server_info}; success requires native handshake and Ping. Android bootstrap records ownership, install_mode, installed_apk, uninstalled_existing, expected_version, apk_sha256, installed_apk_path, installed_apk_sha256, apk_identity_status and apk_identity_reason. APK byte identity does not decide service compatibility. Missing installation receipts are resolved by serial read-only PackageManager and target APK identity checks within the original deadline; no blind reinstall. Unresolved completion returns remote_install_unconfirmed with details.device_action and bounded original install output. Progress checking/installing/starting/verifying is reported by daemon active_operation. Cancellation joins native actions, preserves installation facts and only releases owned resources; installed packages are not rolled back. timeout_policy declares the native argument/default and worker/transport/process join grace.',
-  'param_names': ['host', 'port', 'timeout_ms', 'options'],
+  'parameter_raw': 'host (string, optional)<br>port (integer, optional): default 38920<br>options (object, optional): {transport, device_serial, local_port, push_config}',
+  'returns_raw': 'data: {context_id, remote_id, server_info}; success requires native handshake and Ping. Android bootstrap records ownership, install_mode, installed_apk, uninstalled_existing, expected_version, apk_sha256, installed_apk_path, installed_apk_sha256, apk_identity_status and apk_identity_reason. APK byte identity does not decide service compatibility. Missing installation receipts are resolved by serial read-only PackageManager and target APK identity checks within the original connection budget; no blind reinstall. Unresolved completion returns remote_install_unconfirmed with details.device_action and bounded original install output. Progress checking/installing/starting/verifying is reported by daemon active_operation. Cancellation joins native actions, preserves installation facts and only releases owned resources; installed packages are not rolled back. The attempt runs under the request no-progress budget (execution_budget): every reported bootstrap stage moves its deadline forward, and a silent attempt ends with remote_connect_timeout before the worker watchdog fires.',
+  'param_names': ['host', 'port', 'options'],
   'prerequisites': [{'requires': 'capability.remote',
                      'via_tools': ['rd.core.init'],
                      'reason': 'Remote tools require remote capability to be enabled for the '
@@ -2060,8 +2059,6 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                                            'type': 'string'},
                                   'port': {'description': 'port (int, optional, default 38920)',
                                            'type': 'integer'},
-                                  'timeout_ms': {'description': f'total native deadline in milliseconds (default {REMOTE_CONNECT_DEFAULT_TIMEOUT_MS})',
-                                                 'type': 'integer', 'minimum': 1, 'default': REMOTE_CONNECT_DEFAULT_TIMEOUT_MS},
                                   'options': {'type': 'object',
                                               'properties': {'transport': {'type': 'string',
                                                                            'enum': ['renderdoc',
@@ -4513,3 +4510,9 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'effects': ['replay_position_temporary'],
   'evidence_kind': 'measurement',
   'path_inputs': []}]
+
+# Every operation is bounded by the same no-progress rule; callers choose the
+# budget per request within this published range.
+for _operation in OPERATIONS:
+    _operation["execution_budget"] = execution_budget()
+del _operation

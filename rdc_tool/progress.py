@@ -9,6 +9,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Protocol
 
+from rdc_tool import timeout_policy
+
 # Native-call frames: an enter frame is always sent when the call name changes,
 # otherwise at most once per interval; an exit frame only for calls slower than
 # the threshold. Together they bound the frame rate while every long native call
@@ -84,11 +86,13 @@ class ProgressReporter:
 
 
 class RequestScope:
-    """One worker request: its identity and the sink that carries its native-call frames."""
+    """One worker request: its identity, no-progress budget and the sink that carries its frames."""
 
-    def __init__(self, *, request_id: str, trace_id: str, sink: Optional[FrameSink] = None) -> None:
+    def __init__(self, *, request_id: str, trace_id: str, no_progress_ms: int = timeout_policy.DEFAULT_NO_PROGRESS_MS,
+                 sink: Optional[FrameSink] = None) -> None:
         self.request_id = str(request_id)
         self.trace_id = str(trace_id)
+        self.no_progress_ms = int(no_progress_ms)
         self.sink = sink
         self._lock = threading.Lock()
         self._last_name = ""
@@ -122,3 +126,9 @@ def current_reporter() -> ProgressReporter | None:
 
 def current_request() -> RequestScope | None:
     return _CURRENT_REQUEST.get()
+
+
+def current_no_progress_ms() -> int:
+    """The running request's no-progress budget, or the published default outside a request."""
+    scope = _CURRENT_REQUEST.get()
+    return scope.no_progress_ms if scope is not None else timeout_policy.DEFAULT_NO_PROGRESS_MS

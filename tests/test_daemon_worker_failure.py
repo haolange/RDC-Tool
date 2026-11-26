@@ -34,7 +34,7 @@ def test_worker_request_failure_is_not_replayed(monkeypatch, method, failure):
     monkeypatch.setattr(daemon_server, "load_context_state", lambda context: copy.deepcopy(state))
     monkeypatch.setattr(daemon_server, "save_context_state", lambda value, context: saved.append((copy.deepcopy(value), context)), raising=False)
     with pytest.raises(RuntimeError, match="outcome unknown"):
-        daemon._request_worker(method, {"operation": "rd.shader.revert_replacement"}, timeout=1)
+        daemon._request_worker(method, {"operation": "rd.shader.revert_replacement"}, no_progress_s=1)
     assert len(calls) == 1
     assert stops == [True]
     assert len(saved) == 1
@@ -62,7 +62,7 @@ def test_worker_request_success_keeps_state_and_controller(monkeypatch):
     daemon = object.__new__(daemon_server.DaemonRuntime)
     monkeypatch.setattr(daemon, "_ensure_worker", lambda: worker)
     monkeypatch.setattr(daemon_server, "load_context_state", lambda *args: pytest.fail("success must not quarantine"))
-    assert daemon._request_worker("exec", {"operation": "rd.shader.revert_replacement"}) == response
+    assert daemon._request_worker("exec", {"operation": "rd.shader.revert_replacement"}, no_progress_s=1) == response
     assert len(calls) == 1
     assert calls[0][1]["frame_sink"] is daemon
 
