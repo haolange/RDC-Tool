@@ -29,3 +29,14 @@ def test_eight_live_occupants_block_new_namespace(monkeypatch: pytest.MonkeyPatc
     assert raised.value.details["max_contexts"] == 8
     assert raised.value.details["occupying_contexts"] == sorted(live)
     assert "fresh-live-blocked" not in raised.value.details["occupying_contexts"]
+
+
+def test_persisted_context_state_carries_no_format_marker() -> None:
+    import json
+    from rdc_tool.runtime_state import context_state_path, load_context_state
+    stale = {**default_context_state("marker-free"), "schema_version": 1}
+    context_state_path("marker-free").write_text(json.dumps(stale), encoding="utf-8")
+    loaded = load_context_state("marker-free")
+    assert "schema_version" not in loaded
+    save_context_state(loaded, "marker-free")
+    assert "schema_version" not in json.loads(context_state_path("marker-free").read_text(encoding="utf-8"))

@@ -69,7 +69,6 @@ def default_context_state(context: Optional[str] = "default", *, limits: Any = N
     ctx = normalize_context_id(context)
     now_ms = _now_ms()
     return {
-        "schema_version": 1,
         "context_id": ctx,
         "current_capture_file_id": "",
         "current_session_id": "",
@@ -271,7 +270,6 @@ def normalize_context_state(
     if not isinstance(payload, dict):
         return state
 
-    state["schema_version"] = _normalize_int(payload.get("schema_version"), 1)
     state["context_id"] = normalize_context_id(payload.get("context_id") or context)
     state["current_capture_file_id"] = str(payload.get("current_capture_file_id") or "").strip()
     state["current_session_id"] = str(payload.get("current_session_id") or "").strip()
