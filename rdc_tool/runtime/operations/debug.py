@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any, Dict, Optional
 
+from rdc_tool import progress
 from rdc_tool.core.errors import CoreError
 from rdc_tool.runtime import (
     coerce,
@@ -16,6 +18,20 @@ from rdc_tool.runtime import (
     shader_debug,
     shader_values,
 )
+
+
+def _continue_debug_into(controller: Any, handle: Any) -> bool:
+    # The states join the handle inside the native call, so a cancellation that
+    # arrives while ContinueDebug runs cannot lose states the debugger produced.
+    states = controller.ContinueDebug(handle.debugger)
+    handle.pending_states.extend(states or [])
+    return bool(states)
+
+
+def _stop_if_cancelled() -> None:
+    # A cancelled request stops between debugger steps, never inside one.
+    if progress.cancel_requested():
+        raise asyncio.CancelledError()
 
 
 @replay_access._guard_rejection
@@ -53,11 +69,8 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
     controller = await replay_access._get_controller(session_id)
 
     async def continue_once() -> Optional[Any]:
-        if not handle.pending_states:
-            states = await renderdoc_api._offload(controller.ContinueDebug, handle.debugger)
-            if not states:
-                return None
-            handle.pending_states.extend(states)
+        if not handle.pending_states and not await renderdoc_api._offload(_continue_debug_into, controller, handle):
+            return None
         state = handle.pending_states.popleft()
         for change in state.changes:
             before_name = str(change.before.name or "")
@@ -80,6 +93,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
         deadline = settings._now_ms() + timeout_ms
         state = None
         while settings._now_ms() < deadline:
+            _stop_if_cancelled()
             state = await continue_once()
             if state is None:
                 handle.stopped_reason = "finished"
@@ -105,6 +119,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
         timeout_ms = coerce._as_int(args.get("timeout_ms"), 10000)
         deadline = settings._now_ms() + timeout_ms
         while settings._now_ms() < deadline:
+            _stop_if_cancelled()
             state = await continue_once()
             if state is None:
                 handle.stopped_reason = "finished"

@@ -35,6 +35,11 @@ DAEMON_HEARTBEAT_GAP_S = 15.0
 # A queued exec waits for the execution lock in slices, so it keeps answering
 # cancellation and heartbeats while another request runs.
 EXEC_LOCK_SLICE_S = 1.0
+# A cancelled running request must settle within this grace; otherwise the
+# worker is treated as stuck (cancel_unsettled) and terminated. The cancel
+# control request itself is bounded by the grace plus the stuck path.
+CANCEL_GRACE_S = 10.0
+CANCEL_REQUEST_TIMEOUT_S = 30.0
 # Worker process lifecycle: ready report, status and shutdown requests.
 WORKER_READY_TIMEOUT_S = 10.0
 WORKER_CONTROL_TIMEOUT_S = 5.0

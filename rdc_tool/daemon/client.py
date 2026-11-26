@@ -437,6 +437,22 @@ def daemon_request(
     return response
 
 
+def cancel_request(*, context: Optional[str] = "default", request_id: str) -> Dict[str, Any]:
+    """Cancel one queued or running request and return its receipt; never starts a daemon."""
+    chosen_ctx = normalize_context_id(context)
+    state = load_state(context=chosen_ctx)
+    if not state or not process.is_alive(daemon_process(state)):
+        # No live daemon owns the context, so no request of it can be queued or running.
+        return {"request_id": request_id, "trace_id": "", "outcome": "not_found", "settled_at_ms": epoch_ms()}
+    response = daemon_request("cancel", params={"request_id": request_id}, context=chosen_ctx, state=state,
+                              timeout=timeout_policy.CANCEL_REQUEST_TIMEOUT_S)
+    if not bool(response.get("ok")):
+        error = response.get("error") if isinstance(response.get("error"), dict) else {}
+        raise DaemonExecInterrupted(str(error.get("code") or "cancel_failed"), str(error.get("message") or "cancel failed"),
+                                    details=error.get("details") if isinstance(error.get("details"), dict) else {})
+    return dict(response.get("result") or {})
+
+
 def _wait_for_daemon_ready(state: Dict[str, Any]) -> bool:
     for delay in POLL_DELAYS:
         try:

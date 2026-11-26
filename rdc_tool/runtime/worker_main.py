@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import collections
 import faulthandler
 import io
 import json
 import logging
 import os
+import queue
 import sys
 import threading
 import time
@@ -18,6 +20,7 @@ from dataclasses import asdict
 from typing import Any, Awaitable, Dict
 
 from rdc_tool.context_snapshot import normalize_context_id
+from rdc_tool.core.contracts import canonical_error
 from rdc_tool.io_utils import safe_json_text, safe_stream_write
 from rdc_tool.platform import process
 from rdc_tool.platform.process import ProcessIdentity
@@ -113,12 +116,102 @@ class _WorkerFrameSink:
                     "phase": frame.phase, "ts_ms": frame.ts_ms})
 
 
+class _RequestControl:
+    """What the stdin reader needs to cancel the running request.
+
+    A cancel line is handled on the reader thread, never behind the request it
+    cancels: it sets the request's event (loops inside one native call poll it)
+    and cancels the request's task at its next await, which waits for any
+    running native call to settle first. A cancel that overtakes its exec line
+    is remembered briefly, so the request is refused before it starts.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._active: tuple[RequestScope, asyncio.Task, asyncio.AbstractEventLoop] | None = None
+        self._early: "collections.deque[tuple[str, float]]" = collections.deque(maxlen=32)
+
+    def begin(self, scope: RequestScope) -> bool:
+        """Register the running request; False when it was cancelled before it started."""
+        now = time.monotonic()
+        with self._lock:
+            early = [item for item in self._early if item[0] == scope.request_id
+                     and now - item[1] <= timeout_policy.CANCEL_GRACE_S]
+            if early:
+                self._early.remove(early[0])
+                scope.cancelled.set()
+                return False
+            task = asyncio.current_task()
+            assert task is not None
+            self._active = (scope, task, asyncio.get_running_loop())
+            return True
+
+    def end(self) -> None:
+        with self._lock:
+            self._active = None
+
+    def cancel(self, request_id: str) -> None:
+        with self._lock:
+            active = self._active
+            if active is None or active[0].request_id != request_id:
+                self._early.append((request_id, time.monotonic()))
+                return
+        scope, task, loop = active
+        scope.cancelled.set()
+        loop.call_soon_threadsafe(task.cancel)
+
+
+_CONTROL = _RequestControl()
+
+
+# The result of a request that was cancelled before it started.
+_NOT_STARTED = object()
+
+
 async def _in_request(scope: RequestScope, work: Awaitable[Any]) -> Any:
     token = progress._CURRENT_REQUEST.set(scope)
     try:
-        return await work
+        if not _CONTROL.begin(scope):
+            work.close()  # type: ignore[attr-defined]
+            return _NOT_STARTED
+        try:
+            return await work
+        finally:
+            _CONTROL.end()
     finally:
         progress._CURRENT_REQUEST.reset(token)
+
+
+def _cancelled_envelope(operation: str, scope: RequestScope, *, started: bool) -> Dict[str, Any]:
+    # A started request stopped at a native-call boundary: native calls that had
+    # completed are not rolled back, and the operation's own cleanup has run.
+    return canonical_error(
+        result_kind=operation, code="operation_cancelled", category="runtime",
+        message=f"{operation} was cancelled" + ("" if started else " before it started"),
+        details={"failure_stage": "running" if started else "queued", "reason": "cancel_requested",
+                 "outcome": "cancelled" if started else "not_started", "request_id": scope.request_id,
+                 "trace_id": scope.trace_id},
+        trace_id=scope.trace_id, transport="daemon")
+
+
+def _read_requests(stream: Any, requests: "queue.Queue[Dict[str, Any] | None]") -> None:
+    """The dedicated stdin reader: control lines act at once, requests queue for the main loop."""
+    try:
+        for line in stream:
+            text = str(line).strip()
+            if not text:
+                continue
+            try:
+                request = json.loads(text)
+            except Exception as exc:  # noqa: BLE001
+                _emit({"id": "", "ok": False, "error": {"message": f"invalid request: {exc}"}})
+                continue
+            if isinstance(request, dict) and request.get("kind") == "cancel":
+                _CONTROL.cancel(str(request.get("request_id") or ""))
+                continue
+            requests.put(request if isinstance(request, dict) else {})
+    finally:
+        requests.put(None)
 
 
 def _run_request(runner: asyncio.Runner, scope: RequestScope, work: Awaitable[Any]) -> Any:
@@ -187,17 +280,11 @@ def main(argv: list[str] | None = None) -> int:
     with asyncio.Runner() as runner:
         runner.get_loop().set_default_executor(ThreadPoolExecutor(max_workers=1, thread_name_prefix="rdc-tool-replay"))
         shutdown_complete = False
+        requests: "queue.Queue[Dict[str, Any] | None]" = queue.Queue()
+        threading.Thread(target=_read_requests, args=(sys.stdin, requests), name="rdc-tool-worker-stdin",
+                         daemon=True).start()
         try:
-            for line in sys.stdin:
-                text = str(line).strip()
-                if not text:
-                    continue
-                try:
-                    request = json.loads(text)
-                except Exception as exc:  # noqa: BLE001
-                    _emit({"id": "", "ok": False, "error": {"message": f"invalid request: {exc}"}})
-                    continue
-
+            while (request := requests.get()) is not None:
                 req_id = str(request.get("id") or "")
                 method = str(request.get("method") or "").strip()
                 params = request.get("params") if isinstance(request.get("params"), dict) else {}
@@ -212,17 +299,22 @@ def main(argv: list[str] | None = None) -> int:
                             request_id=str(params.get("request_id") or req_id), sink=sink,
                             trace_id=str(params.get("trace_id") or f"trc_{uuid.uuid4().hex[:12]}"),
                             no_progress_ms=int(params.get("no_progress_ms") or timeout_policy.DEFAULT_NO_PROGRESS_MS))
-                        result = _run_request(runner, scope,
-                            dispatch.dispatch_operation(
-                                operation,
-                                dict(params.get("args") or {}),
-                                transport=str(params.get("transport") or "daemon"),
-                                remote=bool(params.get("remote", False)),
-                                context_id=context_id,
-                                progress_sink=sink,
-                                trace_id=scope.trace_id,
+                        try:
+                            result = _run_request(runner, scope,
+                                dispatch.dispatch_operation(
+                                    operation,
+                                    dict(params.get("args") or {}),
+                                    transport=str(params.get("transport") or "daemon"),
+                                    remote=bool(params.get("remote", False)),
+                                    context_id=context_id,
+                                    progress_sink=sink,
+                                    trace_id=scope.trace_id,
+                                )
                             )
-                        )
+                        except asyncio.CancelledError:
+                            result = _cancelled_envelope(operation, scope, started=True)
+                        if result is _NOT_STARTED:
+                            result = _cancelled_envelope(operation, scope, started=False)
                         observed = loaded_runtime()
                         if not cleanup and observed["status"] == "mismatch":
                             raise RuntimeError("Loaded RenderDoc paths differ from the configured runtime")

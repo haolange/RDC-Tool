@@ -29,6 +29,10 @@ _STDERR_TAIL_LINES = 400
 STACK_TAIL_CHARS = 8192
 
 
+class RequestCancelled(RuntimeError):
+    """The request was cancelled before it reached the worker."""
+
+
 class WorkerFailure(RuntimeError):
     """A worker request that ended without a reply; its outcome is unknown."""
 
@@ -78,7 +82,11 @@ class RuntimeWorkerProcess:
         self._reader_thread: Optional[threading.Thread] = None
         self._stderr_thread: Optional[threading.Thread] = None
         self._queue: "queue.Queue[Dict[str, Any]]" = queue.Queue()
-        self._io_lock = threading.Lock()
+        # One request is in flight at a time; control lines (cancel) are written
+        # while it runs, so stdin has its own lock.
+        self._request_lock = threading.Lock()
+        self._stdin_lock = threading.Lock()
+        self._termination_reason: Optional[str] = None
         self._request_seq = 0
         self._runtime: Optional[Dict[str, Any]] = None
         self._birth = ""
@@ -305,15 +313,37 @@ class RuntimeWorkerProcess:
                              worker=identity, exit_confirmed=exited, stack_log=self._stack_log(since),
                              trace_id=trace_id)
 
+    def send_cancel(self, request_id: str) -> bool:
+        """Write a cancel control line for the running request; False when no worker can receive it."""
+        proc = self._proc
+        if proc is None or proc.stdin is None or proc.poll() is not None:
+            return False
+        with self._stdin_lock:
+            try:
+                proc.stdin.write(safe_json_text({"kind": "cancel", "request_id": str(request_id)}) + "\n")
+                proc.stdin.flush()
+            except OSError:
+                return False
+        return True
+
+    def terminate_running(self, reason: str) -> None:
+        """Terminate the worker under a running request; that request then fails as worker_stuck."""
+        proc = self._proc
+        if proc is None:
+            return
+        self._termination_reason = reason
+        self._terminate(proc)
+
     def request(self, method: str, params: Optional[Dict[str, Any]] = None, *, no_progress_s: float,
-                frame_sink: FrameSink | None = None) -> Dict[str, Any]:
+                frame_sink: FrameSink | None = None, cancelled: Optional[threading.Event] = None) -> Dict[str, Any]:
         """Send one request and wait for its reply while frames keep arriving.
 
         There is no total deadline: every frame of this request moves the
         deadline forward by ``no_progress_s``. A silent worker is terminated
         with its descendants after its stack dump; an exited worker is lost.
+        A request whose ``cancelled`` event is already set is never sent.
         """
-        with self._io_lock:
+        with self._request_lock:
             if not self.is_running():
                 raise RuntimeError("worker process is unavailable; use the owning daemon lifecycle")
             proc = self._proc
@@ -325,15 +355,22 @@ class RuntimeWorkerProcess:
             with self._stderr_lock:
                 since = self._stderr_count
             self._dump_seen.clear()
+            self._termination_reason = None
             trace_id = str((params or {}).get("trace_id") or "")
-            try:
-                proc.stdin.write(
-                    safe_json_text({"id": req_id, "method": str(method), "params": dict(params or {})}) + "\n"
-                )
-                proc.stdin.flush()
-            except OSError as exc:
-                raise WorkerFailure("worker_request_failed", "stdin_write_failed", f"Worker request could not be sent: {exc}",
-                                    worker=identity, stack_log=self._stack_log(since), trace_id=trace_id) from exc
+            # The cancel check and the send share the stdin lock with send_cancel:
+            # a cancel either stops the request here or reaches the worker after it.
+            with self._stdin_lock:
+                if cancelled is not None and cancelled.is_set():
+                    raise RequestCancelled(f"{method} was cancelled before it was sent")
+                try:
+                    proc.stdin.write(
+                        safe_json_text({"id": req_id, "method": str(method), "params": dict(params or {})}) + "\n"
+                    )
+                    proc.stdin.flush()
+                except OSError as exc:
+                    raise WorkerFailure("worker_request_failed", "stdin_write_failed",
+                                        f"Worker request could not be sent: {exc}", worker=identity,
+                                        stack_log=self._stack_log(since), trace_id=trace_id) from exc
 
             window = max(1.0, float(no_progress_s))
             deadline = time.monotonic() + window
@@ -345,6 +382,11 @@ class RuntimeWorkerProcess:
                     continue
                 if str(payload.get("kind") or "") == "eof":
                     exited = self._await_exit(proc)
+                    if self._termination_reason:
+                        raise WorkerFailure("worker_stuck", self._termination_reason,
+                                            f"Worker did not settle ({self._termination_reason}); it was terminated",
+                                            worker=identity, exit_confirmed=exited, stack_log=self._stack_log(since),
+                                            trace_id=trace_id)
                     raise WorkerFailure("worker_lost", "worker_exited", "Worker exited before replying",
                                         worker=identity, exit_confirmed=exited, stack_log=self._stack_log(since),
                                         trace_id=trace_id)

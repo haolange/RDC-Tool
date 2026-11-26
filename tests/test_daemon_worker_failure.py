@@ -127,7 +127,7 @@ def test_exec_failure_is_one_canonical_operation_error(monkeypatch, code, reason
     monkeypatch.setattr(daemon, "_persist_state", lambda: None)
     monkeypatch.setattr(daemon, "_refresh_state_from_runtime_locked", lambda: None)
 
-    def request_worker(method, params, *, no_progress_s, frames):
+    def request_worker(method, params, *, no_progress_s, frames, cancelled=None):
         with daemon._state_lock:
             daemon.state["active_operation"].update(stage="opening", native_call={"name": "OpenCapture", "phase": "enter",
                                                                                    "at_ms": 1700000000000})
@@ -264,16 +264,16 @@ def test_worker_blocked_while_holding_the_gil_is_dumped_killed_and_quarantined(m
     context = "gil-holding-worker"
     save_context_state({"sessions": {"owned": {"session_id": "owned", "is_live": True}}, "captures": {}}, context)
     monkeypatch.setattr(daemon_worker, "child_python_argv",
-                        lambda module, *args: [sys.executable, str(FAKES / "gil_holding_worker.py"), *args])
+                        lambda module, *args: [sys.executable, str(FAKES / "scripted_worker.py"), *args])
     monkeypatch.setattr(daemon_worker, "native_manifest_status", lambda root: {"status": "absent"})
     daemon = daemon_server.DaemonRuntime(endpoint=Endpoint("fixture"), token="fixture", daemon_context=context)
     monkeypatch.setattr(daemon, "_persist_state", lambda: None)
     channel = daemon_server._ClientChannel(None, "req-gil", stream=False)
     try:
-        response = daemon._run_exec("rd.test.block", {}, transport="cli", remote=False, request_id="req-gil",
+        response = daemon._run_exec("test.block_gil", {}, transport="cli", remote=False, request_id="req-gil",
                                     no_progress_ms=4000, channel=channel)
         envelope = response["result"]
-        assert (envelope["result_kind"], envelope["error"]["code"]) == ("rd.test.block", "worker_stuck")
+        assert (envelope["result_kind"], envelope["error"]["code"]) == ("test.block_gil", "worker_stuck")
         details = envelope["error"]["details"]
         assert (details["reason"], details["outcome"], details["request_id"]) == ("no_progress", "unknown", "req-gil")
         assert details["worker_exit_confirmed"] is True
@@ -282,7 +282,7 @@ def test_worker_blocked_while_holding_the_gil_is_dumped_killed_and_quarantined(m
         assert details["stack_log"]["path"].endswith(f"worker_{context}.log")
         tail = details["stack_log"]["tail"]
         assert tail.startswith("Timeout (")
-        assert "gil_holding_worker.py" in tail and "blocking_operation" in tail
+        assert "scripted_worker.py" in tail and "scripted_operation" in tail and "in match" in tail
         worker = ProcessIdentity(details["worker"]["pid"], details["worker"]["start_generation"])
         assert process.probe(worker) is Liveness.EXITED
         log = Path(details["stack_log"]["path"]).read_text(encoding="utf-8")

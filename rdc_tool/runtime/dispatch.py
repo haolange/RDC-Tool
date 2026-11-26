@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import Any, Dict, Optional
 
@@ -95,6 +96,13 @@ async def dispatch_operation(
         live_state.logger.info("op.done transport=%s op=%s trace_id=%s ok=%s duration_ms=%s", transport, operation,
                                str(meta.get("trace_id") or ctx.trace_id), bool(payload.get("ok")), meta.get("duration_ms"))
         return payload
+    except asyncio.CancelledError:
+        # The operation history records the cancellation; the request owner
+        # reports it as operation_cancelled.
+        oplog._record_operation_finish(chosen_context_id, trace_id=ctx.trace_id, payload=canonical_error(
+            result_kind=str(operation), code="operation_cancelled", category="runtime",
+            message=f"{operation} was cancelled", trace_id=ctx.trace_id, transport=ctx.transport))
+        raise
     finally:
         if parent_rejection_scope is not None and rejection_scope.get("effects_attempted"):
             parent_rejection_scope["effects_attempted"] = True

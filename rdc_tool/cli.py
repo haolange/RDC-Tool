@@ -22,6 +22,7 @@ from rdc_tool.core.contracts import SCHEMA_VERSION, canonical_error, canonical_s
 from rdc_tool.daemon.client import (
     DaemonExecInterrupted,
     attach_client,
+    cancel_request,
     cleanup_stale_daemon_states,
     clear_context,
     daemon_request,
@@ -1395,6 +1396,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p_daemon_detach = s_daemon.add_parser("detach", help=argparse.SUPPRESS)
     p_daemon_detach.add_argument("--client-id", required=True)
     s_daemon.add_parser("cleanup", help=argparse.SUPPRESS)
+    p_daemon_cancel = s_daemon.add_parser("cancel", help="Cancel a queued or running request by its --request-id")
+    p_daemon_cancel.add_argument("--request-id", required=True)
 
     p_context = sub.add_parser("context", help="Context state helpers")
     s_context = p_context.add_subparsers(dest="context_cmd", required=True)
@@ -1659,6 +1662,19 @@ async def _main_async(args: argparse.Namespace) -> int:
         if args.daemon_cmd == "cleanup":
             cleaned = cleanup_stale_daemon_states()
             _print_json(canonical_success(result_kind="rdc_tool.daemon.cleanup", data={"cleaned": cleaned}, transport="cli"))
+            return EXIT_OK
+        if args.daemon_cmd == "cancel":
+            if not _REQUEST_ID_RE.fullmatch(str(args.request_id)):
+                _print_json(canonical_error(result_kind="rdc_tool.daemon.cancel", code="invalid_request_id",
+                                            category="validation", message="--request-id must be 1-128 characters of [A-Za-z0-9._:-]",
+                                            details={"request_id": args.request_id}, transport="cli"))
+                return EXIT_RUNTIME_ERR
+            try:
+                receipt = cancel_request(context=ctx, request_id=str(args.request_id))
+            except Exception as exc:  # noqa: BLE001
+                _print_json(_exception_error_payload("rdc_tool.daemon.cancel", exc))
+                return EXIT_RUNTIME_ERR
+            _print_json(canonical_success(result_kind="rdc_tool.daemon.cancel", data=receipt, transport="cli"))
             return EXIT_OK
 
     if args.command == "context":

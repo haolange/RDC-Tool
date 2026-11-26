@@ -86,7 +86,11 @@ class ProgressReporter:
 
 
 class RequestScope:
-    """One worker request: its identity, no-progress budget and the sink that carries its frames."""
+    """One worker request: its identity, no-progress budget, cancellation and the sink that carries its frames.
+
+    ``cancelled`` is set by the worker's stdin reader when the daemon cancels the
+    request; loops that run inside one native call poll it.
+    """
 
     def __init__(self, *, request_id: str, trace_id: str, no_progress_ms: int = timeout_policy.DEFAULT_NO_PROGRESS_MS,
                  sink: Optional[FrameSink] = None) -> None:
@@ -94,6 +98,7 @@ class RequestScope:
         self.trace_id = str(trace_id)
         self.no_progress_ms = int(no_progress_ms)
         self.sink = sink
+        self.cancelled = threading.Event()
         self._lock = threading.Lock()
         self._last_name = ""
         self._last_enter = 0.0
@@ -126,6 +131,12 @@ def current_reporter() -> ProgressReporter | None:
 
 def current_request() -> RequestScope | None:
     return _CURRENT_REQUEST.get()
+
+
+def cancel_requested() -> bool:
+    """True once the running request has been cancelled."""
+    scope = _CURRENT_REQUEST.get()
+    return scope is not None and scope.cancelled.is_set()
 
 
 def current_no_progress_ms() -> int:

@@ -73,9 +73,11 @@ _connection_budget: contextvars.ContextVar[Optional[ConnectionBudget]] = context
 
 
 def _request_budget(cancelled: Optional[threading.Event] = None) -> ConnectionBudget:
-    """A connection budget for the running request: its cooperative no-progress window."""
+    """A connection budget for the running request: its cooperative no-progress
+    window, cancelled together with the request."""
     window_s = timeout_policy.cooperative_no_progress_s(progress.current_no_progress_ms())
-    return ConnectionBudget(int(window_s * 1000), cancelled)
+    scope = progress.current_request()
+    return ConnectionBudget(int(window_s * 1000), cancelled or (scope.cancelled if scope is not None else None))
 
 
 def connection_progressed() -> None:

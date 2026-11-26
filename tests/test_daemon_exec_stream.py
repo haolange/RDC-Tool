@@ -122,7 +122,7 @@ def test_daemon_streams_frames_only_on_request_and_replies_last(monkeypatch, str
     daemon = _daemon(monkeypatch)
     calls = []
 
-    def request_worker(method, params, *, no_progress_s, frames):
+    def request_worker(method, params, *, no_progress_s, frames, cancelled=None):
         calls.append((method, params, no_progress_s))
         frames.publish(ProgressEvent(trace_id=params["trace_id"], operation=params["operation"], stage="opening",
                                      message="Opening"))

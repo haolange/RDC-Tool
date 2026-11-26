@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import collections
 import logging
 import os
 import signal
@@ -23,7 +24,7 @@ from rdc_tool.daemon.state import (
     owner_process, process_identity, public_view, save_state, state_path, utc_now_iso,
 )
 from rdc_tool.daemon.ownership import OwnerLease
-from rdc_tool.daemon.worker import RuntimeWorkerProcess, WorkerFailure
+from rdc_tool.daemon.worker import RequestCancelled, RuntimeWorkerProcess, WorkerFailure
 from rdc_tool.platform import ipc, process
 from rdc_tool.platform.ipc import Endpoint
 from rdc_tool.progress import NativeCallFrame, ProgressEvent
@@ -35,6 +36,9 @@ logger = logging.getLogger("rdc_tool.daemon")
 # including listener/worker teardown and interpreter shutdown.
 _PROCESS_OWNER_LEASES: list[OwnerLease] = []
 WORKER_LIFECYCLE_LIMIT = 16
+# Settled requests are remembered briefly so a cancel that loses the race to
+# completion still gets a truthful receipt.
+_SETTLED_REQUEST_LIMIT = 32
 # A persisted worker exit keeps the head of its stack dump; the full tail stays
 # in worker.log and in the failing request's error envelope.
 _PERSISTED_STACK_TAIL_CHARS = 2048
@@ -60,6 +64,30 @@ class _ClientChannel:
         self.request_id = request_id
         self.stream = stream
         self.state = "queued"
+        self.trace_id = ""
+        self.cancel_requested = threading.Event()
+        self.settled = threading.Event()
+        self.receipt: Dict[str, Any] = {}
+
+    def settle(self, response: Dict[str, Any]) -> None:
+        """Record how the request ended, for a cancel receipt."""
+        result = response.get("result") if isinstance(response.get("result"), dict) else {}
+        error = result.get("error") if isinstance(result.get("error"), dict) else {}
+        code = str(error.get("code") or "")
+        details = error.get("details") if isinstance(error.get("details"), dict) else {}
+        receipt: Dict[str, Any] = {"request_id": self.request_id, "trace_id": self.trace_id, "settled_at_ms": epoch_ms()}
+        if code == "operation_cancelled" or (code == "worker_unavailable" and self.cancel_requested.is_set()):
+            receipt["outcome"] = "cancelled"
+        elif code in {"worker_stuck", "worker_lost", "worker_request_failed"}:
+            worker = details.get("worker") if isinstance(details.get("worker"), dict) else {}
+            receipt["outcome"] = "terminated"
+            receipt["worker_exit"] = {"pid": worker.get("pid"), "start_generation": worker.get("start_generation"),
+                                      "reason": details.get("reason"),
+                                      "exit_confirmed": bool(details.get("worker_exit_confirmed"))}
+        else:
+            receipt["outcome"] = "completed"
+        self.receipt = receipt
+        self.settled.set()
 
     def _send(self, message: Dict[str, Any]) -> None:
         with self._lock:
@@ -188,6 +216,7 @@ class DaemonRuntime:
         self._owner_lease: OwnerLease | None = None
         self._requests_lock = threading.Lock()
         self._requests: Dict[str, _ClientChannel] = {}
+        self._settled: "collections.OrderedDict[str, Dict[str, Any]]" = collections.OrderedDict()
 
     def _persist_state(self) -> None:
         with self._state_lock:
@@ -446,14 +475,15 @@ class DaemonRuntime:
         return bool(sessions)
 
     def _request_worker(self, method: str, params: Dict[str, Any], *, no_progress_s: float,
-                        frames: Any = None) -> Dict[str, Any]:
+                        frames: Any = None, cancelled: threading.Event | None = None) -> Dict[str, Any]:
         try:
             worker = self._ensure_worker()
         except Exception as exc:
             raise WorkerUnavailable(str(exc)) from exc
         request_id = str(params.get("request_id") or "")
         try:
-            response = worker.request(method, params, no_progress_s=no_progress_s, frame_sink=frames or self)
+            response = worker.request(method, params, no_progress_s=no_progress_s, frame_sink=frames or self,
+                                      **({"cancelled": cancelled} if cancelled is not None else {}))
             if not bool(response.get("ok")):
                 error = response.get("error") if isinstance(response.get("error"), dict) else {}
                 raise WorkerFailure("worker_request_failed", "worker_error",
@@ -461,6 +491,8 @@ class DaemonRuntime:
                                     worker=worker.previous_identity(), stack_log={"path": worker.log_path, "tail": ""},
                                     trace_id=str(params.get("trace_id") or ""))
             return dict(response)
+        except RequestCancelled:
+            raise
         except Exception as exc:
             # A lost response can follow an applied mutation. Never resubmit it
             # to a fresh worker or recover the old controller implicitly.
@@ -584,16 +616,31 @@ class DaemonRuntime:
         self._persist_state()
         return self._status_payload()
 
-    def _acquire_exec_lock(self, channel: _ClientChannel) -> None:
-        # Slices keep a queued request observable while another one runs.
+    def _acquire_exec_lock(self, channel: _ClientChannel) -> bool:
+        """Take the execution lock in slices; False when the request was cancelled while queued."""
         while not self._exec_lock.acquire(timeout=timeout_policy.EXEC_LOCK_SLICE_S):
-            pass
+            if channel.cancel_requested.is_set():
+                return False
+        if channel.cancel_requested.is_set():
+            self._exec_lock.release()
+            return False
         channel.state = "running"
+        return True
+
+    @staticmethod
+    def _not_started(operation: str, channel: _ClientChannel, transport: str) -> Dict[str, Any]:
+        return {"ok": True, "result": canonical_error(
+            result_kind=operation, code="operation_cancelled", category="runtime",
+            message=f"{operation} was cancelled before it started",
+            details={"failure_stage": "queued", "reason": "cancel_requested", "outcome": "not_started",
+                     "request_id": channel.request_id, "trace_id": channel.trace_id},
+            trace_id=channel.trace_id, transport=transport)}
 
     def _run_exec(self, operation: str, args: Dict[str, Any], *, transport: str, remote: bool, request_id: str,
                   no_progress_ms: int, channel: _ClientChannel) -> Dict[str, Any]:
-        trace_id = f"trc_{uuid.uuid4().hex[:12]}"
-        self._acquire_exec_lock(channel)
+        trace_id = channel.trace_id = f"trc_{uuid.uuid4().hex[:12]}"
+        if not self._acquire_exec_lock(channel):
+            return self._not_started(operation, channel, transport)
         try:
             with self._state_lock:
                 self.state["active_request_count"] = int(self.state.get("active_request_count") or 0) + 1
@@ -621,6 +668,7 @@ class DaemonRuntime:
                     },
                     no_progress_s=timeout_policy.watchdog_s(no_progress_ms),
                     frames=_RequestFrames(self, channel),
+                    cancelled=channel.cancel_requested,
                 )
                 result = response.get("result")
                 with self._state_lock:
@@ -634,6 +682,8 @@ class DaemonRuntime:
                 return {"ok": True, "result": canonical_error(
                     result_kind=operation, code=failure.code, category="runtime", message=str(failure),
                     details=details, trace_id=details["trace_id"], transport=transport)}
+            except RequestCancelled:
+                return self._not_started(operation, channel, transport)
             except WorkerUnavailable as exc:
                 with self._state_lock:
                     self._refresh_state_from_runtime_locked()
@@ -784,6 +834,8 @@ class DaemonRuntime:
                 self.state["last_activity_at"] = utc_now_iso()
             self._persist_state()
             return self._status_payload()
+        if method == "cancel":
+            return self._cancel(params)
         if method == "get_state":
             self._touch_activity()
             self._persist_state()
@@ -801,6 +853,45 @@ class DaemonRuntime:
         with self._requests_lock:
             if self._requests.get(channel.request_id) is channel:
                 del self._requests[channel.request_id]
+            if channel.receipt:
+                self._settled[channel.request_id] = channel.receipt
+                while len(self._settled) > _SETTLED_REQUEST_LIMIT:
+                    self._settled.popitem(last=False)
+
+    def _cancel(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Cancel one request without taking the execution lock.
+
+        A queued request ends as operation_cancelled without running. A running
+        one is asked to stop at its next native-call boundary; if it has not
+        settled within the cancel grace, the worker is terminated as stuck
+        (cancel_unsettled). The receipt says how the request actually ended.
+        """
+        request_id = str(params.get("request_id") or "").strip()
+        if not request_id:
+            return {"ok": False, "error": {"code": "bad_request", "category": "validation",
+                                           "message": "request_id is required"}}
+        with self._requests_lock:
+            channel = self._requests.get(request_id)
+            settled = self._settled.get(request_id)
+        if channel is None:
+            receipt = dict(settled) if settled else {"request_id": request_id, "trace_id": "", "outcome": "not_found",
+                                                     "settled_at_ms": epoch_ms()}
+            return {"ok": True, "result": receipt}
+        logger.info("daemon.cancel request_id=%s state=%s", request_id, channel.state)
+        channel.cancel_requested.set()
+        worker = self._worker
+        if channel.state == "running" and worker is not None:
+            worker.send_cancel(request_id)
+        if not channel.settled.wait(timeout_policy.CANCEL_GRACE_S):
+            if worker is not None:
+                logger.warning("daemon.cancel request_id=%s did not settle; terminating the worker", request_id)
+                worker.terminate_running("cancel_unsettled")
+            channel.settled.wait(timeout_policy.STACK_DUMP_GRACE_S + timeout_policy.WORKER_EXIT_TIMEOUT_S * 2)
+        if not channel.settled.is_set():
+            return {"ok": False, "error": {"code": "cancel_unsettled", "category": "runtime",
+                                           "message": f"request {request_id} did not settle after its worker was terminated",
+                                           "details": {"request_id": request_id, "trace_id": channel.trace_id}}}
+        return {"ok": True, "result": dict(channel.receipt)}
 
     def _serve_exec(self, conn: Any, params: Dict[str, Any]) -> None:
         operation = str(params.get("operation") or "").strip()
@@ -833,6 +924,7 @@ class DaemonRuntime:
                         meta.get("trace_id", ""), bool(isinstance(payload, dict) and payload.get("ok")),
                         meta.get("duration_ms"))
         finally:
+            channel.settle(response)
             self._unregister_request(channel)
             channel.reply(response)
 
