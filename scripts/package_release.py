@@ -183,7 +183,7 @@ def _write_release_metadata(staging_root: Path, files: list[dict[str, object]], 
     for name, tool in runtime_manifest.get("bundled_tools", {}).items():
         licenses.append({"name": name, **tool})
     sbom = {
-        "schema": "rdc-tool.sbom.v1",
+        "schema": "rdc-tool.sbom",
         "name": PACKAGE_PREFIX,
         "version": TOOL_VERSION,
         "platform": platform_host.host_target(),
