@@ -495,6 +495,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
 
 def _version_payload() -> Dict[str, Any]:
     root = tools_root().resolve()
+    catalog = catalog_payload()
     return canonical_success(
         result_kind="rdc_tool.version",
         data={
@@ -511,6 +512,13 @@ def _version_payload() -> Dict[str, Any]:
             "compatibility": {
                 "stability": "current-contract",
                 "json_envelope": "stable",
+            },
+            # The operation catalog this installation serves; callers pair (tool_version, fingerprint) with the
+            # catalog snapshot they were built against.
+            "catalog": {
+                "schema_version": catalog["schema_version"],
+                "fingerprint": catalog["fingerprint"],
+                "tool_count": catalog["tool_count"],
             },
         },
         transport="cli",
