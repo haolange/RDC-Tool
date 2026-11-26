@@ -192,6 +192,8 @@ Windows 安装自带 ADB 及其所需 DLL、`spirv-as` 与 `spirv-dis`。默认�
 
 `rd.remote.connect` 在调用方的 daemon context 中完成 Android 准备与连接（catalog 声明 `preparation_policy: automatic`）。选择设备或调用它即授权自动准备目标 RenderDoc helper：设备上已有 helper 在运行时借用它，不安装、不改配置、不启动；没有运行的 helper 时准备并启动自有 helper，缺包则安装，versionCode 不同则覆盖安装或降级，签名冲突则卸载重装（会清除该包数据）。原生握手报告版本不兼容时，核对身份后停止该 helper 并覆盖安装。每次变更前都核对所选设备、已知 helper 包名与可读的已安装身份，无法识别时返回 `android_helper_state_unknown`。busy 端点从不修复或抢占；兼容性由原生握手决定，APK 字节不同不会导致兼容服务被替换。Android versionName 可能是源码提交哈希而非数字版本。
 
+设备预检直接读取所配置 ADB server 的 `host:devices-l` 完整响应。显式序列号只准入同一在线设备，查询失败或设备不在线时停止准备。
+
 自有 helper 按设备 SDK 级别解析 RenderDoc 配置目录（低于 30 为 `Android/data`，30 起为 `Android/media`）。只有本次连接安装或覆盖了 APK 且设备上缺少 `renderdoc.conf` 时才推送空的默认配置（`options.push_config=false` 可关闭）；已有普通文件保持不变，SDK 或文件状态未知时在启动前失败。
 
 helper PID 不是服务占用的证据：成功要求实际的 RenderDoc 连接与 Ping。同一连接预算覆盖 bootstrap 与连接（见下文“连接预算”），socket 就绪等待不超过 15 秒。借用的服务只关闭连接；只有经验证的自有 PID 与 ADB forward 可以被移除。进程与 forward 所有权独立于安装事实，历史 bootstrap 元数据从不授予新的变更权限。连接内与跨 daemon 重启的资源归属见 [session-model.md](session-model.md)。

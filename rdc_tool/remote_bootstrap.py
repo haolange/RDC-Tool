@@ -793,28 +793,22 @@ def _select_remote_socket_port(requested_port: int, before_ports: list[int], aft
     )
 
 
-def _select_android_device(adb_path: str, requested_serial: str) -> AdbDevice:
-    requested_serial = str(requested_serial or "").strip()
-    if requested_serial:
-        command = [adb_path, "-s", requested_serial, "get-state"]
-        probe = _run_subprocess(command, timeout_s=10.0,
-            error_code="adb_device_query_failed", error_message="Failed to query selected Android device")
-        state = probe.stdout.strip()
-        if not re.fullmatch(r"[a-z][a-z_-]{0,31}", state):
-            raise AndroidRemoteBootstrapError("adb_device_invalid_response", "Selected Android device query returned an invalid state",
-                details={"stage": "adb_device_state", "command": command, "returncode": probe.returncode,
-                    "stdout": str(probe.stdout or "")[:4096], "stderr": str(probe.stderr or "")[:4096]})
-        device = choose_adb_device([AdbDevice(requested_serial, state)], requested_serial)
-    else:
-        command = [adb_path, "devices", "-l"]
-        device_proc = _run_subprocess(command, timeout_s=10.0,
-            error_code="adb_devices_failed", error_message="Failed to query adb devices")
-        if not device_proc.stdout.lstrip().startswith("List of devices attached"):
-            raise AndroidRemoteBootstrapError("adb_devices_invalid_response", "ADB device query returned an invalid response",
-                details={"stage": "adb_device_state", "command": command, "returncode": device_proc.returncode,
-                    "stdout": str(device_proc.stdout or "")[:4096], "stderr": str(device_proc.stderr or "")[:4096]})
-        device = choose_adb_device(parse_adb_devices(device_proc.stdout))
-    return device
+def _select_android_device(requested_serial: str) -> AdbDevice:
+    """Read the server's authoritative device table before preparing any helper."""
+    timeout = _remaining(10.0)
+    try:
+        endpoint = _adb_server_endpoint()
+    except AndroidRemoteBootstrapError as exc:
+        raise AndroidRemoteBootstrapError("adb_devices_failed", "Invalid ADB device query endpoint") from exc
+    try:
+        payload = _query_adb_server(endpoint, "host:devices-l", timeout)
+    except OSError as exc:
+        raise AndroidRemoteBootstrapError("adb_devices_failed", f"ADB device query failed: {exc}") from exc
+    except ValueError as exc:
+        raise AndroidRemoteBootstrapError("adb_devices_invalid_response", f"Invalid ADB device response: {exc}") from exc
+    if payload and (not payload.endswith("\n") or any(len(line.split()) < 2 for line in payload.splitlines())):
+        raise AndroidRemoteBootstrapError("adb_devices_invalid_response", "Malformed ADB device listing")
+    return choose_adb_device(parse_adb_devices(payload), requested_serial)
 
 
 def inspect_android_installation(device_serial: str) -> dict[str, object]:
@@ -826,7 +820,7 @@ def inspect_android_installation(device_serial: str) -> dict[str, object]:
         token = _connection_budget.set(_request_budget())
     try:
         adb_path = resolve_adb_path()
-        device = _select_android_device(adb_path, device_serial)
+        device = _select_android_device(device_serial)
         arch, abi = detect_device_arch(adb_path, device.serial)
         package, apk = select_android_package(arch)
         result = AndroidBootstrapResult(adb_path, device.serial, package, "", abi, "127.0.0.1", 0,
@@ -861,7 +855,7 @@ def _bootstrap_android_remote(
         [adb_path, "start-server"], timeout_s=10.0,
         error_code="adb_server_start_failed", error_message="Failed to start adb server",
     )
-    device = _select_android_device(adb_path, opts.device_serial)
+    device = _select_android_device(opts.device_serial)
     arch, abi = detect_device_arch(adb_path, device.serial)
     running = {helper: _package_pids(adb_path, device.serial, helper) for helper in _PACKAGE_MAP.values()}
     borrowed = any(running.values())
@@ -1050,46 +1044,46 @@ def _adb_server_endpoint() -> tuple[str, int]:
             f"ADB forward cleanup unconfirmed: {exc}") from exc
 
 
-def _list_adb_forwards_for_cleanup(endpoint: tuple[str, int]) -> list[list[str]]:
-    # The CLI can return an incomplete list even with a terminal newline. The
-    # server's OKAY/length/payload frame is the sole forward-list authority.
-    deadline = time.monotonic() + 10.0
+def _query_adb_server(endpoint: tuple[str, int], service: str, timeout: float) -> str:
+    """Read a single bounded host-service response, including its full framed payload."""
+    deadline = time.monotonic() + timeout
 
     def remaining() -> float:
         value = deadline - time.monotonic()
         if value <= 0:
-            raise TimeoutError("ADB forward query deadline exceeded")
+            raise TimeoutError("ADB server query deadline exceeded")
         return value
 
+    request = service.encode("ascii")
+    with socket.create_connection(endpoint, timeout=remaining()) as connection:
+        def read_exact(length: int) -> bytes:
+            data = bytearray()
+            while len(data) < length:
+                connection.settimeout(remaining())
+                part = connection.recv(length - len(data))
+                if not part:
+                    raise OSError("ADB query ended before its complete frame")
+                data.extend(part)
+            remaining()
+            return bytes(data)
+
+        connection.settimeout(remaining())
+        connection.sendall(f"{len(request):04x}".encode("ascii") + request)
+        status = read_exact(4)
+        if status not in (b"OKAY", b"FAIL"):
+            raise ValueError("invalid ADB query status")
+        header = read_exact(4)
+        if re.fullmatch(rb"[0-9a-fA-F]{4}", header) is None:
+            raise ValueError("invalid ADB payload length")
+        payload = read_exact(int(header, 16)).decode("utf-8")
+        if status == b"FAIL":
+            raise OSError(f"ADB server rejected query: {payload}")
+        return payload
+
+
+def _list_adb_forwards_for_cleanup(endpoint: tuple[str, int]) -> list[list[str]]:
     try:
-        with socket.create_connection(endpoint, timeout=remaining()) as connection:
-            def read_exact(length: int) -> bytes:
-                data = bytearray()
-                while len(data) < length:
-                    connection.settimeout(remaining())
-                    part = connection.recv(length - len(data))
-                    if not part:
-                        raise OSError("ADB forward query ended before its complete frame")
-                    data.extend(part)
-                remaining()
-                return bytes(data)
-
-            def read_payload() -> bytes:
-                header = read_exact(4)
-                if re.fullmatch(rb"[0-9a-fA-F]{4}", header) is None:
-                    raise ValueError("invalid ADB forward payload length")
-                # Four hexadecimal digits bound the payload to 65535 bytes.
-                return read_exact(int(header, 16))
-
-            connection.settimeout(remaining())
-            connection.sendall(b"0011host:list-forward")
-            status = read_exact(4)
-            if status == b"FAIL":
-                reason = read_payload().decode("utf-8")
-                raise OSError(f"ADB server rejected forward query: {reason}")
-            if status != b"OKAY":
-                raise ValueError("invalid ADB forward query status")
-            payload = read_payload().decode("utf-8")
+        payload = _query_adb_server(endpoint, "host:list-forward", 10.0)
         if payload and not payload.endswith("\n"):
             raise ValueError("unterminated ADB forward row")
         rows = [line.split() for line in payload.splitlines()]
@@ -1099,7 +1093,6 @@ def _list_adb_forwards_for_cleanup(endpoint: tuple[str, int]) -> list[list[str]]
     except (OSError, ValueError) as exc:
         raise AndroidRemoteBootstrapError("adb_forward_cleanup_unconfirmed",
             f"ADB forward cleanup unconfirmed: {exc}") from exc
-
 
 _TRANSFER_DIR_RE = re.compile(r"/data/local/tmp/rdc-tool-transfer-[0-9a-f]{32}")
 

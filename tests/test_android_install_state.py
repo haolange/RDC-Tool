@@ -189,11 +189,11 @@ def test_readonly_inspection_reuses_device_apk_and_pending_checks_without_mutati
     monkeypatch.setattr(rb, "detect_device_arch", lambda adb, serial: ("arm64", "arm64-v8a"))
     monkeypatch.setattr(rb, "select_android_package", lambda arch: (PACKAGE, current.apk_path))
     monkeypatch.setattr(rb, "read_apk_identity", lambda path: {"package_name": PACKAGE, "apk_sha256": "a" * 64})
-    def query(command, **kwargs):
-        commands.append(command)
-        assert command == ["same-install-adb", "-s", "serial", "get-state"]
-        return SimpleNamespace(returncode=0, stdout="device", stderr="")
-    monkeypatch.setattr(rb, "_run_subprocess", query)
+    def query(endpoint, service, timeout):
+        commands.append(service)
+        assert service == "host:devices-l"
+        return "serial\tdevice\n"
+    monkeypatch.setattr(rb, "_query_adb_server", query)
     def shell(adb, serial, *args, **kwargs):
         commands.append([adb, "-s", serial, *args])
         assert args == ("dumpsys", "package", "installs")

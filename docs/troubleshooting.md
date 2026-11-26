@@ -105,8 +105,8 @@ Android 准备、借用、未决安装与连接预算的契约见 [public-contra
 Android bootstrap 在同一连接预算与取消范围内，先确保所选 ADB server 就绪，再查询设备状态、准备 helper/socket、forward 与握手。已有明确 serial 时只对该设备执行 `get-state` 并要求 `device`，不重新枚举或自动选择其他设备；只有未指定 serial 的独立 CLI 调用才枚举并严格校验设备列表响应头。错误详情保留有界的实际命令、退出码、stdout 与 stderr。
 
 - `adb_server_start_failed`：server 启动失败，不继续创建 helper。
-- `adb_devices_invalid_response`：退出码为零但缺少设备列表响应头，不能当作没有设备。
-- `adb_device_invalid_response`：已选设备返回空或异常的状态响应。
+- `adb_devices_invalid_response`：ADB server 返回了格式无效的设备列表帧。
+- `adb_devices_failed`：无法读取配置的 ADB server，或 server 拒绝了设备查询。
 - offline、unauthorized、bootloader 等非回放状态：拒绝准备 helper。
 - 设备查询本身失败：保留 ADB 原始错误原因，不解析错误文案来推断授权状态。
 

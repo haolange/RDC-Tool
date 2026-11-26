@@ -137,13 +137,13 @@ def popen_options(profile: str) -> dict[str, Any]:
     if profile == "daemon":
         return {"creationflags": subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP}
     if profile == "worker":
-        # ADB children need a real console for reliable captured output: the
-        # worker owns a hidden one and its children inherit it.
+        # Keep the replay worker and its redirected diagnostics off the desktop.
         return {"creationflags": subprocess.CREATE_NEW_CONSOLE | subprocess.CREATE_NEW_PROCESS_GROUP,
                 "startupinfo": _hidden_window()}
-    # Tools need normal redirected stdio, not CREATE_NO_WINDOW or an explicit
-    # console; hide any console Windows creates.
-    return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP, "startupinfo": _hidden_window()}
+    # ADB can exit successfully with empty redirected output when started with
+    # CREATE_NO_WINDOW or when it inherits a console from a background process.
+    return {"creationflags": subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+            "startupinfo": _hidden_window()}
 
 
 class _ProcessMemoryCounters(ctypes.Structure):

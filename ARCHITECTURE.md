@@ -77,6 +77,8 @@ rdc-tool（CLI 进程，短命）
 | 原生加载 | `native.py` | 让确切的 RenderDoc 原生库可加载，并观察进程实际映射的文件 |
 | preview | `preview.py` | 原生 preview 窗口是主机能力；无实现的主机返回结构化 `preview_unsupported_platform` |
 
+Windows 的主机工具与父进程控制台分离，保留重定向的标准输出和标准错误。ADB 在部分后台控制台条件下会成功退出却产生空输出，分离启动使设备预检和传输使用同一套管道语义。
+
 ## 契约真源
 
 `rdc_tool/operation_definitions.py` 是操作名称、参数、结果、前置条件与影响声明的唯一真源；`spec/tool_catalog.json` 与 `docs/tool-reference.md` 是生成物，生成与校验方式见 [docs/doc-governance.md](docs/doc-governance.md)。
