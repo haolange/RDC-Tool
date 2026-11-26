@@ -133,4 +133,4 @@ def test_starting_process_does_not_acquire_existing_installation_config(monkeypa
 
 @pytest.fixture(autouse=True)
 def short_install_wait_budget(monkeypatch):
-    monkeypatch.setattr(rb, "DEFAULT_ANDROID_TIMEOUT_MS", 5)
+    monkeypatch.setattr(rb, "_request_budget", lambda cancelled=None: rb.ConnectionBudget(5, cancelled))

@@ -70,6 +70,12 @@ def state_path(context: Optional[str]) -> Path:
     return cli_runtime_dir() / name
 
 
+def daemon_log_path(context: Optional[str]) -> Path:
+    ctx = normalize_context_id(context)
+    name = "daemon.log" if ctx == "default" else f"daemon_{context_file_token(ctx)}.log"
+    return cli_runtime_dir() / name
+
+
 def context_from_state_path(path: Path) -> str:
     name = path.name
     prefix, suffix = "daemon_state_", ".json"

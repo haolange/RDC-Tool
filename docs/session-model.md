@@ -8,7 +8,7 @@ CLI → daemon（每个 `--daemon-context` 一个）→ worker。CLI 只解析�
 
 ## Context
 
-`rdc-tool context status` 返回所选 context 的当前状态；`rdc-tool context update` 修改面向 Agent 的字段，如 notes 与 focus。`session_locator` 汇总当前的 `.rdc`、session、frame 与 event。
+`rdc-tool context status` 只读地返回所选 context 的当前状态：daemon 与 worker 的进程身份、正在执行的请求（`active_operation`，含最近的原生调用与进度时间）、排队的请求、各 session 的恢复状态（含 `requires_restart` 与上一 worker 的 `worker_exit` 回执）、有界的 worker 生命周期历史（`worker_lifecycle`）、preview、notes 与 focus。daemon 存活时由它的只读方法 `context_status` 回答，该方法不写状态文件、不启动 worker；没有存活的 daemon 时，CLI 读取记录的状态文件并按 `(pid, birth)` 探测其中的身份，从不启动 daemon 或清理残留。需要实时回放快照时调用 `rd.session.get_context`。`rdc-tool context update` 修改面向 Agent 的字段，如 notes 与 focus。`session_locator` 汇总当前的 `.rdc`、session、frame 与 event。
 
 `--daemon-context <id>` 选择持续的运行时命名空间，不是 daemon 模式开关；省略时为 `default`。`rdc-tool context list` 列出已知命名空间，`rdc-tool context clear` 清除所选命名空间。读取其他命名空间时，在该 daemon context 下调用 `rd.session.get_context`；不存在修改隐式“当前命名空间”的选择操作。
 
@@ -30,7 +30,7 @@ owner 锁仍被持有而状态文件缺失或无效，或者存活 owner 的 sta
 
 ## 进程身份与终止
 
-daemon、worker、owner 与 attached client 记录都在 PID 旁保存 OS 进程诞生标识，每次存活或终止判断都比较 `(pid, birth)`：PID 复用或僵尸进程视为已退出；身份不可读视为未知，既不证明退出，也不授权终止。POSIX daemon 在自己的 session 中启动并领导进程组，worker 留在该组内，终止时按进程组结束；Windows 在确认身份后用 `taskkill /T` 结束进程树。worker 向调用方报告的进程身份见 [public-contract.md](public-contract.md)。
+daemon、worker、owner 与 attached client 记录都在 PID 旁保存 OS 进程诞生标识，每次存活或终止判断都比较 `(pid, birth)`：PID 复用或僵尸进程视为已退出；身份不可读视为未知，既不证明退出，也不授权终止。POSIX daemon 在自己的 session 中启动并领导进程组，worker 留在该组内：结束 daemon 时按进程组结束；单独结束 worker 时先暂停它，再自上而下暂停仍在同一 session 中的后代（防止树继续增长），然后从叶到根逐个重新确认 `(pid, birth)` 后结束，自行开启新 session 的子进程（如 adb server）不属于该树。Windows 在确认身份后用 `taskkill /T` 结束进程树。worker 向调用方报告的进程身份见 [public-contract.md](public-contract.md)。
 
 ## 锁与启动串行化
 
@@ -42,7 +42,7 @@ daemon 启动按 canonical context 状态路径跨 CLI 进程串行执行状态�
 
 客户端清理与 daemon 生命周期共用同一“未释放资源”检查。仅因空闲不能停止仍持有 capture、replay、远端所有权或活动请求的 daemon；丢失 owner 的租约过期后仍允许清理。不可读的所有权状态保留给受控恢复。
 
-新启动或替换的 worker 在分派请求前把持久化的 replay session 标记为 `requires_restart` 并保留其元数据；请求从不隐式拉起替代 worker。显式 context 清理始终可用。worker 替换前后，持久化的 session ID 与相同的图像哈希都不能证明连续性。
+worker 丢失后（卡死被终止、意外退出或 daemon 重启），下一个请求会启动新的 worker，但从不恢复回放：新 worker 在分派请求前先把持久化的 replay session 标记为 `requires_restart` 并保留其元数据与上一 worker 的退出回执，回放只能经显式的关闭与重开恢复。只读的 `context status` 不发送请求，因此不会启动 worker。显式 context 清理始终可用。worker 替换前后，持久化的 session ID 与相同的图像哈希都不能证明连续性。
 
 ## Worker 与回放执行
 
@@ -50,7 +50,11 @@ worker 跨请求保留一个 event loop 与 replay executor，以保持原生线
 
 回放操作只跟踪自己实际访问的 controller，作用域限于自身的 async context。首次访问与最终结果边界都在持久 replay executor 上轮询原生 fatal 状态；不访问 controller 的校验错误不会打开或探测回放。fatal 或无法观察的健康状态会把所属 session 标记为 `requires_restart`，并在发布成功结果或 artifact 之前拒绝该结果；失败或取消时作用域同样重置。catalog 中的生命周期操作保留清理路径。一次成功的健康检查只是瞬时观察，不保证之后的连接，也不是恢复回执。
 
-正常的着色器回滚在现有 live replay controller 上移除 replacement、重绑定事件并释放目标资源，不关闭或重开回放与远端连接。worker 回复丢失或 worker 意外出错属于未知结果：daemon 从不重新提交该请求，停止自有 worker，并把所属 context 的 session、capture 与 replacement 元数据保留为 `requires_restart`。初始化与恢复扫描维持这一隔离，不会把它变成 ready 或 deferred；显式 context 清理仍可用。新 worker、空注册表或重新打开的 capture 都不是回滚或恢复的证据。
+正常的着色器回滚在现有 live replay controller 上移除 replacement、重绑定事件并释放目标资源，不关闭或重开回放与远端连接。worker 回复丢失或 worker 意外出错属于未知结果：daemon 从不重新提交该请求，停止自有 worker，并把所属 context 的 session、capture 与 replacement 元数据保留为 `requires_restart`。
+
+所有阻塞的原生调用都经 `rdc_tool/native_calls.py` 这一边界进入 replay executor：它把调用方的 context 变量带入执行线程，为看门狗发送节流的 native_call 帧，并且从不遗弃运行中的调用——取消先等待原生调用返回再生效，因为运行中的原生调用无法中断，仍占用其线程、句柄与设备状态。请求的截止时间随每个进度事件或 native_call 帧前移（预算见 [public-contract.md](public-contract.md#execution-budget)）。worker 启用 faulthandler：每个请求在 daemon 看门狗之前布置一次全部线程的栈转储，有帧时至多每秒重新布置一次；转储由 faulthandler 的 C 线程在不持有 GIL 的情况下完成，因此原生调用占住解释器时也能留下位置。daemon 把 worker 的 stderr 写入有界轮转的 `worker.log`（当前文件加一代轮转，各 2 MiB，位于 worker 状态目录），自身写有界轮转的 `daemon.log`。看门狗到期后 daemon 短暂等待转储落盘，终止 worker 进程树并确认退出，再以 `worker_stuck` 报告；worker 先行退出为 `worker_lost`。daemon 状态保存最近 16 条 worker 启动与退出记录（`worker_lifecycle`），每个被隔离 session 的 `worker_exit` 记录退出身份、原因、trace/request id 与栈日志开头。
+
+取消不占用执行锁：排队中的请求在下一次 1 秒的锁等待切片中结束，不会运行；运行中的请求收到 worker 独立 stdin 线程处理的控制行，设置该请求的取消事件（在单个原生调用内循环的代码轮询它），并在下一个原生调用边界取消请求任务。取消后 10 秒内未收敛时，worker 按 `cancel_unsettled` 卡死路径终止。取消在运行中生效时，已完成的原生调用不回滚，操作自身的恢复与清理照常执行；worker 继续服务后续请求，回放不因取消而被隔离。初始化与恢复扫描维持这一隔离，不会把它变成 ready 或 deferred；显式 context 清理仍可用。新 worker、空注册表或重新打开的 capture 都不是回滚或恢复的证据。
 
 ## 回放生命周期
 
@@ -79,7 +83,7 @@ daemon 把 apply、颜色选择与 PNG 导出与同一 context 的其他调用�
 
 图像错误区分 `no_color_output`（事件没有颜色附件）、`missing_target`（显式目标不存在）与 `export_failure`（获取图像失败）；只有获取失败值得重试同一请求。显式选择 Present 事件时，用与 final-output 打开相同的解析器解析其经过验证的 copyDestination swap buffer；final 标签要求它就是实际的最后一个 Present。
 
-session-context 操作使用 60 秒 worker 预算；CLI daemon 传输再加共享的 5 秒响应余量，截止时间为 65 秒。预算由操作策略选择，调用方不传第二个单请求超时；宿主的外层 CLI 进程截止时间应大于 65 秒。
+session-context 操作与其他操作一样只受执行预算约束：导航、目标选择与导出持续报告原生调用帧时不会被判为卡住，宿主不需要再设置外层进程截止时间，用 daemon 心跳判断 daemon 是否仍在服务即可。
 
 这条路径不创建桌面 preview 窗口。它与独立 preview 共用同一原生回放 controller，但内嵌消费者不得启用独立窗口的生命周期。
 
@@ -105,7 +109,7 @@ session-context 操作使用 60 秒 worker 预算；CLI daemon 传输再加共�
 
 worker 改变后，daemon 只在确认旧进程退出时记录其身份。`requires_restart` 的非 live 远端 session 需再次核实该身份，并确认没有活动 replay、remote lease 或 replacement，才可进入所属 remote 与 ADB 清理。session 原生关闭失败时保留会话和未确认的句柄；daemon 的 context clear 与核心 shutdown 复用同一清理检查。
 
-worker 中的操作阶段通过 request 绑定的 `ProgressEvent` 转发到 daemon `active_operation`，设备准备的检查、安装、启动与验证因此使用同一真实阶段。事件必须匹配当前 request 与 operation/trace，迟到事件不得污染后续请求；进度发布失败不替代操作的最终回执。取消后已提交的安装事实仍保留在所属 context 的操作历史中。
+worker 中的操作阶段通过 request 绑定的 `ProgressEvent` 转发到 daemon `active_operation`，设备准备的检查、安装、启动与验证因此使用同一真实阶段；请求要求流式时，同一事件与 native_call 帧也经打开的 exec 连接转发给 CLI。事件必须匹配当前 request 与 operation/trace，迟到事件不得污染后续请求；进度发布失败不替代操作的最终回执。native_call 帧只更新 daemon 内存中的 `active_operation.native_call` 与 `last_progress_ms`，不逐帧写状态文件。取消后已提交的安装事实仍保留在所属 context 的操作历史中。
 
 原生远端 server 在用户空闲时等待下一个数据包；接收截止时间从数据包到达后才开始计算，不覆盖 CLI 操作之间的间隔。server 关闭仍可中断。
 
@@ -113,6 +117,6 @@ worker 中的操作阶段通过 request 绑定的 `ProgressEvent` 转发到 daem
 
 Android capture 传输以 helper 的应用 UID 通过 ADB `run-as` 读写匹配 helper 私有的 `files/rdc_tool_captures` 目录，并在 OpenCapture 之前校验 SHA256。shell 可读的外部存储不能证明 helper 可读。已验证的现有私有副本直接复用，不取得其所有权；现有外部副本不会被隐式迁移或删除。
 
-新字节先经 ADB sync（`push`）写入独占创建、shell 所有、权限 0700 的临时目录；shell 端 SHA256 校验后，由设备本地管道以应用 UID 和 noclobber 独占打开写入规范私有缓存路径。二进制 capture 数据从不经过主机 shell 的 stdin/stdout，因为换行转换可能损坏数据。本连接必须同时收到与 nonce 绑定的创建回执与写入完成回执，并校验应用侧 SHA256，才把新路径交给原生清理所有权或用于回放。独占创建失败后，并发出现的文件或目录不会被替换、认领、删除或自动复用。
+新字节先经 ADB sync（`push`）写入独占创建、shell 所有、权限 0700 的临时目录；shell 端 SHA256 校验后，由设备本地管道以应用 UID 和 noclobber 独占打开写入规范私有缓存路径。二进制 capture 数据从不经过主机 shell 的 stdin/stdout，因为换行转换可能损坏数据。push 与设备端写入都不设固定时限，而由无进展预算约束：每秒用 `stat -c %s` 读取目标文件大小，增长即报告 `capture_transfer_progress`（push 占前一半，设备端写入占后一半）；在请求的协作预算内不再增长或请求被取消时，只结束 ADB 客户端，并按下文保留恢复路径，因为结束客户端不是设备端的完成回执。本连接必须同时收到与 nonce 绑定的创建回执与写入完成回执，并校验应用侧 SHA256，才把新路径交给原生清理所有权或用于回放。独占创建失败后，并发出现的文件或目录不会被替换、认领、删除或自动复用。
 
-确证复制以失败终结后，清理只移除本连接新建的私有文件、shell 源文件及其空目录；成功的副本交给原生连接清理。sync 未确认、源校验不可读或缺少设备写入完成回执时，保留准确的恢复路径，不声称完成，也不删除可能仍在使用的文件。已有内容不可读或不匹配（包括残留的部分文件）时失败，不会覆盖。非 Android 远端传输使用 RenderDoc RPC。
+确证复制以失败终结后，清理只移除本连接新建的私有文件、shell 源文件及其空目录；成功的副本交给原生连接清理。sync 未确认、源校验不可读、传输停滞或被取消、或缺少设备写入完成回执时，保留准确的恢复路径，不声称完成，也不删除可能仍在使用的文件。未确认释放的 shell 临时目录登记到所属 context 的 `device_transfers`，`context clear` 以非递归、只针对本工具命名格式的命令删除它们（已不存在视为已释放）；删除失败保留登记并使清理失败，与其他未释放资源一致。已有内容不可读或不匹配（包括残留的部分文件）时失败，不会覆盖。非 Android 远端传输使用 RenderDoc RPC。

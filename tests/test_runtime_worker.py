@@ -62,6 +62,7 @@ def test_worker_uses_source_runtime_directly(tmp_path: Path, monkeypatch) -> Non
         pid = 12345
         stdin = io.StringIO()
         stdout = io.StringIO('{"kind":"ready"}\n')
+        stderr = io.StringIO("worker started\n")
 
         def poll(self):  # type: ignore[no-untyped-def]
             return None
@@ -78,6 +79,11 @@ def test_worker_uses_source_runtime_directly(tmp_path: Path, monkeypatch) -> Non
     worker = daemon_worker.RuntimeWorkerProcess(context_id="pytest-worker")
     worker._spawn()
     try:
+        # stderr is piped and drained into the bounded worker log, never discarded.
+        assert captured["kwargs"]["stderr"] == daemon_worker.subprocess.PIPE
+        worker._stderr_thread.join(2)
+        assert worker._stack_log(0)["tail"] == "worker started"
+        assert worker.log_path.endswith("worker_pytest-worker.log") or "worker_" in worker.log_path
         env = captured["env"]
         assert isinstance(env, dict)
         assert env["PYTHONPATH"].split(os.pathsep)[0] == str(ROOT)
@@ -98,6 +104,8 @@ def test_worker_uses_source_runtime_directly(tmp_path: Path, monkeypatch) -> Non
     finally:
         worker._proc = None
         worker._runtime = None
+        worker._close_log()
+        Path(worker.log_path).unlink(missing_ok=True)
 
 
 def test_worker_rejects_declared_but_invalid_native_set_before_spawn(tmp_path, monkeypatch):
@@ -189,7 +197,7 @@ def test_request_does_not_implicitly_spawn_a_missing_worker(monkeypatch):
     worker = daemon_worker.RuntimeWorkerProcess(context_id="owned-context")
     monkeypatch.setattr(worker, "ensure_started", lambda: pytest.fail("request must not replace its controller"))
     with pytest.raises(RuntimeError, match="unavailable"):
-        worker.request("exec", {"operation": "rd.export.texture"})
+        worker.request("exec", {"operation": "rd.export.texture"}, no_progress_s=5)
 
 
 def test_worker_shutdown_uses_real_facade_and_preserves_daemon_context(monkeypatch):

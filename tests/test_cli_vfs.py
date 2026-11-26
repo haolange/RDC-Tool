@@ -203,7 +203,7 @@ def test_completion_command_outputs_shell_script(monkeypatch, capsys) -> None:
     assert "rd.session.get_context" in output
 
 
-def test_context_commands_route_to_canonical_session_tools(monkeypatch) -> None:
+def test_context_commands_route_status_read_only_and_edits_to_session_tools(monkeypatch) -> None:
     captured: list[dict] = []
     seen: list[tuple[str, dict[str, object], str]] = []
 
@@ -213,6 +213,8 @@ def test_context_commands_route_to_canonical_session_tools(monkeypatch) -> None:
 
     monkeypatch.setattr(rdc_tool_cli, "_daemon_exec", _fake_daemon_exec)
     monkeypatch.setattr(rdc_tool_cli, "_print_json", lambda payload: captured.append(payload))
+    # Status is the read-only daemon view, never an operation that could start a worker.
+    monkeypatch.setattr(rdc_tool_cli, "read_context_status", lambda context: {"context_id": context, "source": "daemon"})
 
     status_code = asyncio.run(
         rdc_tool_cli._main_async(argparse.Namespace(command="context", context_cmd="status", daemon_context="ctx-agent", json=True)),
@@ -237,11 +239,11 @@ def test_context_commands_route_to_canonical_session_tools(monkeypatch) -> None:
     assert update_code == rdc_tool_cli.EXIT_OK
     assert list_code == rdc_tool_cli.EXIT_OK
     assert seen == [
-        ("rd.session.get_context", {}, "ctx-agent"),
         ("rd.session.update_context", {"key": "notes", "value": {"summary": "triaged"}}, "ctx-agent"),
         ("rd.session.list_contexts", {}, "ctx-agent"),
     ]
-    assert captured[0]["result_kind"] == "rd.session.get_context"
+    assert captured[0]["result_kind"] == "rdc_tool.context.status"
+    assert captured[0]["data"] == {"context_id": "ctx-agent", "source": "daemon"}
 
 
 def test_session_preview_status_without_daemon_is_successful_status(monkeypatch) -> None:

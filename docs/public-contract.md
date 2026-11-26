@@ -45,6 +45,37 @@ canonical JSON 不输出非标准裸数值 `NaN`、`Infinity`、`-Infinity`。�
 
 容量扫描可以退役旧 `pipe_name` 状态，前提是持有该 context 的启动、owner 和发布锁，并确认记录一致、相关进程已退出且没有未释放资源。其他旧状态继续报告无法确认的身份或资源，不据此删除现场。
 
+<a id="execution-budget"></a>
+## 执行预算、进度与取消
+
+操作不受固定时长约束，只受“无进展”预算约束：只要操作还在报告进度事件或原生调用帧，它就可以继续运行；静默超过预算才判定为卡住。每个 catalog 条目都发布同一规则 `execution_budget: {rule: "no_progress", default_no_progress_ms: 300000, min_no_progress_ms: 30000, max_no_progress_ms: 3600000}`，它进入 catalog 指纹，由 `timeout_policy.py` 单源生成。调用方按请求选择预算：`rdc-tool call <rd.*> --no-progress-ms N`（`batch` 同样接受），超出范围以 `invalid_no_progress_ms`（`category=validation`）在执行前拒绝。单个原生调用（例如一次 PixelHistory 或 OpenCapture）超过预算也会被判为卡住，确需更长时间时调高该请求的预算。同一预算内依次是：协作截止（远端连接、设备传输以结构化错误结束）、worker 打印全部线程栈、daemon 终止 worker 进程树。daemon 控制方法（status、cancel、context status 等）不执行操作，保留短的固定期限。
+
+`--request-id R`（1–128 个 `[A-Za-z0-9._:-]` 字符，省略时由 CLI 生成）标识一次请求，用于帧、取消与错误详情；同一 id 已在排队或运行时返回 `request_id_conflict`。`--progress-stream` 把该请求的帧以 NDJSON 逐行写到 stderr，stdout 仍只输出最终的一个 canonical 信封。帧的形状：
+
+| `kind` | 字段 |
+|---|---|
+| `heartbeat` | `request_id`、`ts_ms`、`state`（`queued` 或 `running`）；daemon 在请求排队与运行期间每 2 秒发送一次 |
+| `progress` | `request_id`、`trace_id`、`operation`、`stage`、`message`、`progress_pct`、`details`、`ts_ms` |
+| `native_call` | `request_id`、`trace_id`、`name`、`phase`（`enter` 或 `exit`）、`ts_ms`；名称变化必发 enter，否则至多每 0.5 秒一帧，超过 1 秒的调用另发 exit |
+
+CLI 等待操作结果时不设总截止时间：daemon 记录的 `(pid, birth)` 已退出或连接在回复前关闭返回 `daemon_lost`，daemon 存活但 15 秒没有任何帧或心跳返回 `daemon_unresponsive`。两者的结果都未知，details 含 `failure_stage`、`reason`、`outcome: "unknown"`、`operation`、`request_id`、`context_id`、`daemon{pid, start_generation}` 与 `daemon_exit_confirmed`。
+
+worker 故障时，`call` 输出 `result_kind` 为操作名的 canonical 错误信封（`category=runtime`）：
+
+| `error.code` | 含义 |
+|---|---|
+| `worker_stuck` | `reason=no_progress`：预算内没有任何帧，worker 在栈转储后被终止；`reason=cancel_unsettled`：取消后 10 秒内未收敛，worker 被终止 |
+| `worker_lost` | worker 在回复前退出（`reason=worker_exited`） |
+| `worker_request_failed` | 帧格式无效、请求无法送达或 worker 自身报错（`reason` 为 `invalid_frame`、`stdin_write_failed`、`worker_error` 等） |
+| `worker_unavailable` | worker 无法启动，或上一个 worker 的退出无法确认；操作未执行（`outcome: "not_started"`） |
+| `operation_cancelled` | 请求被取消：排队中为 `outcome: "not_started"`；运行中在下一个原生调用边界停止，为 `outcome: "cancelled"`，已完成的原生调用不回滚，操作自身的清理已执行 |
+
+前三项的 details 为 `failure_stage`、`reason`、`outcome: "unknown"`、`worker{pid, start_generation}`、`worker_exit_confirmed`、`replay_requires_restart`、`stack_log{path, tail}`、`trace_id`、`request_id`、`last_progress{stage, native_call, at_ms}` 与 `no_progress_ms`。这些故障从不重新提交请求：worker 被停止，所属 context 的回放会话保留为 `requires_restart`，并记录上一 worker 的 `worker_exit`（身份、原因、trace/request id 与栈日志开头）。`stack_log.path` 指向 worker 的有界日志，`tail` 从最近一次栈转储开始。
+
+`rdc-tool daemon cancel --request-id R` 取消一个请求，从不启动 daemon、也不占用执行锁，输出 `result_kind=rdc_tool.daemon.cancel`，`data` 为回执 `{request_id, trace_id, outcome, worker_exit?, settled_at_ms}`：`outcome` 为 `cancelled`（排队中取消或运行中收敛）、`completed`（取消前已结束）、`terminated`（worker 被终止，`worker_exit` 为 `{pid, start_generation, reason, exit_confirmed}`）或 `not_found`。最近结束的请求在一段时间内保留回执，迟到的取消据此回答实际结局。
+
+`rdc-tool context status` 是只读查询，输出 `result_kind=rdc_tool.context.status`：daemon 与 worker 身份及其当前状态、活动请求（含 `request_id`、`native_call` 与 `last_progress_ms`）、排队请求、各 session 的恢复状态（含 `requires_restart` 与 `worker_exit`）、`worker_lifecycle`、`session_locator`、preview、notes 与 focus，`source` 标明来自 daemon 还是状态文件。它从不启动 daemon 或 worker，也不写状态，可在判断能否恢复之前安全调用；需要实时回放快照时调用 `rd.session.get_context`。
+
 ## 回放与主机能力
 
 `rd.capture.open_replay` 在创建本地回放前检查 capture 的 `LocalReplaySupport`。本主机运行库不能回放该 capture 的图形 API（例如 Linux 上的 D3D capture）时返回 `local_replay_unsupported`（details 含 `capture_api`、`host_target`、`recovery_hint`），不会创建回放；分类与证明遵循[统一规则](#rejection-proof)。恢复方式是先 `rd.remote.connect`，再通过 `options.remote_id` 远端回放。同 context 同 capture 的会话复用见 [session-model.md](session-model.md)。
@@ -143,7 +174,7 @@ SPIR-V 精度 patch 的目标是 ID 操作数：`variables` 接受 `%7` 或 ID �
 
 原生着色器调试按顺序消费 RenderDoc `ContinueDebug` 返回的每个状态。PC 指单调的 trace `stepIndex`，不是 SPIR-V result ID 或源码行。变量快照累积类型化的 `ShaderVariableChange.before/after` 更新，并移除离开作用域的变量；初始空快照有效。`get_variables` 使用字面名称过滤、有界成员深度与显式截断。只实现了指令单步与非负 PC 目标/断点；不支持的源码位置与单步模式在访问原生之前失败。调用栈保留原生函数名，未知源文件/行报告为 null。表达式求值只支持当前变量的确切名称或 JSON 字面量。原生 trace 释放失败时保留句柄并传播错误。
 
-`rd.shader.get_debug_state.summary` 把动态 trace PC 与原生 `next_instruction` 分开报告。原生 `instInfo` 是稀疏的有序区间映射：前一条目一直适用到下一条目，跨循环与分支也一样。`source_location` 不可用时为 null，未知的源索引/行/列保持 null。从 1 开始的 `disassembly_line` 只指 RenderDoc 原生调试反汇编，从不自动对应原始 SPIR-V ASM、SSA ID 或设备 ISA。`full` 额外给出最多 64 个当前可变变量（成员深度 2）与 64 个原生调用栈名称，并附计数与截断标志；更聚焦的视图用普通变量查询获取。两种视图都不承诺任意 SSA/寄存器可见性或常量/不可变值。单步、run-to 与断点的状态响应复用同一摘要投影。`has_native_state: false` 把初始 PC 0 占位与已观察的原生状态区分开。无效的详细级别在访问原生之前被拒绝，并附无副作用证明。终止的 continue/step 结果保留明确的结束原因；单独查询的状态仍是最后观察到的原生状态。
+`rd.shader.get_debug_state.summary` 把动态 trace PC 与原生 `next_instruction` 分开报告。原生 `instInfo` 是稀疏的有序区间映射：前一条目一直适用到下一条目，跨循环与分支也一样。`source_location` 不可用时为 null，未知的源索引/行/列保持 null。从 1 开始的 `disassembly_line` 只指 RenderDoc 原生调试反汇编，从不自动对应原始 SPIR-V ASM、SSA ID 或设备 ISA。`full` 额外给出最多 64 个当前可变变量（成员深度 2）与 64 个原生调用栈名称，并附计数与截断标志；更聚焦的视图用普通变量查询获取。两种视图都不承诺任意 SSA/寄存器可见性或常量/不可变值。单步、run-to 与断点的状态响应复用同一摘要投影。`has_native_state: false` 把初始 PC 0 占位与已观察的原生状态区分开。无效的详细级别在访问原生之前被拒绝，并附无副作用证明。终止的 continue/step 结果保留明确的结束原因；单独查询的状态仍是最后观察到的原生状态。`rd.debug.continue` 与 `rd.debug.run_to` 的 `timeout_ms` 是步进预算，不是传输超时：耗尽时两者都成功返回 `stopped_reason: "timeout"` 与调试器停下的当前状态（`run_to` 另附 `target_pc` 与 `target_reached: false`），并如实给出 `effects_attempted`（调试器是否前进）与 `context_preserved`（回放 session、当前事件与调试句柄是否未变；调试单步不移动回放事件）。
 
 ## 图像比较
 
@@ -163,7 +194,7 @@ Windows 安装自带 ADB 及其所需 DLL、`spirv-as` 与 `spirv-dis`。默认�
 
 自有 helper 按设备 SDK 级别解析 RenderDoc 配置目录（低于 30 为 `Android/data`，30 起为 `Android/media`）。只有本次连接安装或覆盖了 APK 且设备上缺少 `renderdoc.conf` 时才推送空的默认配置（`options.push_config=false` 可关闭）；已有普通文件保持不变，SDK 或文件状态未知时在启动前失败。
 
-helper PID 不是服务占用的证据：成功要求实际的 RenderDoc 连接与 Ping。一个超时预算覆盖 bootstrap 与连接，socket 就绪等待不超过 15 秒。借用的服务只关闭连接；只有经验证的自有 PID 与 ADB forward 可以被移除。进程与 forward 所有权独立于安装事实，历史 bootstrap 元数据从不授予新的变更权限。连接内与跨 daemon 重启的资源归属见 [session-model.md](session-model.md)。
+helper PID 不是服务占用的证据：成功要求实际的 RenderDoc 连接与 Ping。同一连接预算覆盖 bootstrap 与连接（见下文“连接预算”），socket 就绪等待不超过 15 秒。借用的服务只关闭连接；只有经验证的自有 PID 与 ADB forward 可以被移除。进程与 forward 所有权独立于安装事实，历史 bootstrap 元数据从不授予新的变更权限。连接内与跨 daemon 重启的资源归属见 [session-model.md](session-model.md)。
 
 ### 诊断与取消
 
@@ -181,9 +212,9 @@ Android bootstrap 的 `apk_sha256` 始终是本地目标 APK 的 SHA256，`insta
 
 应用内解除未决安装使用唯一的只读操作 `rd.remote.inspect_installation`，参数只有 `device_serial`，必须在非 `default` 的所属 context 中调用。它复用连接前的设备校验、同安装 APK 包名/SHA256 与 PackageManager active-session 检查；不安装、卸载、启动 helper、建立连接或 abandon。结果 `installation_state=clear|pending|unknown` 与 `observation=verified|pending|unreadable` 分别表示可核实的状态与观察范围。`clear` 只证明没有相关的未决安装，不证明 helper 已安装、兼容或已连接；应用确认冻结的 CLI/catalog 与原目标 APK 身份一致后，才能继续用户本次明确请求的正常准备。pending/unknown 保留原未决事实与设备占用。
 
-### 超时策略
+### 连接预算
 
-`rd.remote.connect.timeout_policy` 由 `timeout_policy.py` 单源生成，声明 `argument`、`default_timeout_ms`、`worker_grace_ms`、`transport_grace_ms` 与 `process_grace_ms`。调用方显式传入本机 native budget；worker 在该 budget 之后保留 85 秒用于 join 与清理，CLI transport 再保留 5 秒，宿主进程再保留 5 秒接收最终回执。调用方不得根据描述猜测，也不得在缺少 policy 时默认放行。
+`rd.remote.connect` 没有自己的超时参数，连接尝试受请求的[执行预算](#execution-budget)约束：bootstrap 的每个阶段进度（checking、installing、starting、verifying、等待端点）都把连接截止时间前移，协作截止时间早于 worker 栈转储与 daemon 看门狗，因此静默的连接以结构化的 `remote_connect_timeout` 结束并清理已取得的资源，而不是被终止。单个 ADB 步骤保留各自的步骤上限。取消请求会立即到达 bootstrap 循环，回执语义见上文“诊断与取消”。
 
 ### 设备呈现
 

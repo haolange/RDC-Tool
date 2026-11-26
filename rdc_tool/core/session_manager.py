@@ -1,17 +1,18 @@
 ﻿from __future__ import annotations
 
 import asyncio
-import functools
 import hashlib
 import logging
 import re
 import shlex
+import subprocess
 import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from rdc_tool import native_calls, progress, timeout_policy
 from rdc_tool.platform import process
 from rdc_tool.platform import host as platform_host
 from rdc_tool.core.errors import CoreError
@@ -137,6 +138,9 @@ class SessionState:
     remote_bootstrap_result: Any = None
     remote_device_serial: str = ""
     transfer_progress: Any = None
+    # Device-side transfer directories whose release could not be confirmed;
+    # the owning context removes them during clear_context.
+    retained_transfer_dirs: List[str] = field(default_factory=list)
     capabilities: SessionCapabilities = field(default_factory=SessionCapabilities)
     capture_id: Optional[str] = None
     is_initialized: bool = False
@@ -144,6 +148,48 @@ class SessionState:
     replay_config: Dict[str, Any] = field(default_factory=dict)
     created_at: float = field(default_factory=time.time)
     cleanup_error: str = ""
+
+
+class TransferInterrupted(RuntimeError):
+    """An adb transfer stopped making progress or was cancelled; its client was killed."""
+
+    def __init__(self, reason: str, message: str) -> None:
+        super().__init__(message)
+        self.reason = reason  # stalled | cancelled
+
+
+def _run_transfer(command: list[str], observe_size: Any, on_growth: Any, window_s: float) -> subprocess.CompletedProcess:
+    """Run one adb transfer under a no-progress budget instead of a fixed timeout.
+
+    Once a second the destination size is observed: growth is progress, a
+    destination that does not grow for ``window_s`` is a stall, and a cancelled
+    request stops the transfer. Either way only the adb client is killed;
+    device-side work it started may continue, so the caller keeps the recovery
+    paths.
+    """
+    proc = process.start_tool(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    largest = -1
+    last_growth = time.monotonic()
+    try:
+        while True:
+            try:
+                out, err = proc.communicate(timeout=1.0)
+                return subprocess.CompletedProcess(command, proc.returncode, out, err)
+            except subprocess.TimeoutExpired:
+                pass
+            if progress.cancel_requested():
+                raise TransferInterrupted("cancelled", "transfer cancelled by the request owner")
+            observed = observe_size()
+            if observed > largest:
+                largest, last_growth = observed, time.monotonic()
+                on_growth(observed)
+            elif time.monotonic() - last_growth > window_s:
+                raise TransferInterrupted("stalled", f"transfer made no progress for {window_s:.0f} s")
+    except BaseException:
+        if proc.poll() is None:
+            proc.kill()
+        proc.communicate()
+        raise
 
 
 class SessionError(Exception):
@@ -173,11 +219,6 @@ class SessionManager:
     def reset(cls) -> None:
         cls._instance = None
         cls._initialized = False
-
-    @staticmethod
-    async def _offload(fn: Any, *args: Any, **kwargs: Any) -> Any:
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, functools.partial(fn, *args, **kwargs))
 
     async def create_session(
         self,
@@ -230,7 +271,7 @@ class SessionManager:
                 raise SessionError(code="controller_missing", message=f"Session {session_id} has no replay controller")
 
             try:
-                props = await self._offload(controller.GetAPIProperties)
+                props = await native_calls.offload(controller.GetAPIProperties)
             except Exception:
                 props = None
             state.capabilities.api = _map_graphics_api(props)
@@ -240,7 +281,7 @@ class SessionManager:
             state.capabilities.counters_supported = True
 
             try:
-                roots = await self._offload(controller.GetRootActions)
+                roots = await native_calls.offload(controller.GetRootActions)
             except Exception:
                 roots = []
 
@@ -311,7 +352,7 @@ class SessionManager:
         if not hasattr(state.remote_server, "PresentReplay"):
             raise SessionError(code="remote_presentation_unsupported", message="Installed native binding lacks presentation acknowledgement; install the matching runtime and helper")
         resource = texture_id if texture_id is not None else _get_rd().ResourceId.Null()
-        status, sequence = await self._offload(state.remote_server.PresentReplay, event_id, resource)
+        status, sequence = await native_calls.offload(state.remote_server.PresentReplay, event_id, resource)
         _check_status(status, "remote.PresentReplay", backend_type="remote",
                       capture_context={"session_id": session_id, "event_id": event_id},
                       source_layer="native_presentation")
@@ -324,7 +365,7 @@ class SessionManager:
         if self._replay_initialized:
             return
         rd = _get_rd()
-        await self._offload(rd.InitialiseReplay, rd.GlobalEnvironment(), [])
+        await native_calls.offload(rd.InitialiseReplay, rd.GlobalEnvironment(), [])
         self._replay_initialized = True
         logger.debug("RenderDoc replay subsystem initialised")
 
@@ -352,7 +393,7 @@ class SessionManager:
             logger.debug("Reusing remote RenderDoc server connection at %s", url)
             return
 
-        status, remote = await self._offload(rd.CreateRemoteServerConnection, url)
+        status, remote = await native_calls.offload(rd.CreateRemoteServerConnection, url)
         _check_status(
             status,
             f"CreateRemoteServerConnection({url})",
@@ -368,8 +409,8 @@ class SessionManager:
 
     async def _open_local_capture(self, state: SessionState, rdc_path: str) -> None:
         rd = _get_rd()
-        cap = await self._offload(rd.OpenCaptureFile)
-        status = await self._offload(cap.OpenFile, rdc_path, "", None)
+        cap = await native_calls.offload(rd.OpenCaptureFile)
+        status = await native_calls.offload(cap.OpenFile, rdc_path, "", None)
         _check_status(
             status,
             f"OpenFile({rdc_path})",
@@ -379,8 +420,8 @@ class SessionManager:
             fix_hint="Verify that the .rdc file is valid and supported by this RenderDoc runtime.",
         )
         state.capture_file = cap
-        if await self._offload(cap.LocalReplaySupport) == rd.ReplaySupport.Unsupported:
-            capture_api = str(await self._offload(cap.DriverName))
+        if await native_calls.offload(cap.LocalReplaySupport) == rd.ReplaySupport.Unsupported:
+            capture_api = str(await native_calls.offload(cap.DriverName))
             raise CoreError(
                 code="local_replay_unsupported",
                 message=f"This host's RenderDoc runtime cannot replay {capture_api} captures locally",
@@ -394,7 +435,7 @@ class SessionManager:
                 },
             )
 
-        status, controller = await self._offload(cap.OpenCapture, rd.ReplayOptions(), None)
+        status, controller = await native_calls.offload(cap.OpenCapture, rd.ReplayOptions(), None)
         _check_status(
             status,
             "OpenCapture",
@@ -410,7 +451,7 @@ class SessionManager:
         if state.remote_server is None:
             raise SessionError(code="no_remote_server", message="Remote session has no active server connection")
         try:
-            remote_server, remote_rdc_path, controller = await self._offload(self._open_remote_capture_sync, state, rdc_path)
+            remote_server, remote_rdc_path, controller = await native_calls.offload(self._open_remote_capture_sync, state, rdc_path)
         finally:
             state.transfer_progress = None
         state.remote_server = remote_server
@@ -497,6 +538,7 @@ class SessionManager:
             return base_cmd + ["shell", "run-as", package_name, *args]
 
         def run(command: list[str]) -> Any:
+            # A per-step limit for short adb queries; transfers below use a no-progress budget.
             return process.run_tool(command, check=False, capture_output=True, text=True, timeout=30)
 
         private_root = run(app_command("pwd"))
@@ -508,6 +550,23 @@ class SessionManager:
         with Path(rdc_path).open("rb") as source:
             digest = hashlib.file_digest(source, "sha256").hexdigest()
         remote_path = f"{remote_dir}/{digest}.rdc"
+        total_bytes = max(1, Path(rdc_path).stat().st_size)
+        window_s = timeout_policy.cooperative_no_progress_s(progress.current_no_progress_ms())
+
+        def size_of(command: list[str]) -> int:
+            try:
+                observed = run(command)
+            except Exception:
+                return -1
+            text = str(observed.stdout or "").strip()
+            return int(text) if not observed.returncode and text.isdigit() else -1
+
+        def growth(phase: float) -> Any:
+            # Push fills the first half of the transfer, the device writer the second.
+            def report(observed: int) -> None:
+                if state.transfer_progress:
+                    state.transfer_progress("capture_transfer_progress", phase + 0.5 * min(1.0, observed / total_bytes))
+            return report
 
         def checked_digest(result: Any, path: str) -> str:
             match = re.fullmatch(r"([0-9a-fA-F]{64})\s+(.+)", str(result.stdout or "").strip())
@@ -535,30 +594,42 @@ class SessionManager:
         nonce = uuid.uuid4().hex
         shell_dir = f"/data/local/tmp/rdc-tool-transfer-{nonce}"
         shell_source = f"{shell_dir}/source.rdc"
+
+        def keep_shell_dir() -> None:
+            # Unconfirmed device-side state is kept for recovery; the owning context
+            # releases the shell directory during clear_context.
+            if shell_dir not in state.retained_transfer_dirs:
+                state.retained_transfer_dirs.append(shell_dir)
+
+        def retain(message: str, error: BaseException | str) -> RuntimeError:
+            keep_shell_dir()
+            return RuntimeError(f"{message}: {error}")
+
         script = (f"umask 077; mkdir -m 700 {shlex.quote(shell_dir)} "
                   f"&& printf '{nonce}:SHELL_CREATED\\n'")
         try:
             shell_created = run(base_cmd + ["shell", script])
         except BaseException as error:
-            raise RuntimeError(f"Android capture sync directory creation unconfirmed; retain {shell_dir}: {error}") from error
+            raise retain(f"Android capture sync directory creation unconfirmed; retain {shell_dir}", error) from error
         if shell_created.returncode or str(shell_created.stdout or "").strip() != f"{nonce}:SHELL_CREATED":
-            raise RuntimeError(f"Android capture sync directory creation unconfirmed; retain {shell_dir}: "
-                               f"{shell_created.stderr.strip()}")
+            raise retain(f"Android capture sync directory creation unconfirmed; retain {shell_dir}",
+                         shell_created.stderr.strip())
         # ADB sync transfers file bytes without sending them through shell stdin,
         # whose Windows transport can normalize CRLF even without a PTY.
         try:
-            pushed = process.run_tool(base_cmd + ["push", str(rdc_path), shell_source], check=False,
-                                      capture_output=True, text=True, timeout=240)
+            pushed = _run_transfer(base_cmd + ["push", str(rdc_path), shell_source],
+                                   lambda: size_of(base_cmd + ["shell", "stat", "-c", "%s", shell_source]),
+                                   growth(0.0), window_s)
         except BaseException as error:
-            raise RuntimeError(f"Android capture sync outcome unconfirmed; retain {shell_dir}: {error}") from error
+            raise retain(f"Android capture sync outcome unconfirmed; retain {shell_dir}", error) from error
         if pushed.returncode:
-            raise RuntimeError(f"Android capture sync outcome unconfirmed; retain {shell_dir}: {pushed.stderr.strip()}")
+            raise retain(f"Android capture sync outcome unconfirmed; retain {shell_dir}", pushed.stderr.strip())
         try:
             if checked_digest(run(base_cmd + ["shell", "sha256sum", shell_source]), shell_source) != digest:
                 raise RuntimeError("Android capture sync SHA256 verification failed")
         except BaseException as error:
             # A missing/unreadable digest is not a device-side write exit receipt.
-            raise RuntimeError(f"Android capture sync verification unconfirmed; retain {shell_dir}: {error}") from error
+            raise retain(f"Android capture sync verification unconfirmed; retain {shell_dir}", error) from error
         # noclobber makes this exact cache path exclusive. Native replay must not
         # open or own it until this nonce's writer and its bytes are verified.
         script = (f"set -C; exec 3> {shlex.quote(remote_path)} || exit; "
@@ -569,18 +640,19 @@ class SessionManager:
         command = base_cmd + ["shell", f"cat {shlex.quote(shell_source)} | "
                               f"run-as {package_name} sh -c {shlex.quote(script)}"]
         try:
-            transferred = process.run_tool(command, check=False, capture_output=True, text=True, timeout=60)
+            transferred = _run_transfer(command, lambda: size_of(app_command("stat", "-c", "%s", remote_path)),
+                                        growth(0.5), window_s)
         except BaseException as error:
             # Killing/joining an ADB client is not a device-writer exit receipt.
             # Retain the exact recovery asset rather than unlinking a live file.
-            raise RuntimeError(f"Android capture transfer outcome unconfirmed; device writer completion is unknown; "
-                               f"retain {shell_dir} and {remote_path}: {error}") from error
+            raise retain(f"Android capture transfer outcome unconfirmed; device writer completion is unknown; "
+                         f"retain {shell_dir} and {remote_path}", error) from error
         lines = str(transferred.stdout or "").splitlines()
         terminal = re.fullmatch(rf"{nonce}:DONE:(\d+)", lines[-1]) if lines else None
         if not (len(lines) == 2 and lines[0] == f"{nonce}:CREATED" and terminal):
-            raise RuntimeError(f"Android capture transfer outcome unconfirmed; device writer completion is unknown; "
-                               f"retain {shell_dir} and {remote_path}: "
-                               f"{transferred.stderr.strip() or 'missing matching device writer receipt'}")
+            raise retain(f"Android capture transfer outcome unconfirmed; device writer completion is unknown; "
+                         f"retain {shell_dir} and {remote_path}",
+                         transferred.stderr.strip() or "missing matching device writer receipt")
         owned_paths = [remote_path]
 
         def remove_owned(path: str) -> None:
@@ -604,6 +676,7 @@ class SessionManager:
                 if removed.returncode or str(removed.stdout or "").strip() != f"{nonce}:SHELL_REMOVED":
                     raise RuntimeError(f"ADB sync cleanup unconfirmed for {shell_dir}: {removed.stderr.strip()}")
             except Exception as error:
+                keep_shell_dir()
                 errors.append(str(error))
             return errors
 
@@ -628,31 +701,31 @@ class SessionManager:
         rd = _get_rd()
         width = int(state.replay_config.get("width", 1920) or 1920)
         height = int(state.replay_config.get("height", 1080) or 1080)
-        windowing_data = await self._offload(rd.CreateHeadlessWindowingData, width, height)
-        state.output = await self._offload(controller.CreateOutput, windowing_data, rd.ReplayOutputType.Texture)
+        windowing_data = await native_calls.offload(rd.CreateHeadlessWindowingData, width, height)
+        state.output = await native_calls.offload(controller.CreateOutput, windowing_data, rd.ReplayOutputType.Texture)
         logger.debug("Created headless output (%dx%d) for session %s", width, height, state.session_id)
 
     async def _cleanup(self, state: SessionState) -> None:
         if state.output is not None:
-            await self._offload(state.output.Shutdown)
+            await native_calls.offload(state.output.Shutdown)
             state.output = None
 
         if state.controller is not None:
             if state.backend_type == BackendType.REMOTE and state.remote_server is not None:
-                await self._offload(state.remote_server.CloseCapture, state.controller)
+                await native_calls.offload(state.remote_server.CloseCapture, state.controller)
             else:
-                await self._offload(state.controller.Shutdown)
+                await native_calls.offload(state.controller.Shutdown)
             state.controller = None
 
         if state.capture_file is not None:
             if hasattr(state.capture_file, "CloseFile"):
-                await self._offload(state.capture_file.CloseFile)
+                await native_calls.offload(state.capture_file.CloseFile)
             elif hasattr(state.capture_file, "Shutdown"):
-                await self._offload(state.capture_file.Shutdown)
+                await native_calls.offload(state.capture_file.Shutdown)
             state.capture_file = None
 
         if state.remote_server is not None and state.remote_server_owned:
-            await self._offload(state.remote_server.ShutdownConnection)
+            await native_calls.offload(state.remote_server.ShutdownConnection)
         state.remote_server = None
         state.remote_server_owned = True
 
@@ -660,7 +733,7 @@ class SessionManager:
             remaining_local = any(s is not state and s.backend_type == BackendType.LOCAL for s in self._sessions.values())
             if not remaining_local and self._replay_initialized:
                 rd = _get_rd()
-                await self._offload(rd.ShutdownReplay)
+                await native_calls.offload(rd.ShutdownReplay)
                 self._replay_initialized = False
                 logger.debug("RenderDoc replay subsystem shut down")
 

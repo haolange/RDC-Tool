@@ -1,8 +1,20 @@
 ﻿# 变更记录 `Changelog`
 
-## 待发布 `Unreleased`
+## 1.2.0 — 2026-11-26
 
-- 版本升至 1.1.3。`version --json` 新增 `data.catalog`（`schema_version`、`fingerprint`、`tool_count`），与 `tools list --json` 报告的同一份 catalog 一致；RDC-Agent 据此把（版本，指纹）与其打包的 catalog 快照成对校验。发布包校验要求该字段存在。
+- 版本升至 1.2.0（未打 tag、未发布）。catalog 指纹随下列契约变化更新，RDC-Agent 须配对新指纹。
+- 执行预算：操作不再受按命名空间划分的固定时长约束（删除 `rd.debug.*` 的 60+5 秒、打开 120 秒、远端打开 200 秒、connect 200+85+5+5 秒等常量），改为“无进展”预算：进度事件或原生调用帧都会把截止时间前移，默认 300000 ms，范围 30000–3600000 ms。每个 catalog 条目发布 `execution_budget: {rule: "no_progress", default_no_progress_ms, min_no_progress_ms, max_no_progress_ms}`；`rd.remote.connect` 删除 `timeout_policy` 与 `timeout_ms` 参数，连接预算改为随 bootstrap 进度前移的同一预算。同一预算内依次触发协作截止、worker 栈转储与 daemon 看门狗。
+- exec 协议与 CLI：exec 携带 `request_id`、`no_progress_ms` 与 `stream`；daemon 生成 trace id，在 exec 连接上每 2 秒发送心跳（排队时同样发送，`_exec_lock` 以 1 秒切片获取），请求流式时转发 progress 与 native_call 帧。CLI 等待 exec 不设总截止时间：daemon 的 `(pid, birth)` 已退出或连接关闭为 `daemon_lost`，心跳中断 15 秒为 `daemon_unresponsive`。`call` 新增 `--no-progress-ms`、`--request-id` 与 `--progress-stream`（帧以 NDJSON 写 stderr，stdout 仍只输出一个信封），`batch` 新增前者与 `--progress-stream`。
+- 单一原生调用边界 `rdc_tool/native_calls.py`：所有执行器入口统一复制 context 变量、发送节流的 native_call 帧（名称变化必发，否则至多每 0.5 秒一帧；超过 1 秒的调用发 exit 帧），取消时先等待原生调用返回再抛出；删除各服务各自的 `_offload` 与 `asyncio.to_thread`。进度 ContextVar 移入 `rdc_tool/progress.py`。
+- 看门狗与证据：worker 启用 faulthandler，每个请求在看门狗前布置栈转储（C 线程，不需要 GIL）；daemon 把 worker stderr 写入有界轮转的 `worker.log`，自身写有界轮转的 `daemon.log`（各 2×2 MiB）。无进展到期后 daemon 等待转储、终止 worker 进程树并确认退出。POSIX 上不领导进程组的 worker 改为冻结后代并由叶到根逐个确认身份后结束，自行开 session 的子进程（如 adb server）不在树内。daemon 状态保存有界的 `worker_lifecycle`（16 条），session 的 `worker_exit` 记录退出原因、trace/request id 与栈日志。
+- 规范错误：worker 故障返回 `result_kind` 为操作名的 canonical 信封，错误码 `worker_stuck`（`reason`：`no_progress`/`cancel_unsettled`）、`worker_lost`、`worker_request_failed`，details 含阶段、原因、未知结果、worker 身份、退出确认、回放重启要求、栈日志、trace/request id、最后进度与预算；worker 无法启动为 `worker_unavailable`。CLI 不再把 daemon 错误压扁成 `runtime_error`。`context clear` 改受同一看门狗约束。
+- 取消：`rdc-tool daemon cancel --request-id R` 与 daemon `cancel` 方法不占用执行锁；排队请求直接返回 `operation_cancelled`（`outcome: not_started`），运行中的请求经 worker 独立 stdin 线程的控制行在下一个原生调用边界停止，10 秒内未收敛则按 `cancel_unsettled` 终止 worker。回执为 `{request_id, trace_id, outcome: cancelled|completed|terminated|not_found, worker_exit?, settled_at_ms}`。调试器 continue/run_to 循环与 adb 传输轮询取消；`ContinueDebug` 的状态在原生调用内即入句柄，取消不会丢失。
+- `context status` 改为只读：daemon 存活时调用不写状态、不启动 worker 的 `context_status`，否则读取状态文件并探测记录的身份，从不启动 daemon；报告 daemon/worker 身份、活动请求、排队请求、session 恢复（含 `requires_restart` 与 `worker_exit`）与 worker 生命周期。修正会话模型中“请求从不隐式拉起替代 worker”的错误表述。
+- `rd.debug.run_to` 步进预算耗尽时与 `continue` 一致地成功返回 `stopped_reason: "timeout"`、当前状态、`target_pc` 与 `target_reached: false`，两者都如实报告 `effects_attempted` 与 `context_preserved`。删除 `rd.shader.debug_start` 未读取的 `timeout_ms`，以及 PixelHistory 的 20 秒假超时（`asyncio.wait_for` 包装、`PIXEL_HISTORY_TIMEOUT_S` 与相关分支）。
+- Android capture 传输：push 与设备端写入改为由 `platform` 启动的 adb 客户端，按目标文件大小增长判断进度并报告 `capture_transfer_progress`；停滞或取消时结束 adb 客户端并保留恢复路径。未确认释放的设备端临时目录登记到 context，由 `context clear` 清理。
+- 持久化的 context 状态不再写入 `schema_version` 标记；旧文件在下次保存时去掉该字段。
+- 发行包 SBOM 的文档标识由 `rdc-tool.sbom.v1` 改为不带版本号的 `rdc-tool.sbom`（包版本仍在其 `version` 字段），发行包校验要求该标识。
+- `version --json` 新增 `data.catalog`（`schema_version`、`fingerprint`、`tool_count`），与 `tools list --json` 报告的同一份 catalog 一致；RDC-Agent 据此把（版本，指纹）与其打包的 catalog 快照成对校验。发布包校验要求该字段存在。
 - 修复 Linux 本地回放在打开 capture 时段错误：POSIX 加载原语此前先用 ctypes 预加载 `librenderdoc.so`，RenderDoc 的库构造函数此时还看不到 Python 绑定导出的 `renderdoc__replay__marker`，便按"被注入的捕获目标"安装钩子，随后在 `WrappedVulkan::Serialise_vkCreateSwapchainKHR` 崩溃。Linux 主机布局把原生库移到 `lib/librenderdoc.so`（Vulkan layer 清单同在 `lib/`），由绑定自带的 RUNPATH `$ORIGIN/../lib/` 作为依赖加载，POSIX 不再预加载任何库。此前记为"lavapipe 上原生回放崩溃"的阻塞即此缺陷，与驱动无关。
 - 统一请求拒绝的无副作用证明：事件缺失等前置拒绝仅在未尝试原生效果且入口回放及关联状态逐项不变时返回 `validation` 与保全字段；无法证明时返回 `runtime`。事件不存在的分类由 `not_found` 改为 `validation` 或 `runtime`；仅有未尝试 shader replacement 不再证明整个回放未变。
 - 新增 `rdc_tool/platform/` 平台层（host、locks、process、ipc、native、preview），每个契约一套共享逻辑加 Windows/POSIX 原语；平台包外禁止任何主机判断，由 `tests/test_platform_boundary.py` 守护。此前 HEAD 在 Linux 上无法 import。参考外部 PR #2 重新实现并署名。

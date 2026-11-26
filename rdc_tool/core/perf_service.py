@@ -14,12 +14,11 @@
 
 from __future__ import annotations
 
-import asyncio
-import functools
 import logging
 import math
 from typing import Any, Dict, List, Tuple
 
+from rdc_tool import native_calls
 from rdc_tool.core.errors import CoreError
 from rdc_tool.models import PerfResult, CounterSample, CounterSummary
 
@@ -45,7 +44,7 @@ async def measure_frame_gpu(controller: Any, rd: Any, *, samples: int, warmup: i
                 "recovery_hint": "Use a matching RenderDoc runtime that exposes FrameGPUDuration; no event-duration or CPU-time fallback is available.",
             },
         )
-    available = await asyncio.to_thread(controller.EnumerateCounters)
+    available = await native_calls.offload(controller.EnumerateCounters)
     if counter not in available:
         raise CoreError(
             code="frame_timing_unavailable",
@@ -60,10 +59,10 @@ async def measure_frame_gpu(controller: Any, rd: Any, *, samples: int, warmup: i
                 "recovery_hint": "Use a replay configuration that enumerates FrameGPUDuration; no event-duration or CPU-time fallback is available.",
             },
         )
-    desc = await asyncio.to_thread(controller.DescribeCounter, counter)
+    desc = await native_calls.offload(controller.DescribeCounter, counter)
     if int(desc.unit) != _COUNTER_UNIT_SECONDS or int(desc.resultType) != _COMP_TYPE_FLOAT or int(desc.resultByteWidth) != 8:
         raise ValueError("Whole-replay counter has an invalid unit or result format")
-    pending = list(await asyncio.to_thread(controller.GetRootActions))
+    pending = list(await native_calls.offload(controller.GetRootActions))
     events = []
     while pending:
         action = pending.pop()
@@ -74,7 +73,7 @@ async def measure_frame_gpu(controller: Any, rd: Any, *, samples: int, warmup: i
     values = []
     for index in range(samples + warmup):
         try:
-            rows = list(await asyncio.to_thread(controller.FetchCounters, [counter]))
+            rows = list(await native_calls.offload(controller.FetchCounters, [counter]))
         except Exception as exc:
             raise CoreError(
                 code="frame_timing_sample_failed",
@@ -271,13 +270,6 @@ class PerfService:
     # Executor helper（执行器辅助）
     # ------------------------------------------------------------------
 
-    @staticmethod
-    async def _offload(fn: Any, *args: Any, **kwargs: Any) -> Any:
-        """在默认 thread-pool executor 中运行同步 callable。"""
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(
-            None, functools.partial(fn, *args, **kwargs),
-        )
 
     # ------------------------------------------------------------------
     # enumerate_counters
@@ -327,7 +319,7 @@ class PerfService:
             raise RuntimeError("GPU counter read failed") from exc
 
         try:
-            counter_enums = await self._offload(controller.EnumerateCounters)
+            counter_enums = await native_calls.offload(controller.EnumerateCounters)
         except Exception as exc:
             logger.error("EnumerateCounters failed: %s", exc)
             raise RuntimeError("GPU counter read failed") from exc
@@ -335,7 +327,7 @@ class PerfService:
         results: List[Dict[str, Any]] = []
         for counter in counter_enums:
             try:
-                desc = await self._offload(
+                desc = await native_calls.offload(
                     controller.DescribeCounter, counter,
                 )
                 results.append({
@@ -411,7 +403,7 @@ class PerfService:
         # -- 从整数 ID 解析 GPUCounter enums ------------------------------
         counter_list: List[Any] = []
         try:
-            all_counters = await self._offload(controller.EnumerateCounters)
+            all_counters = await native_calls.offload(controller.EnumerateCounters)
             available_map: Dict[int, Any] = {
                 int(c): c for c in all_counters
             }
@@ -434,7 +426,7 @@ class PerfService:
         name_map: Dict[int, str] = {}
         for counter in counter_list:
             try:
-                desc = await self._offload(
+                desc = await native_calls.offload(
                     controller.DescribeCounter, counter,
                 )
                 desc_map[int(counter)] = desc
@@ -446,7 +438,7 @@ class PerfService:
 
         # -- 抓取 counters ------------------------------------------------
         try:
-            raw_results = await self._offload(
+            raw_results = await native_calls.offload(
                 controller.FetchCounters, counter_list,
             )
         except Exception as exc:
@@ -592,7 +584,7 @@ class PerfService:
 
         # -- 查找 GPU-duration counter ------------------------------------
         try:
-            all_counters = await self._offload(controller.EnumerateCounters)
+            all_counters = await native_calls.offload(controller.EnumerateCounters)
         except Exception as exc:
             logger.error("EnumerateCounters failed: %s", exc)
             raise RuntimeError("GPU counter read failed") from exc
@@ -602,7 +594,7 @@ class PerfService:
 
         for counter in all_counters:
             try:
-                desc = await self._offload(
+                desc = await native_calls.offload(
                     controller.DescribeCounter, counter,
                 )
                 cname = str(getattr(desc, "name", ""))
@@ -628,7 +620,7 @@ class PerfService:
 
         # -- 抓取所有 events 的 duration counter ---------------------------
         try:
-            raw_results = await self._offload(
+            raw_results = await native_calls.offload(
                 controller.FetchCounters, [duration_counter],
             )
         except Exception as exc:

@@ -26,7 +26,7 @@ from rdc_tool.io_utils import sha256_file
 from rdc_tool.platform import process
 from rdc_tool.runtime_identity import native_manifest_status
 from rdc_tool.runtime_paths import host_layout
-from scripts.package_release import ENTRYPOINTS, certified_targets
+from scripts.package_release import ENTRYPOINTS, SBOM_SCHEMA, certified_targets
 
 
 PUBLIC_COMMAND = "rdc-tool"
@@ -196,7 +196,9 @@ def _verify_license_inventory(root: Path) -> None:
     if project_rows[0].get("license") != "Apache-2.0" or project_rows[0].get("path") != "LICENSE":
         raise RuntimeError(f"rdc-tool license inventory mismatch: {project_rows[0]!r}")
     sbom = json.loads(sbom_path.read_text(encoding="utf-8"))
-    components = sbom.get("components") if isinstance(sbom, dict) else None
+    if not isinstance(sbom, dict) or sbom.get("schema") != SBOM_SCHEMA:
+        raise RuntimeError(f"SBOM schema is not {SBOM_SCHEMA!r}")
+    components = sbom.get("components")
     if not isinstance(components, list):
         raise RuntimeError("SBOM components field is missing or invalid")
     sbom_rows = [row for row in components if isinstance(row, dict) and row.get("name") == "rdc-tool"]
@@ -293,7 +295,7 @@ def _verify_tools_catalog(root: Path) -> None:
 
 def _verify_cli_contract(root: Path) -> None:
     checks = [
-        (["context", "status", "--json"], "rd.session.get_context"),
+        (["context", "status", "--json"], "rdc_tool.context.status"),
         (["context", "list", "--json"], "rd.session.list_contexts"),
         (["--daemon-context", "package-contract", "context", "update", "--key", "notes", "--value", "package-verify", "--json"], "rd.session.update_context"),
         (["--daemon-context", "package-contract", "context", "clear", "--json"], "rdc_tool.context.clear"),

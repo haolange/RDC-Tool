@@ -3,7 +3,7 @@
 将 RenderDoc 的 texture display、readback 和 pixel inspection APIs
 封装为 async 操作，生成版本化 artifacts，并通过 artifact-store 抽象存储。
 
-所有阻塞的 RenderDoc 调用都会通过 ``asyncio.to_thread`` 分派到线程，
+所有阻塞的 RenderDoc 调用都会通过 ``native_calls.offload`` 分派到 replay 线程，
 确保服务可在 async event loop 中运行而不阻塞其他协程。
 
 ``renderdoc`` module 采用延迟导入——仅在 RenderDoc replay context 中可用，
@@ -12,7 +12,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import io
 import logging
 import math
@@ -23,6 +22,7 @@ from typing import Any, Dict, List, Optional, Protocol, Tuple, runtime_checkable
 
 import numpy as np
 
+from rdc_tool import native_calls
 from rdc_tool.core.errors import RuntimeToolError
 from rdc_tool.core.renderdoc_status import status_code_name, status_code_raw, status_text
 from rdc_tool.core.texture_view import bound_texture_view_format
@@ -416,7 +416,7 @@ class RenderService:
         output = session_manager.get_output(session_id)
 
         # 导航到指定 event。
-        await asyncio.to_thread(controller.SetFrameEvent, event_id, True)
+        await native_calls.offload(controller.SetFrameEvent, event_id, True)
 
         # 确定目标 texture。
         tex_id = await self._resolve_source_texture(controller, source_config)
@@ -466,17 +466,17 @@ class RenderService:
         tex_display.overlay = _resolve_overlay(overlay_name)
 
         # ---- Render and readback -------------------------------------
-        await asyncio.to_thread(output.SetTextureDisplay, tex_display)
-        await asyncio.to_thread(output.Display)
+        await native_calls.offload(output.SetTextureDisplay, tex_display)
+        await native_calls.offload(output.Display)
 
-        rgba_bytes: bytes = await asyncio.to_thread(
+        rgba_bytes: bytes = await native_calls.offload(
             output.ReadbackOutputTexture,
         )
-        width, height = await asyncio.to_thread(output.GetDimensions)
+        width, height = await native_calls.offload(output.GetDimensions)
 
         # ---- Encode --------------------------------------------------
         fmt_lower = output_format.lower()
-        image_bytes, actual_fmt = await asyncio.to_thread(
+        image_bytes, actual_fmt = await native_calls.offload(
             _encode_image, rgba_bytes, width, height, fmt_lower,
         )
 
@@ -542,7 +542,7 @@ class RenderService:
             except Exception:
                 backend_type = "unknown"
 
-        await asyncio.to_thread(controller.SetFrameEvent, event_id, True)
+        await native_calls.offload(controller.SetFrameEvent, event_id, True)
         resolved_id = await self._resolve_texture_id(controller, texture_id)
         fmt, file_type = _resolve_file_type(output_format)
 
@@ -579,14 +579,14 @@ class RenderService:
                 sub.mip = int(subresource.get("mip", 0) if subresource else 0)
                 sub.slice = int(subresource.get("slice", 0) if subresource else 0)
                 sub.sample = int(subresource.get("sample", 0) if subresource else 0)
-                raw_data = await asyncio.to_thread(
+                raw_data = await native_calls.offload(
                     controller.GetTextureData,
                     resolved_id,
                     sub,
                 )
-                await asyncio.to_thread(target_path.write_bytes, bytes(raw_data))
+                await native_calls.offload(target_path.write_bytes, bytes(raw_data))
             else:
-                save_result = await asyncio.to_thread(
+                save_result = await native_calls.offload(
                     controller.SaveTexture,
                     save_data,
                     str(target_path),
@@ -681,7 +681,7 @@ class RenderService:
         rd = _get_rd()
         controller = session_manager.get_controller(session_id)
 
-        await asyncio.to_thread(controller.SetFrameEvent, event_id, True)
+        await native_calls.offload(controller.SetFrameEvent, event_id, True)
 
         # 构建 subresource 描述符。
         sub = rd.Subresource()
@@ -708,7 +708,7 @@ class RenderService:
         tex_height = max(1, tex_desc.height >> sub.mip)
 
         # 从 GPU readback 获取原始数据。
-        raw_data: bytes = await asyncio.to_thread(
+        raw_data: bytes = await native_calls.offload(
             controller.GetTextureData, resolved_id, sub,
         )
 
@@ -721,7 +721,7 @@ class RenderService:
         source_format = str(tex_desc.format.Name()).upper()
         view_format = None
         if "TYPELESS" in source_format:
-            view_format = await asyncio.to_thread(bound_texture_view_format, controller, resolved_id, rd)
+            view_format = await native_calls.offload(bound_texture_view_format, controller, resolved_id, rd)
         raw_typeless = "TYPELESS" in source_format and view_format is None
         format_name = str(view_format.Name()).upper() if view_format is not None else source_format
         if format_name in {"R10G10B10A2_TYPELESS", "B10G10R10A2_TYPELESS",
@@ -848,7 +848,7 @@ class RenderService:
         rd = _get_rd()
         controller = session_manager.get_controller(session_id)
 
-        await asyncio.to_thread(controller.SetFrameEvent, event_id, True)
+        await native_calls.offload(controller.SetFrameEvent, event_id, True)
 
         resolved_id = await self._resolve_texture_id(controller, texture_id)
         sub = rd.Subresource()
@@ -862,7 +862,7 @@ class RenderService:
         if value_type not in {"float", "uint", "int"}:
             raise ValueError("Pixel value type must be float, uint or int")
 
-        pixel_value = await asyncio.to_thread(
+        pixel_value = await native_calls.offload(
             controller.PickPixel,
             resolved_id,
             int(x),
@@ -925,12 +925,12 @@ class RenderService:
         rd = _get_rd()
         controller = session_manager.get_controller(session_id)
 
-        await asyncio.to_thread(controller.SetFrameEvent, event_id, True)
+        await native_calls.offload(controller.SetFrameEvent, event_id, True)
 
         resolved_id = await self._resolve_texture_id(controller, texture_id)
         sub = rd.Subresource()
 
-        min_val, max_val = await asyncio.to_thread(
+        min_val, max_val = await native_calls.offload(
             controller.GetMinMax,
             resolved_id,
             sub,
@@ -1000,7 +1000,7 @@ class RenderService:
                 )
             # 若调用方传入整数，则在 texture 列表中查找。
             if isinstance(tex_id_raw, int):
-                textures = await asyncio.to_thread(controller.GetTextures)
+                textures = await native_calls.offload(controller.GetTextures)
                 for tex in textures:
                     if int(tex.resourceId) == tex_id_raw:
                         return tex.resourceId
@@ -1011,7 +1011,7 @@ class RenderService:
             return tex_id_raw
 
         # "final_output" —— 当前 draw call 的最后一个非空 colour output。
-        pipe_state = await asyncio.to_thread(controller.GetPipelineState)
+        pipe_state = await native_calls.offload(controller.GetPipelineState)
         targets = pipe_state.GetOutputTargets()
         for target in reversed(targets):
             resource_id = getattr(target, "resourceId", None)
@@ -1024,7 +1024,7 @@ class RenderService:
                 return resource_id
 
         # 回退：使用 capture 中的第一张 texture。
-        textures = await asyncio.to_thread(controller.GetTextures)
+        textures = await native_calls.offload(controller.GetTextures)
         if textures:
             logger.warning(
                 "_resolve_source_texture: no output targets found; "
@@ -1046,7 +1046,7 @@ class RenderService:
         支持 ``int``（扫描 textures）或已解析的 ``ResourceId``。
         """
         if isinstance(texture_id, int):
-            textures = await asyncio.to_thread(controller.GetTextures)
+            textures = await native_calls.offload(controller.GetTextures)
             for tex in textures:
                 if int(tex.resourceId) == texture_id:
                     return tex.resourceId
@@ -1062,7 +1062,7 @@ class RenderService:
 
         若该 texture 不在 capture 中，则返回 ``None``。
         """
-        textures = await asyncio.to_thread(controller.GetTextures)
+        textures = await native_calls.offload(controller.GetTextures)
         for tex in textures:
             if tex.resourceId == resource_id:
                 return tex

@@ -383,7 +383,7 @@ def test_cancel_joins_native_target_cleanup_before_returning():
         finally:
             cleaned.set()
     async def scenario():
-        task = asyncio.create_task(remote_target._offload_target_operation(work))
+        task = asyncio.create_task(renderdoc_api._offload(work))
         while not entered.is_set():
             await asyncio.sleep(0.01)
         task.cancel()

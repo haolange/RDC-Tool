@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Awaitable, Callable
 
+from rdc_tool import native_calls
+
 
 class InitialContentsUnavailable(ValueError):
     pass
@@ -111,7 +113,7 @@ async def preserving_event(controller: Any, original_event: int, operation: Call
             raise
         finally:
             try:
-                await asyncio.to_thread(controller.SetFrameEvent, original_event, True)
+                await native_calls.offload(controller.SetFrameEvent, original_event, True)
             except Exception as exc:
                 message = f"Could not restore replay event {original_event}: {exc}"
                 if read_error is not None:

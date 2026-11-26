@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
 
+from rdc_tool import progress
 from rdc_tool.core.errors import CoreError
 from rdc_tool.models import _new_id
 from rdc_tool.runtime import (
@@ -295,10 +296,13 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
         )
         oplog._progress("session_created", "Replay session allocated", progress_pct=0.72, details={"session_id": session_info.session_id, "backend_type": backend_type})
         try:
-            reporter = live_state._current_progress_reporter()
+            reporter = progress.current_reporter()
             if backend_type == "remote" and reporter is not None:
                 live_state._session_manager.get_state(session_info.session_id).transfer_progress = lambda stage, fraction: reporter.emit(stage, "Transferring capture", progress_pct=fraction, details={"session_id": session_info.session_id})
-            cap_info = await live_state._session_manager.open_capture(session_info.session_id, handle.file_path)
+            try:
+                cap_info = await live_state._session_manager.open_capture(session_info.session_id, handle.file_path)
+            finally:
+                remote_session._record_device_transfers(session_info.session_id)
             oplog._progress("capture_open_done", "Capture opened for replay", progress_pct=0.82, details={"session_id": session_info.session_id})
             # The session already exists in SessionManager after open_capture().
             # Avoid recovery-aware helpers until _runtime.replays/context state is

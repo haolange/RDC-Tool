@@ -3,19 +3,17 @@
 from __future__ import annotations
 
 import asyncio
-import contextvars
 import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from rdc_tool import remote_bootstrap
+from rdc_tool import native_calls, remote_bootstrap
 from rdc_tool.core.errors import CoreError, RuntimeToolError
 from rdc_tool.core.renderdoc_status import build_renderdoc_error_details, status_code_name
 from rdc_tool.remote_bootstrap import (
     AndroidBootstrapOptions,
     AndroidRemoteBootstrapError,
-    ConnectionBudget,
     _connection_budget,
 )
 from rdc_tool.runtime import coerce, live_state, oplog, remote_records, renderdoc_api, settings
@@ -120,9 +118,13 @@ def _collect_remote_server_info(
     return info
 
 
-async def _connect_remote_endpoint(host: str, port: int, transport: str, options: Dict[str, Any], timeout_ms: int) -> tuple[Any, Any, Dict[str, Any]]:
-    """Join cancellation before publishing a connection; roll back only acquired resources."""
-    budget = ConnectionBudget(timeout_ms)
+async def _connect_remote_endpoint(host: str, port: int, transport: str, options: Dict[str, Any]) -> tuple[Any, Any, Dict[str, Any]]:
+    """Join cancellation before publishing a connection; roll back only acquired resources.
+
+    The attempt runs under the request's no-progress budget: each reported
+    bootstrap stage moves its deadline forward.
+    """
+    budget = remote_bootstrap._request_budget()
     def connect() -> tuple[Any, Any, Dict[str, Any]]:
         token = _connection_budget.set(budget)
         bootstrap = None
@@ -183,16 +185,14 @@ async def _connect_remote_endpoint(host: str, port: int, transport: str, options
             raise
         finally:
             _connection_budget.reset(token)
-    ctx = contextvars.copy_context()
-    future = asyncio.get_running_loop().run_in_executor(None, ctx.run, connect)
+    call = native_calls.NativeCall(connect)
     try:
-        return await asyncio.shield(future)
+        return await call.result(on_cancel=budget.cancelled.set)
     except asyncio.CancelledError:
-        budget.cancelled.set()
         receipt: Dict[str, Any] = {"remote": {"stage": "cancelled", "code": "remote_connect_cancelled",
             "device_serial": str(options.get("device_serial") or "")}}
         try:
-            bootstrap, remote, _ = await asyncio.shield(future)
+            bootstrap, remote, _ = call.outcome()
         except Exception as error:
             # The joined worker has released its resources. PackageManager may
             # already have committed; retain its facts rather than imply rollback.
@@ -373,19 +373,6 @@ def _require_available_target_control(control: Any) -> None:
         raise RuntimeToolError("Remote target is busy", details={"busy_client": busy_client})
     if not control.Connected():
         raise RuntimeToolError("Remote target control is disconnected")
-
-
-async def _offload_target_operation(fn: Any, *args: Any, **kwargs: Any) -> Any:
-    future = asyncio.create_task(renderdoc_api._offload(fn, *args, **kwargs))
-    try:
-        return await asyncio.shield(future)
-    except asyncio.CancelledError:
-        # The worker owns the control and any temporary forward until the
-        # complete synchronous operation, including Shutdown, has settled.
-        try:
-            await asyncio.shield(future)
-        finally:
-            raise
 
 
 def _copy_remote_capture_sync(handle: live_state.RemoteHandle, ident: int, capture_id: int, local_path: Path) -> None:

@@ -1,6 +1,6 @@
 """Canonical public operation definitions. Catalogs and manuals are generated from this module."""
 from __future__ import annotations
-from rdc_tool.timeout_policy import REMOTE_CONNECT_DEFAULT_TIMEOUT_MS, remote_connect_timeout_policy
+from rdc_tool.timeout_policy import execution_budget
 
 OPERATIONS = [{'name': 'rd.buffer.get_data',
   'group': '3.7，缓冲区与网格数据访问 (Buffer & Mesh Data Access)',
@@ -634,9 +634,9 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'group': '3.9，Shader Debugger 与像素/顶点级调试 (Shader Debugging)',
   'description': '继续执行 debugger（直到断点/结束/超时）。',
   'parameter_raw': 'session_id (string): session_id (str)<br>shader_debug_id (string): '
-                   'shader_debug_id (str), current owning replay only; stale/foreign handles fail before native effects<br>timeout_ms (integer, optional): timeout_ms (int, 可选, '
-                   '默认 10000)',
-  'returns_raw': 'ok (bool)<br>data (dict): {state, stopped_reason}<br>artifacts (list)<br>error '
+                   'shader_debug_id (str), current owning replay only; stale/foreign handles fail before native effects<br>timeout_ms (integer, optional): stepping budget in milliseconds (default 10000)',
+  'returns_raw': 'ok (bool)<br>data (dict): {state, stopped_reason: breakpoint|finished|timeout}; a timeout '
+                 'also reports effects_attempted and context_preserved<br>artifacts (list)<br>error '
                  '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
   'param_names': ['session_id', 'shader_debug_id', 'timeout_ms'],
   'prerequisites': [{'requires': 'session_id',
@@ -766,8 +766,11 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'description': '逐项运行到指定trace stepIndex（target.pc），不支持后退或源码位置。',
   'parameter_raw': 'session_id (string): session_id (str)<br>shader_debug_id (string): '
                    'shader_debug_id (str)<br>target (object): See input_schema for '
-                   'constraints.<br>timeout_ms (integer, optional): timeout_ms (int, 可选, 默认 10000)',
-  'returns_raw': 'ok (bool)<br>data (dict): {state}<br>artifacts (list)<br>error '
+                   'constraints.<br>timeout_ms (integer, optional): stepping budget in milliseconds (default 10000)',
+  'returns_raw': 'ok (bool)<br>data (dict): {state} once target.pc is reached; {state, stopped_reason=finished} '
+                 'when the trace ends first; when the stepping budget runs out, {state, stopped_reason=timeout, '
+                 'target_pc, target_reached=false, effects_attempted, context_preserved}: the debugger advanced to '
+                 'the reported state and the replay event is not moved by debugger steps<br>artifacts (list)<br>error '
                  '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
   'param_names': ['session_id', 'shader_debug_id', 'target', 'timeout_ms'],
   'prerequisites': [{'requires': 'session_id',
@@ -2043,12 +2046,11 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'scope': 'global', 'effects': [], 'evidence_kind': None, 'path_inputs': []},
  {'name': 'rd.remote.connect',
   'preparation_policy': 'automatic',
-  'timeout_policy': remote_connect_timeout_policy(),
   'group': '3.12，远程连接与自动化抓帧 (Remote Capture & Target Control)',
   'description': '连接远程 RenderDoc server。选择 Android 设备即自动准备：缺失时安装、兼容时启动或借用、不兼容时覆盖，必要时降级或卸载重装目标辅助程序（可能清除其数据）。busy 和未知归属服务不抢占。',
-  'parameter_raw': 'host (string, optional)<br>port (integer, optional): default 38920<br>timeout_ms (integer, optional): total preparation and connection budget<br>options (object, optional): {transport, device_serial, local_port, push_config}',
-  'returns_raw': 'data: {context_id, remote_id, server_info}; success requires native handshake and Ping. Android bootstrap records ownership, install_mode, installed_apk, uninstalled_existing, expected_version, apk_sha256, installed_apk_path, installed_apk_sha256, apk_identity_status and apk_identity_reason. APK byte identity does not decide service compatibility. Missing installation receipts are resolved by serial read-only PackageManager and target APK identity checks within the original deadline; no blind reinstall. Unresolved completion returns remote_install_unconfirmed with details.device_action and bounded original install output. Progress checking/installing/starting/verifying is reported by daemon active_operation. Cancellation joins native actions, preserves installation facts and only releases owned resources; installed packages are not rolled back. timeout_policy declares the native argument/default and worker/transport/process join grace.',
-  'param_names': ['host', 'port', 'timeout_ms', 'options'],
+  'parameter_raw': 'host (string, optional)<br>port (integer, optional): default 38920<br>options (object, optional): {transport, device_serial, local_port, push_config}',
+  'returns_raw': 'data: {context_id, remote_id, server_info}; success requires native handshake and Ping. Android bootstrap records ownership, install_mode, installed_apk, uninstalled_existing, expected_version, apk_sha256, installed_apk_path, installed_apk_sha256, apk_identity_status and apk_identity_reason. APK byte identity does not decide service compatibility. Missing installation receipts are resolved by serial read-only PackageManager and target APK identity checks within the original connection budget; no blind reinstall. Unresolved completion returns remote_install_unconfirmed with details.device_action and bounded original install output. Progress checking/installing/starting/verifying is reported by daemon active_operation. Cancellation joins native actions, preserves installation facts and only releases owned resources; installed packages are not rolled back. The attempt runs under the request no-progress budget (execution_budget): every reported bootstrap stage moves its deadline forward, and a silent attempt ends with remote_connect_timeout before the worker watchdog fires.',
+  'param_names': ['host', 'port', 'options'],
   'prerequisites': [{'requires': 'capability.remote',
                      'via_tools': ['rd.core.init'],
                      'reason': 'Remote tools require remote capability to be enabled for the '
@@ -2060,8 +2062,6 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                                            'type': 'string'},
                                   'port': {'description': 'port (int, optional, default 38920)',
                                            'type': 'integer'},
-                                  'timeout_ms': {'description': f'total native deadline in milliseconds (default {REMOTE_CONNECT_DEFAULT_TIMEOUT_MS})',
-                                                 'type': 'integer', 'minimum': 1, 'default': REMOTE_CONNECT_DEFAULT_TIMEOUT_MS},
                                   'options': {'type': 'object',
                                               'properties': {'transport': {'type': 'string',
                                                                            'enum': ['renderdoc',
@@ -2997,8 +2997,7 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                    '中附带 `supported_modes` / `requested_mode` / `failure_stage` / '
                    '`failure_reason`<br>event_id (integer, optional): event_id (int, 可选): 缺省为当前 '
                    'active event<br>params (object): params (dict): pixel 模式下使用 {x, y, sample?, '
-                   'target?, view?, primitive?}；显式 target 只验证该目标，不回退到其他输出；缺省时使用当前 Event 输出，找不到时才尝试默认目标<br>timeout_ms (integer, optional): timeout_ms '
-                   '(int, 可选, 默认 10000)<br>context_id (string, optional): context_id (str, '
+                   'target?, view?, primitive?}；显式 target 只验证该目标，不回退到其他输出；缺省时使用当前 Event 输出，找不到时才尝试默认目标<br>context_id (string, optional): context_id (str, '
                    'optional): choose the context to use; defaults to the current daemon context',
   'returns_raw': 'ok (bool)<br>data (dict): {shader_debug_id, initial_state, resolved_context, debug_qualification?, '
                  'resolved_event_id, pixel_history_summary, selected_target_source, failure_stage, '
@@ -3008,7 +3007,7 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                  'Pixel History, returns pixel_history_unsupported_input_attachment after replay position '
                  'restoration.<br>meta (dict)<br>projections (dict, 可选)'
                  '<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
-  'param_names': ['session_id', 'mode', 'event_id', 'params', 'timeout_ms', 'context_id'],
+  'param_names': ['session_id', 'mode', 'event_id', 'params', 'context_id'],
   'prerequisites': [{'requires': 'session_id',
                      'via_tools': ['rd.capture.open_file', 'rd.capture.open_replay'],
                      'reason': 'This tool operates on a live replay session.'}],
@@ -3029,8 +3028,6 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                                   'params': {'description': 'params (dict): pixel 模式下使用 {x, y, '
                                                             'sample?, target?, view?, primitive?}；显式 target 不回退，缺省按当前 Event 输出选择',
                                              'type': 'object'},
-                                  'timeout_ms': {'description': 'timeout_ms (int, 可选, 默认 10000)',
-                                                 'type': 'integer'},
                                   'context_id': {'description': 'context_id (str, optional): '
                                                                 'choose the context to use; '
                                                                 'defaults to the current daemon '
@@ -4513,3 +4510,9 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'effects': ['replay_position_temporary'],
   'evidence_kind': 'measurement',
   'path_inputs': []}]
+
+# Every operation is bounded by the same no-progress rule; callers choose the
+# budget per request within this published range.
+for _operation in OPERATIONS:
+    _operation["execution_budget"] = execution_budget()
+del _operation

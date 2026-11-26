@@ -6,7 +6,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from rdc_tool import timeout_policy
 from rdc_tool.core import replay_facts
 from rdc_tool.runtime import dispatch, live_state, pixel_trace, renderdoc_api, replay_access, runtime_lifecycle, shader_patches
 from rdc_tool.runtime.operations import core as core_ops
@@ -460,7 +459,9 @@ def test_debug_start_rejects_zero_hit_explicit_target_without_fallback(monkeypat
     assert controller.debug_calls == []
 
 
-def test_debug_start_times_out_pixel_history(monkeypatch) -> None:
+def test_debug_start_waits_for_slow_pixel_history_without_a_private_timeout(monkeypatch) -> None:
+    # PixelHistory is one native call governed by the request's no-progress
+    # budget; debug_start no longer invents its own 20 s timeout around it.
     controller = _FakeController([])
     _install_debug_env(monkeypatch, controller, [])
 
@@ -469,7 +470,6 @@ def test_debug_start_times_out_pixel_history(monkeypatch) -> None:
         return []
 
     monkeypatch.setattr(pixel_trace, "_pixel_history_raw", _slow_history)
-    monkeypatch.setattr(timeout_policy, "PIXEL_HISTORY_TIMEOUT_S", 0.01)
 
     payload = asyncio.run(
             shader_ops.dispatch(
@@ -484,14 +484,12 @@ def test_debug_start_times_out_pixel_history(monkeypatch) -> None:
         )
 
     assert payload.ok is False
-    assert payload.code == "shader_debug_start_failed"
-    assert payload.category == "runtime"
     assert payload.details["failure_stage"] == "pixel_history"
-    assert payload.details["failure_reason"] == "pixel_history_timeout"
-    assert payload.details["pixel_history_timeout_count"] == 1
+    assert payload.details["failure_reason"] == "no_event_hit"
+    assert "pixel_history_timeout_count" not in payload.details
 
 
-def test_texture_get_pixel_history_times_out(monkeypatch) -> None:
+def test_texture_get_pixel_history_waits_for_a_slow_native_history(monkeypatch) -> None:
     class _FakeSubresource:
         def __init__(self) -> None:
             self.mip = 0
@@ -509,14 +507,13 @@ def test_texture_get_pixel_history_times_out(monkeypatch) -> None:
 
     async def _slow_history(controller_obj: object, resource_id: object, x: int, y: int, subresource: object):  # type: ignore[no-untyped-def]
         await asyncio.sleep(0.05)
-        return []
+        raise RuntimeError("native history failed after a slow read")
 
     monkeypatch.setattr(replay_access, "_get_controller", _fake_get_controller)
     monkeypatch.setattr(replay_access, "_ensure_event", _fake_ensure_event)
     monkeypatch.setattr(replay_access, "_resolve_texture_id", _fake_resolve_texture_id)
     monkeypatch.setattr(replay_facts, "pixel_history_input_attachment_conflict", lambda *args: None)
     monkeypatch.setattr(pixel_trace, "_pixel_history_raw", _slow_history)
-    monkeypatch.setattr(timeout_policy, "PIXEL_HISTORY_TIMEOUT_S", 0.01)
     monkeypatch.setattr(renderdoc_api, "_get_rd", lambda: SimpleNamespace(Subresource=_FakeSubresource))
     monkeypatch.setattr(live_state, "_render_service", object())
 
@@ -527,11 +524,10 @@ def test_texture_get_pixel_history_times_out(monkeypatch) -> None:
             )
         )
 
+    # The slow call ran to its own end: its real failure is reported, not a timeout.
     assert payload.ok is False
-    assert payload.code == "pixel_history_timeout"
-    assert payload.category == "runtime"
-    assert payload.details["timeout_seconds"] == 0.01
-    assert payload.details["resolved_event_id"] == 11
+    assert payload.code == "runtime_error"
+    assert "native history failed after a slow read" in payload.message
 
 
 def test_removed_shader_hotfix_macro_is_not_dispatchable() -> None:

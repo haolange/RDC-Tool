@@ -114,6 +114,9 @@ def test_dispatch_capture_open_replay_returns_after_ready_state_without_preview_
             assert session_id == "sess_demo"
             return self.controller
 
+        def get_state(self, session_id: str):  # type: ignore[no-untyped-def]
+            return SimpleNamespace(retained_transfer_dirs=[], transfer_progress=None)
+
         async def close_session(self, session_id: str) -> None:
             raise AssertionError("open_replay success should not close the session")
 

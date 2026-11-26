@@ -16,6 +16,7 @@ from rdc_tool import context_snapshot
 from rdc_tool import remote_bootstrap
 from rdc_tool.core.errors import RuntimeToolError
 from rdc_tool.remote_bootstrap import AndroidBootstrapResult
+from fakes.android_device import FakeAndroidDevice as _AndroidCaptureDevice
 import time
 from rdc_tool.runtime import context_records, envelope, live_state, preview_sync, remote_records, remote_session, remote_target, renderdoc_api, replay_access, session_recovery, shader_patches, truth_matrix
 from rdc_tool.runtime.operations import buffer as buffer_ops
@@ -95,7 +96,7 @@ def test_remote_capability_probe_does_not_block_target_draw_from_present_event(m
 def test_android_recovery_uses_discovered_socket_and_fresh_local_forward(monkeypatch) -> None:
     observed = []
 
-    async def connect(host, port, transport, options, timeout_ms):
+    async def connect(host, port, transport, options):
         observed.append((host, port, transport, dict(options)))
         bootstrap = AndroidBootstrapResult(
             'adb-test', 'test-device', 'test-helper', '', '', '127.0.0.1',
@@ -154,7 +155,7 @@ def test_android_snapshot_rehydration_rejects_missing_forward_ownership(monkeypa
         'options': {'local_port': 58884, 'remote_port': 39920},
         'bootstrap': {'remote_port': 39920},
     }}
-    async def connect(host, port, transport, options, timeout_ms):
+    async def connect(host, port, transport, options):
         observed.append((port, dict(options)))
         bootstrap = SimpleNamespace(host='127.0.0.1', port=62000, remote_port=39920)
         return bootstrap, DummyRemoteServer(), {}
@@ -191,7 +192,7 @@ def test_android_snapshot_recovery_retires_only_verified_owned_forward(
     }}
     actions = []
     async def offload(fn, *args): return fn(*args)
-    async def connect(host, port, transport, options, timeout_ms):
+    async def connect(host, port, transport, options):
         actions.append(('connect', options['local_port']))
         return AndroidBootstrapResult(
             'adb-test', 'test-device', 'test-helper', '', '', '127.0.0.1',
@@ -446,6 +447,9 @@ class FakeSessionManager:
         self.controller_calls += 1
         return self.controller
 
+    def get_state(self, session_id: str) -> SimpleNamespace:
+        return SimpleNamespace(retained_transfer_dirs=[], transfer_progress=None)
+
 
 class FakeMeshFormat:
     type = 1
@@ -505,7 +509,7 @@ def test_dispatch_remote_connect_returns_live_handle_and_server_info(monkeypatch
     clear_context_snapshot()
     live_state._runtime.context_snapshots.clear()
     try:
-        payload = asyncio.run(remote_ops.dispatch("connect", {"host": "127.0.0.1", "port": 38920, "timeout_ms": 1000}))
+        payload = asyncio.run(remote_ops.dispatch("connect", {"host": "127.0.0.1", "port": 38920}))
         assert payload.ok is True
         assert payload.data['detail']["connected"] is True
         assert payload.data['server_info']["capabilities"]["supported_replays"] == ["Vulkan"]
@@ -537,7 +541,7 @@ def test_dispatch_remote_connect_failure_does_not_allocate_remote_id(monkeypatch
     live_state._runtime.remotes.clear()
     live_state._runtime.enable_remote = True
     try:
-        payload = asyncio.run(remote_ops.dispatch("connect", {"host": "127.0.0.1", "port": 38920, "timeout_ms": 1000}))
+        payload = asyncio.run(remote_ops.dispatch("connect", {"host": "127.0.0.1", "port": 38920}))
         assert payload.ok is False
         assert "remote_id" not in payload.details
         assert live_state._runtime.remotes == {}
@@ -581,7 +585,6 @@ def test_dispatch_remote_connect_allows_omitting_host_for_adb_android(monkeypatc
                             "transport": "adb_android",
                             "device_serial": "e38b8019",
                         },
-                        "timeout_ms": 1000,
                     },
                 )
             )
@@ -978,7 +981,7 @@ def test_remote_ping_failure_releases_acquired_connection(monkeypatch):
     monkeypatch.setattr(remote_target, '_wait_for_remote_endpoint', lambda *a: None)
     monkeypatch.setattr(remote_target, '_create_remote_server_connection', lambda *a: remote)
     with pytest.raises(Exception, match='Ping'):
-        asyncio.run(remote_target._connect_remote_endpoint('host', 1, 'renderdoc', {}, 1000))
+        asyncio.run(remote_target._connect_remote_endpoint('host', 1, 'renderdoc', {}))
     assert remote.shutdown_called
 
 
@@ -1001,7 +1004,7 @@ def test_remote_connect_cancel_joins_worker_and_releases_late_connection(monkeyp
         return remote
     monkeypatch.setattr(remote_target, '_create_remote_server_connection', create)
     async def run():
-        task = asyncio.create_task(remote_target._connect_remote_endpoint('host', 1, 'renderdoc', {}, 3000))
+        task = asyncio.create_task(remote_target._connect_remote_endpoint('host', 1, 'renderdoc', {}))
         while not entered.is_set():
             await asyncio.sleep(0)
         task.cancel()
@@ -1027,9 +1030,7 @@ def test_remote_capture_keeps_runtime_connection_ownership(monkeypatch):
     manager = SessionManager()
     remote = _FreshRemoteServer()
     state = SessionState(session_id='owned', backend_type=BackendType.REMOTE, remote_server=remote, remote_server_owned=False)
-    async def offload(fn, *args): return fn(*args)
     async def output(*args): pass
-    monkeypatch.setattr(manager, '_offload', offload)
     monkeypatch.setattr(manager, '_create_headless_output', output)
     monkeypatch.setattr(manager, '_open_remote_capture_sync', lambda *args: (remote, '/remote/capture.rdc', object()))
     asyncio.run(manager._open_remote_capture(state, 'capture.rdc'))
@@ -1196,8 +1197,6 @@ def test_failed_native_session_cleanup_retains_owner_and_is_not_retried(monkeypa
     state = SessionState(session_id='owned', backend_type=BackendType.REMOTE, controller=controller,
                          remote_server=remote, remote_server_owned=False)
     manager._sessions['owned'] = state
-    async def offload(fn, *args): return fn(*args)
-    monkeypatch.setattr(manager, '_offload', offload)
     try:
         with pytest.raises(RuntimeError, match='outcome unknown'):
             asyncio.run(manager.close_session('owned'))
@@ -1249,131 +1248,6 @@ def test_android_transfer_verifies_content_and_owns_only_new_paths(monkeypatch, 
     assert device.shell_source not in device.files and not device.shell_directories
 
 
-class _AndroidCaptureDevice:
-    package = "org.renderdoc.renderdoccmd.arm64"
-    private_root = "/data/user/0/" + package
-    nonce = "1234567890abcdef1234567890abcdef"
-
-    def __init__(self, monkeypatch, tmp_path, *, existing=False, verified=True):
-        import hashlib
-        import rdc_tool.core.session_manager as module
-        self.capture = tmp_path / "binary capture.rdc"
-        self.content = b"capture\x00\xff\xfe\r\n\x80"
-        self.capture.write_bytes(self.content)
-        self.digest = hashlib.sha256(self.content).hexdigest()
-        self.destination = f"{self.private_root}/files/rdc_tool_captures/{self.digest}.rdc"
-        self.shell_dir = f"/data/local/tmp/rdc-tool-transfer-{self.nonce}"
-        self.shell_source = self.shell_dir + "/source.rdc"
-        self.shell_directories = set()
-        self.files = {self.destination: self.content} if existing else {}
-        self.commands = []
-        self.owned = []
-        self.verified = verified
-        self.writer_mode = "complete"
-        self.sync_mode = "complete"
-        self.racing_content = None
-        self.racing_directory = False
-        self.new_file_created = False
-        self.cleanup_error = False
-        self.shell_cleanup_error = False
-        self.state = SessionState(session_id="copy", backend_type=BackendType.REMOTE,
-            remote_server=SimpleNamespace(TakeOwnershipCapture=self.owned.append),
-            remote_device_serial="device", remote_bootstrap={"adb_path": "adb", "package_name": self.package,
-                "config_remote_path": "/sdcard/Android/media/other/files/renderdoc.conf"})
-        monkeypatch.setattr(module.uuid, "uuid4", lambda: SimpleNamespace(hex=self.nonce))
-        monkeypatch.setattr(module.process.subprocess, "run", self.run)
-
-    def transfer(self):
-        return SessionManager()._copy_android_capture_with_adb(self.state, str(self.capture))
-
-    def run(self, argv, **kwargs):
-        import hashlib
-        import shlex
-        import subprocess
-        self.commands.append(argv)
-        assert argv[:3] == ["adb", "-s", "device"]
-        assert kwargs["stdin"] == subprocess.DEVNULL and "input" not in kwargs
-        assert kwargs["text"] is True  # Only diagnostics travel through host stdio.
-        result = lambda code=0, stdout="", stderr="": SimpleNamespace(returncode=code, stdout=stdout, stderr=stderr)
-        if argv[3] == "push":
-            assert argv[4:] == [str(self.capture), self.shell_source] and kwargs["timeout"] == 240
-            data = self.capture.read_bytes()
-            if self.sync_mode in {"timeout", "failed"}:
-                self.files[self.shell_source] = data[:1]
-                if self.sync_mode == "timeout":
-                    raise subprocess.TimeoutExpired(argv, 240)
-                return result(1, stderr="device offline")
-            self.files[self.shell_source] = data
-            return result(stdout="" if self.sync_mode == "empty_output" else "1 file pushed")
-        assert argv[3] == "shell"
-        assert all("/sdcard" not in arg for arg in argv)
-        if argv[4] == "sha256sum":
-            assert argv[5] == self.shell_source
-            if self.sync_mode == "unreadable":
-                return result(1, stderr="Permission denied")
-            if self.sync_mode == "missing":
-                return result(1, stderr=f"sha256sum: {self.shell_source}: No such file or directory")
-            data = b"corrupt" if self.sync_mode == "mismatch" else self.files[self.shell_source]
-            return result(stdout=hashlib.sha256(data).hexdigest() + "  " + self.shell_source + "\n")
-        if len(argv) == 5:
-            script = argv[4]
-            if script.startswith("umask"):
-                assert f"umask 077; mkdir -m 700 {self.shell_dir}" in script
-                self.shell_directories.add(self.shell_dir)
-                if self.sync_mode == "dir_collision":
-                    self.files[self.shell_dir + "/protected"] = b"keep"
-                    return result(1, stderr="File exists")
-                return result(stdout=f"{self.nonce}:SHELL_CREATED\n")
-            tokens = shlex.split(script)
-            if tokens[0] == "cat":
-                assert tokens[:7] == ["cat", self.shell_source, "|", "run-as", self.package, "sh", "-c"]
-                assert "set -C; exec 3> " + self.destination in tokens[7]
-                assert kwargs["timeout"] == 60
-                if self.racing_directory:
-                    return result(1, stderr="Is a directory")
-                if self.racing_content is not None:
-                    self.files[self.destination] = self.racing_content
-                    return result(1, stderr="File exists")
-                self.files[self.destination] = self.files[self.shell_source]
-                self.new_file_created = True
-                if self.writer_mode == "timeout":
-                    raise subprocess.TimeoutExpired(argv, 60, output=f"{self.nonce}:CREATED\n")
-                if self.writer_mode == "empty":
-                    return result()
-                if self.writer_mode == "wrong_nonce":
-                    return result(stdout="other:CREATED\nother:DONE:0\n")
-                if self.writer_mode == "failed":
-                    return result(1, stdout=f"{self.nonce}:CREATED\n{self.nonce}:DONE:1\n", stderr="write failed")
-                return result(stdout=f"{self.nonce}:CREATED\n{self.nonce}:DONE:0\n")
-            assert tokens[:6] == ["rm", "-f", self.shell_source, "&&", "rmdir", self.shell_dir]
-            if self.shell_cleanup_error:
-                return result(1, stderr="source cleanup denied")
-            del self.files[self.shell_source]
-            self.shell_directories.remove(self.shell_dir)
-            return result(stdout=f"{self.nonce}:SHELL_REMOVED\n")
-        assert argv[4:6] == ["run-as", self.package]
-        operation = argv[6:]
-        if operation == ["pwd"]:
-            return result(stdout=self.private_root + "\n")
-        if operation[0] == "sha256sum":
-            path = operation[1]
-            if path not in self.files:
-                return result(1, stderr=f"sha256sum: {path}: No such file or directory")
-            data = self.files[path] if path != self.destination or self.verified or not self.new_file_created else b"corrupt"
-            return result(stdout=hashlib.sha256(data).hexdigest() + "  " + path + "\n")
-        if operation[0] == "mkdir":
-            assert operation == ["mkdir", "-p", self.private_root + "/files/rdc_tool_captures"]
-            return result()
-        assert operation[:2] == ["sh", "-c"]
-        script = shlex.split(operation[2])[0]
-        tokens = shlex.split(script)
-        assert tokens[:2] == ["rm", "-f"]
-        if self.cleanup_error:
-            return result(1, stderr="cleanup denied")
-        del self.files[tokens[2]]
-        return result(stdout=f"{self.nonce}:REMOVED\n")
-
-
 @pytest.mark.parametrize("error", ["device offline", "Permission denied", ""])
 def test_android_transfer_refuses_unverifiable_existing_path(monkeypatch, tmp_path, error):
     import rdc_tool.core.session_manager as module
@@ -1417,7 +1291,7 @@ def test_android_capture_racing_directory_is_never_written_or_claimed(monkeypatc
     assert device.shell_directories == {device.shell_dir} and len(device.commands) == 7
 
 
-@pytest.mark.parametrize("mode", ["timeout", "empty", "wrong_nonce"])
+@pytest.mark.parametrize("mode", ["stall", "empty", "wrong_nonce"])
 def test_android_capture_unknown_writer_retains_asset_without_claim_or_cleanup(monkeypatch, tmp_path, mode):
     device = _AndroidCaptureDevice(monkeypatch, tmp_path)
     device.writer_mode = mode
@@ -1425,12 +1299,16 @@ def test_android_capture_unknown_writer_retains_asset_without_claim_or_cleanup(m
         device.transfer()
     assert device.destination in str(error.value)
     assert device.shell_dir in str(error.value)
-    assert device.files == {device.destination: device.content, device.shell_source: device.content}
+    assert device.files == {device.destination: device.content[:1] if mode == "stall" else device.content,
+                            device.shell_source: device.content}
     assert device.shell_directories == {device.shell_dir}
     assert not device.owned
     assert len(device.commands) == 7  # Ends at the one device-local writer; no follow-up native action.
-    if mode == "timeout":
-        assert isinstance(error.value.__cause__, __import__("subprocess").TimeoutExpired)
+    assert device.state.retained_transfer_dirs == [device.shell_dir]
+    if mode == "stall":
+        from rdc_tool.core.session_manager import TransferInterrupted
+        assert isinstance(error.value.__cause__, TransferInterrupted) and error.value.__cause__.reason == "stalled"
+        assert device.killed == [device.commands[-1]]
 
 
 def test_android_capture_empty_input_uses_sync_and_device_local_copy(monkeypatch, tmp_path):
@@ -1462,7 +1340,7 @@ def test_android_capture_existing_partial_cache_is_not_overwritten_or_claimed(mo
     assert not device.owned and not device.shell_directories and len(device.commands) == 2
 
 
-@pytest.mark.parametrize("mode", ["timeout", "failed"])
+@pytest.mark.parametrize("mode", ["stall", "failed"])
 def test_android_capture_unknown_sync_retains_source_without_copy_or_cleanup(monkeypatch, tmp_path, mode):
     device = _AndroidCaptureDevice(monkeypatch, tmp_path)
     device.sync_mode = mode
@@ -1472,8 +1350,11 @@ def test_android_capture_unknown_sync_retains_source_without_copy_or_cleanup(mon
     assert device.files == {device.shell_source: device.content[:1]}
     assert device.shell_directories == {device.shell_dir} and not device.owned
     assert len(device.commands) == 5 and device.commands[-1][3] == "push"
-    if mode == "timeout":
-        assert isinstance(error.value.__cause__, __import__("subprocess").TimeoutExpired)
+    assert device.state.retained_transfer_dirs == [device.shell_dir]
+    if mode == "stall":
+        from rdc_tool.core.session_manager import TransferInterrupted
+        assert isinstance(error.value.__cause__, TransferInterrupted) and error.value.__cause__.reason == "stalled"
+        assert device.killed == [device.commands[-1]]
 
 
 @pytest.mark.parametrize("mode", ["unreadable", "missing", "mismatch"])

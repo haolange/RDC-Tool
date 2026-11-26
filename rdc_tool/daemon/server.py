@@ -3,33 +3,139 @@
 from __future__ import annotations
 
 import argparse
+import collections
 import logging
 import os
 import signal
 import sys
 import threading
+import uuid
+from dataclasses import asdict
 from multiprocessing import AuthenticationError
 from typing import Any, Dict
 
+from rdc_tool import timeout_policy
 from rdc_tool.context_snapshot import normalize_context_id
+from rdc_tool.core.contracts import canonical_error
+from rdc_tool.io_utils import rotating_log_handler
+from rdc_tool.daemon import context_status
 from rdc_tool.daemon.client import context_has_unreleased_resources, owner_lost_should_stop
 from rdc_tool.daemon.state import (
-    DEFAULT_IDLE_TIMEOUT_S, DEFAULT_LEASE_TIMEOUT_S, epoch_ms, iso_to_ms, normalize_timeout, owner_process,
-    process_identity, public_view, save_state, state_path, utc_now_iso,
+    DEFAULT_IDLE_TIMEOUT_S, DEFAULT_LEASE_TIMEOUT_S, daemon_log_path, epoch_ms, iso_to_ms, normalize_timeout,
+    owner_process, process_identity, public_view, save_state, state_path, utc_now_iso,
 )
 from rdc_tool.daemon.ownership import OwnerLease
-from rdc_tool.daemon.worker import RuntimeWorkerProcess
+from rdc_tool.daemon.worker import RequestCancelled, RuntimeWorkerProcess, WorkerFailure
 from rdc_tool.platform import ipc, process
 from rdc_tool.platform.ipc import Endpoint
-from rdc_tool.progress import ProgressEvent, ProgressSink
+from rdc_tool.progress import NativeCallFrame, ProgressEvent
 from rdc_tool.runtime_state import load_context_state, save_context_state
 from rdc_tool.runtime_worker_state import load_worker_state
-from rdc_tool.timeout_policy import worker_exec_timeout_s
 
 logger = logging.getLogger("rdc_tool.daemon")
 # Do not release an owner's kernel lock while this process is still alive,
 # including listener/worker teardown and interpreter shutdown.
 _PROCESS_OWNER_LEASES: list[OwnerLease] = []
+WORKER_LIFECYCLE_LIMIT = 16
+# Settled requests are remembered briefly so a cancel that loses the race to
+# completion still gets a truthful receipt.
+_SETTLED_REQUEST_LIMIT = 32
+# A persisted worker exit keeps the head of its stack dump; the full tail stays
+# in worker.log and in the failing request's error envelope.
+_PERSISTED_STACK_TAIL_CHARS = 2048
+
+
+class WorkerUnavailable(RuntimeError):
+    """The worker could not be started or its predecessor's exit could not be confirmed; nothing ran."""
+
+
+class _ClientChannel:
+    """The open connection of one exec or clear_context request until its reply.
+
+    It carries a heartbeat every few seconds while the request is queued or
+    running, and, when the client asked for a stream, the request's progress and
+    native-call frames. A departed client never interrupts the request.
+    """
+
+    def __init__(self, conn: Any, request_id: str, *, stream: bool) -> None:
+        self._conn = conn
+        self._lock = threading.Lock()
+        self._open = conn is not None
+        self._stopped = threading.Event()
+        self.request_id = request_id
+        self.stream = stream
+        self.state = "queued"
+        self.trace_id = ""
+        self.cancel_requested = threading.Event()
+        self.settled = threading.Event()
+        self.receipt: Dict[str, Any] = {}
+
+    def settle(self, response: Dict[str, Any]) -> None:
+        """Record how the request ended, for a cancel receipt."""
+        result = response.get("result") if isinstance(response.get("result"), dict) else {}
+        error = result.get("error") if isinstance(result.get("error"), dict) else {}
+        code = str(error.get("code") or "")
+        details = error.get("details") if isinstance(error.get("details"), dict) else {}
+        receipt: Dict[str, Any] = {"request_id": self.request_id, "trace_id": self.trace_id, "settled_at_ms": epoch_ms()}
+        if code == "operation_cancelled" or (code == "worker_unavailable" and self.cancel_requested.is_set()):
+            receipt["outcome"] = "cancelled"
+        elif code in {"worker_stuck", "worker_lost", "worker_request_failed"}:
+            worker = details.get("worker") if isinstance(details.get("worker"), dict) else {}
+            receipt["outcome"] = "terminated"
+            receipt["worker_exit"] = {"pid": worker.get("pid"), "start_generation": worker.get("start_generation"),
+                                      "reason": details.get("reason"),
+                                      "exit_confirmed": bool(details.get("worker_exit_confirmed"))}
+        else:
+            receipt["outcome"] = "completed"
+        self.receipt = receipt
+        self.settled.set()
+
+    def _send(self, message: Dict[str, Any]) -> None:
+        with self._lock:
+            if not self._open:
+                return
+            try:
+                self._conn.send(message)
+            except Exception:
+                self._open = False
+
+    def heartbeat(self) -> None:
+        self._send({"kind": "heartbeat", "request_id": self.request_id, "ts_ms": epoch_ms(), "state": self.state})
+
+    def frame(self, frame: Dict[str, Any]) -> None:
+        if self.stream:
+            self._send({**frame, "request_id": self.request_id})
+
+    def start_heartbeats(self) -> None:
+        def beat() -> None:
+            self.heartbeat()
+            while not self._stopped.wait(timeout_policy.DAEMON_HEARTBEAT_INTERVAL_S):
+                self.heartbeat()
+
+        threading.Thread(target=beat, name=f"rdc-tool-daemon-heartbeat-{self.request_id}", daemon=True).start()
+
+    def reply(self, response: Dict[str, Any]) -> None:
+        self._stopped.set()
+        self._send(response)
+        with self._lock:
+            self._open = False
+
+
+class _RequestFrames:
+    """Frame sink of one running request: the daemon's live view first, then the client stream."""
+
+    def __init__(self, daemon: "DaemonRuntime", channel: _ClientChannel) -> None:
+        self._daemon = daemon
+        self._channel = channel
+
+    def publish(self, event: ProgressEvent) -> None:
+        self._daemon.publish(event)
+        self._channel.frame({"kind": "progress", **asdict(event)})
+
+    def native_call(self, frame: NativeCallFrame) -> None:
+        self._daemon.native_call(frame)
+        self._channel.frame({"kind": "native_call", "trace_id": frame.trace_id, "name": frame.name,
+                             "phase": frame.phase, "ts_ms": frame.ts_ms})
 
 
 def _resolved_birth(pid: int) -> str:
@@ -42,7 +148,7 @@ def _resolved_birth(pid: int) -> str:
         return ""
 
 
-class DaemonRuntime(ProgressSink):
+class DaemonRuntime:
     def __init__(
         self,
         *,
@@ -84,6 +190,7 @@ class DaemonRuntime(ProgressSink):
             "attached_clients": [],
             "active_request_count": 0,
             "active_operation": {},
+            "worker_lifecycle": [],
             "session_id": "",
             "capture_file_id": "",
             "capture_path": "",
@@ -108,6 +215,9 @@ class DaemonRuntime(ProgressSink):
         self._exec_lock = threading.Lock()
         self._worker: RuntimeWorkerProcess | None = None
         self._owner_lease: OwnerLease | None = None
+        self._requests_lock = threading.Lock()
+        self._requests: Dict[str, _ClientChannel] = {}
+        self._settled: "collections.OrderedDict[str, Dict[str, Any]]" = collections.OrderedDict()
 
     def _persist_state(self) -> None:
         with self._state_lock:
@@ -163,6 +273,33 @@ class DaemonRuntime(ProgressSink):
             payload["worker"] = dict(payload.get("worker") or {})
         return payload
 
+    def _context_status(self) -> Dict[str, Any]:
+        """Read-only: no state write, no worker start, no activity touch."""
+        with self._state_lock:
+            daemon = {"state": "alive", "pid": int(self.state.get("pid") or 0),
+                      "start_generation": str(self.state.get("birth") or ""),
+                      "started_at": str(self.state.get("started_at") or ""),
+                      "last_activity_at": str(self.state.get("last_activity_at") or "")}
+            active = dict(self.state.get("active_operation") or {})
+            lifecycle = [dict(item) for item in self.state.get("worker_lifecycle") or [] if isinstance(item, dict)]
+        worker = self._worker
+        if worker is not None and worker.is_running():
+            identity = worker.previous_identity()
+            worker_view = {"state": "alive", "pid": identity.pid, "start_generation": identity.birth}
+        elif worker is not None:
+            try:
+                identity = worker.previous_identity()
+            except RuntimeError:
+                identity = process.ProcessIdentity(0)
+            worker_view = context_status.probe_identity(identity.pid, identity.birth)
+        else:
+            worker_view = context_status.worker_from_state_file(self.daemon_context)
+        with self._requests_lock:
+            queued = [channel.request_id for channel in self._requests.values() if channel.state == "queued"]
+        return {"ok": True, "result": {**context_status.report(
+            self.daemon_context, source="daemon", daemon=daemon, worker=worker_view, active_operation=active,
+            worker_lifecycle=lifecycle), "queued_request_ids": queued}}
+
     def _status_payload(self) -> Dict[str, Any]:
         state = self._snapshot_state()
         self._persist_state()
@@ -210,18 +347,19 @@ class DaemonRuntime(ProgressSink):
         details: Dict[str, Any] | None = None,
     ) -> None:
         existing = self.state.get("active_operation")
-        started_at_ms = 0
-        if isinstance(existing, dict):
-            started_at_ms = int(existing.get("started_at_ms") or 0)
+        existing = existing if isinstance(existing, dict) else {}
+        now_ms = epoch_ms()
         self.state["active_operation"] = {
-            "trace_id": str(trace_id or (existing.get("trace_id") if isinstance(existing, dict) else "") or ""),
+            "trace_id": str(trace_id or existing.get("trace_id") or ""),
             "operation": str(operation),
             "stage": str(stage),
             "message": str(message),
             "progress_pct": progress_pct,
             "details": dict(details or {}),
-            "started_at_ms": started_at_ms or epoch_ms(),
-            "updated_at_ms": epoch_ms(),
+            "native_call": existing.get("native_call"),
+            "started_at_ms": int(existing.get("started_at_ms") or 0) or now_ms,
+            "updated_at_ms": now_ms,
+            "last_progress_ms": now_ms,
         }
 
     def _clear_active_operation_locked(self) -> None:
@@ -239,6 +377,16 @@ class DaemonRuntime(ProgressSink):
             )
             self.state["last_activity_at"] = utc_now_iso()
         self._persist_state()
+
+    def native_call(self, frame: NativeCallFrame) -> None:
+        # Native-call frames are frequent; they refresh the in-memory view and are
+        # published only with the next state write, never one write per frame.
+        with self._state_lock:
+            active = self.state.get("active_operation")
+            if isinstance(active, dict) and active:
+                active["native_call"] = {"name": frame.name, "phase": frame.phase, "at_ms": frame.ts_ms}
+                active["trace_id"] = active.get("trace_id") or frame.trace_id
+                active["last_progress_ms"] = epoch_ms()
 
     def _sync_context_snapshot_locked(self, params: Dict[str, Any]) -> None:
         mapping = {
@@ -300,21 +448,41 @@ class DaemonRuntime(ProgressSink):
         self.state["backend"] = str(context_state.get("backend") or "local")
         self.state["worker"] = self._worker_snapshot_locked()
 
+    def _record_worker_lifecycle(self, event: str, worker: process.ProcessIdentity, **facts: Any) -> None:
+        entry = {"event": event, "pid": worker.pid, "start_generation": worker.birth, "at_ms": epoch_ms(), **facts}
+        with self._state_lock:
+            history = [item for item in self.state.get("worker_lifecycle") or [] if isinstance(item, dict)]
+            self.state["worker_lifecycle"] = [*history, entry][-WORKER_LIFECYCLE_LIMIT:]
+
     def _ensure_worker(self) -> RuntimeWorkerProcess:
         if self._worker is None:
             self._worker = RuntimeWorkerProcess(context_id=self.daemon_context)
-        if not self._worker.is_running():
-            prior = self._worker.previous_identity()
-            if prior.pid and process.probe(prior) is not process.Liveness.EXITED:
-                raise RuntimeError("Previous worker identity is still live or unavailable; preserve context for recovery")
-            self._mark_replay_requires_restart(
-                "Replay worker changed; close and reopen the capture through its owning lifecycle", prior)
+        if self._worker.is_running():
+            return self._worker
+        prior = self._worker.previous_identity()
+        if prior.pid and process.probe(prior) is not process.Liveness.EXITED:
+            raise RuntimeError("Previous worker identity is still live or unavailable; preserve context for recovery")
+        # A request after a worker loss starts a fresh worker, but it never
+        # restores replay: persisted sessions stay requires_restart.
+        self._mark_replay_requires_restart(
+            "Replay worker changed; close and reopen the capture through its owning lifecycle", prior,
+            reason="previous_worker_exited")
         self._worker.ensure_started()
+        self._record_worker_lifecycle("started", self._worker.previous_identity())
         return self._worker
 
-    def _mark_replay_requires_restart(self, message: str, exited_worker: process.ProcessIdentity | None = None) -> None:
+    def _mark_replay_requires_restart(self, message: str, exited_worker: process.ProcessIdentity | None = None, *,
+                                      reason: str = "", trace_id: str = "", request_id: str = "",
+                                      stack_log: Dict[str, str] | None = None) -> bool:
+        """Quarantine every persisted session; True when there was replay to quarantine."""
         state = load_context_state(self.daemon_context)
         sessions = state.get("sessions") or {}
+        worker_exit = None
+        if exited_worker is not None and exited_worker.pid > 0:
+            worker_exit = {"pid": exited_worker.pid, "birth": exited_worker.birth, "reason": reason,
+                           "trace_id": trace_id, "request_id": request_id,
+                           "stack_log": {"path": str((stack_log or {}).get("path") or ""),
+                                         "tail": str((stack_log or {}).get("tail") or "")[:_PERSISTED_STACK_TAIL_CHARS]}}
         for record in sessions.values():
             previous_recovery = dict(record.get("recovery") or {})
             previous_exit = (previous_recovery.get("worker_exit")
@@ -325,35 +493,76 @@ class DaemonRuntime(ProgressSink):
             record["last_error"] = message
             record["recovery"] = {**previous_recovery,
                 "status": "requires_restart", "last_error": message,
-                "worker_exit": ({"pid": exited_worker.pid, "birth": exited_worker.birth}
-                                if exited_worker is not None and exited_worker.pid > 0 else previous_exit)}
+                "worker_exit": worker_exit or previous_exit}
         if sessions:
             state["recovery"] = {**dict(state.get("recovery") or {}),
                 "status": "degraded", "last_error": message,
                 "recovered_session_ids": [], "deferred_session_ids": [],
                 "degraded_session_ids": list(sessions)}
             save_context_state(state, self.daemon_context)
+        return bool(sessions)
 
-    def _request_worker(self, method: str, params: Dict[str, Any], *, timeout: float = 30.0) -> Dict[str, Any]:
-        worker = self._ensure_worker()
+    def _request_worker(self, method: str, params: Dict[str, Any], *, no_progress_s: float,
+                        frames: Any = None, cancelled: threading.Event | None = None) -> Dict[str, Any]:
         try:
-            response = worker.request(method, params, timeout=timeout, progress_sink=self)
+            worker = self._ensure_worker()
+        except Exception as exc:
+            raise WorkerUnavailable(str(exc)) from exc
+        request_id = str(params.get("request_id") or "")
+        try:
+            response = worker.request(method, params, no_progress_s=no_progress_s, frame_sink=frames or self,
+                                      **({"cancelled": cancelled} if cancelled is not None else {}))
             if not bool(response.get("ok")):
                 error = response.get("error") if isinstance(response.get("error"), dict) else {}
-                raise RuntimeError(str(error.get("message") or f"worker {method} failed"))
+                raise WorkerFailure("worker_request_failed", "worker_error",
+                                    str(error.get("message") or f"worker {method} failed"),
+                                    worker=worker.previous_identity(), stack_log={"path": worker.log_path, "tail": ""},
+                                    trace_id=str(params.get("trace_id") or ""))
             return dict(response)
+        except RequestCancelled:
+            raise
         except Exception as exc:
             # A lost response can follow an applied mutation. Never resubmit it
             # to a fresh worker or recover the old controller implicitly.
-            message = f"Replay worker request failed; outcome unknown; clear context before retrying: {exc}"
-            prior = worker.previous_identity()
+            failure = exc if isinstance(exc, WorkerFailure) else WorkerFailure(
+                "worker_request_failed", "daemon_error", str(exc), worker=worker.previous_identity(),
+                stack_log={"path": worker.log_path, "tail": ""}, trace_id=str(params.get("trace_id") or ""))
+            prior = failure.worker if failure.worker.pid > 0 else worker.previous_identity()
+            message = (f"Replay worker request failed ({failure.code}: {failure.reason}); outcome unknown; "
+                       f"clear context before retrying: {failure}")
             try:
                 worker.stop()
             except Exception as cleanup_error:
                 message += f"; worker cleanup failed: {cleanup_error}"
-            confirmed = prior if prior.pid > 0 and process.probe(prior) is process.Liveness.EXITED else None
-            self._mark_replay_requires_restart(message, confirmed)
-            raise RuntimeError(message) from exc
+            failure.exit_confirmed = prior.pid > 0 and process.probe(prior) is process.Liveness.EXITED
+            failure.replay_requires_restart = self._mark_replay_requires_restart(
+                message, prior if failure.exit_confirmed else None, reason=failure.reason, trace_id=failure.trace_id,
+                request_id=request_id, stack_log=failure.stack_log)
+            self._record_worker_lifecycle(
+                "exited", prior, reason=failure.reason, code=failure.code, exit_confirmed=failure.exit_confirmed,
+                trace_id=failure.trace_id, request_id=request_id, stack_log={"path": failure.stack_log.get("path", "")})
+            if failure is exc:
+                raise
+            raise failure from exc
+
+    def _worker_failure_details(self, failure: WorkerFailure, *, failure_stage: str, request_id: str,
+                                no_progress_ms: int) -> Dict[str, Any]:
+        with self._state_lock:
+            active = dict(self.state.get("active_operation") or {})
+        return {
+            "failure_stage": failure_stage,
+            "reason": failure.reason,
+            "outcome": "unknown",
+            "worker": {"pid": failure.worker.pid, "start_generation": failure.worker.birth},
+            "worker_exit_confirmed": failure.exit_confirmed,
+            "replay_requires_restart": bool(getattr(failure, "replay_requires_restart", False)),
+            "stack_log": {"path": str(failure.stack_log.get("path") or ""), "tail": str(failure.stack_log.get("tail") or "")},
+            "trace_id": failure.trace_id or str(active.get("trace_id") or ""),
+            "request_id": request_id,
+            "last_progress": {"stage": active.get("stage") or None, "native_call": active.get("native_call"),
+                              "at_ms": active.get("last_progress_ms")},
+            "no_progress_ms": no_progress_ms,
+        }
 
     def _handle_attach_client(self, params: Dict[str, Any]) -> Dict[str, Any]:
         client_id = str(params.get("client_id") or "").strip()
@@ -435,19 +644,44 @@ class DaemonRuntime(ProgressSink):
         self._persist_state()
         return self._status_payload()
 
-    def _run_exec(self, operation: str, args: Dict[str, Any], *, transport: str, remote: bool) -> Dict[str, Any]:
-        with self._exec_lock:
+    def _acquire_exec_lock(self, channel: _ClientChannel) -> bool:
+        """Take the execution lock in slices; False when the request was cancelled while queued."""
+        while not self._exec_lock.acquire(timeout=timeout_policy.EXEC_LOCK_SLICE_S):
+            if channel.cancel_requested.is_set():
+                return False
+        if channel.cancel_requested.is_set():
+            self._exec_lock.release()
+            return False
+        channel.state = "running"
+        return True
+
+    @staticmethod
+    def _not_started(operation: str, channel: _ClientChannel, transport: str) -> Dict[str, Any]:
+        return {"ok": True, "result": canonical_error(
+            result_kind=operation, code="operation_cancelled", category="runtime",
+            message=f"{operation} was cancelled before it started",
+            details={"failure_stage": "queued", "reason": "cancel_requested", "outcome": "not_started",
+                     "request_id": channel.request_id, "trace_id": channel.trace_id},
+            trace_id=channel.trace_id, transport=transport)}
+
+    def _run_exec(self, operation: str, args: Dict[str, Any], *, transport: str, remote: bool, request_id: str,
+                  no_progress_ms: int, channel: _ClientChannel) -> Dict[str, Any]:
+        trace_id = channel.trace_id = f"trc_{uuid.uuid4().hex[:12]}"
+        if not self._acquire_exec_lock(channel):
+            return self._not_started(operation, channel, transport)
+        try:
             with self._state_lock:
                 self.state["active_request_count"] = int(self.state.get("active_request_count") or 0) + 1
                 self.state["last_activity_at"] = utc_now_iso()
                 self._set_active_operation_locked(
                     operation=operation,
                     stage="starting",
-                    message="Operation queued in daemon",
+                    message="Operation started in daemon",
+                    trace_id=trace_id,
                 )
+                self.state["active_operation"].update(request_id=request_id, no_progress_ms=no_progress_ms)
             self._persist_state()
             try:
-                worker_timeout_s = worker_exec_timeout_s(operation, args)
                 response = self._request_worker(
                     "exec",
                     {
@@ -456,17 +690,36 @@ class DaemonRuntime(ProgressSink):
                         "transport": transport,
                         "remote": remote,
                         "context_id": self.daemon_context,
+                        "request_id": request_id,
+                        "trace_id": trace_id,
+                        "no_progress_ms": no_progress_ms,
                     },
-                    timeout=worker_timeout_s,
+                    no_progress_s=timeout_policy.watchdog_s(no_progress_ms),
+                    frames=_RequestFrames(self, channel),
+                    cancelled=channel.cancel_requested,
                 )
                 result = response.get("result")
                 with self._state_lock:
                     self._refresh_state_from_runtime_locked()
                 return {"ok": True, "result": result}
-            except Exception as exc:
+            except WorkerFailure as failure:
+                details = self._worker_failure_details(failure, failure_stage="worker_exec", request_id=request_id,
+                                                       no_progress_ms=no_progress_ms)
                 with self._state_lock:
                     self._refresh_state_from_runtime_locked()
-                return {"ok": False, "error": {"code": "worker_error", "message": str(exc)}}
+                return {"ok": True, "result": canonical_error(
+                    result_kind=operation, code=failure.code, category="runtime", message=str(failure),
+                    details=details, trace_id=details["trace_id"], transport=transport)}
+            except RequestCancelled:
+                return self._not_started(operation, channel, transport)
+            except WorkerUnavailable as exc:
+                with self._state_lock:
+                    self._refresh_state_from_runtime_locked()
+                return {"ok": True, "result": canonical_error(
+                    result_kind=operation, code="worker_unavailable", category="runtime", message=str(exc),
+                    details={"failure_stage": "worker_start", "reason": "worker_unavailable", "outcome": "not_started",
+                             "request_id": request_id, "trace_id": trace_id, "no_progress_ms": no_progress_ms},
+                    trace_id=trace_id, transport=transport)}
             finally:
                 with self._state_lock:
                     self.state["active_request_count"] = max(
@@ -476,9 +729,13 @@ class DaemonRuntime(ProgressSink):
                     self._clear_active_operation_locked()
                     self.state["last_activity_at"] = utc_now_iso()
                 self._persist_state()
+        finally:
+            self._exec_lock.release()
 
-    def _run_clear_context(self) -> Dict[str, Any]:
-        with self._exec_lock:
+    def _run_clear_context(self, channel: _ClientChannel | None = None) -> Dict[str, Any]:
+        channel = channel or _ClientChannel(None, "", stream=False)
+        self._acquire_exec_lock(channel)
+        try:
             with self._state_lock:
                 self.state["active_request_count"] = int(self.state.get("active_request_count") or 0) + 1
                 self.state["last_activity_at"] = utc_now_iso()
@@ -491,7 +748,10 @@ class DaemonRuntime(ProgressSink):
             released: Dict[str, Any] = {}
             cleared = False
             try:
-                response = self._request_worker("clear_context", {"context_id": self.daemon_context}, timeout=15.0)
+                response = self._request_worker(
+                    "clear_context", {"context_id": self.daemon_context},
+                    no_progress_s=timeout_policy.watchdog_s(timeout_policy.DEFAULT_NO_PROGRESS_MS),
+                    frames=_RequestFrames(self, channel))
                 result = response.get("result")
                 if not isinstance(result, dict) or result.get("ok") is not True:
                     error = result.get("error") if isinstance(result, dict) else None
@@ -501,8 +761,16 @@ class DaemonRuntime(ProgressSink):
                 if isinstance(data, dict):
                     released = dict(data.get("released") or {})
                 cleared = True
-            except Exception as exc:
-                return {"ok": False, "error": {"code": "worker_error", "message": str(exc)}}
+            except WorkerFailure as failure:
+                details = self._worker_failure_details(
+                    failure, failure_stage="worker_clear_context", request_id=channel.request_id,
+                    no_progress_ms=timeout_policy.DEFAULT_NO_PROGRESS_MS)
+                return {"ok": False, "error": {"code": failure.code, "category": "runtime", "message": str(failure),
+                                               "details": details}}
+            except WorkerUnavailable as exc:
+                return {"ok": False, "error": {"code": "worker_unavailable", "category": "runtime", "message": str(exc),
+                                               "details": {"failure_stage": "worker_start", "reason": "worker_unavailable",
+                                                           "outcome": "not_started"}}}
             finally:
                 with self._state_lock:
                     self._refresh_state_from_runtime_locked()
@@ -516,6 +784,8 @@ class DaemonRuntime(ProgressSink):
                     self.state["last_activity_at"] = utc_now_iso()
                 self._persist_state()
             return {"ok": True, "result": {"released": released, "state": public_view(self._snapshot_state())}}
+        finally:
+            self._exec_lock.release()
 
     def _watch_lifecycle(self) -> None:
         while self.running:
@@ -592,45 +862,122 @@ class DaemonRuntime(ProgressSink):
                 self.state["last_activity_at"] = utc_now_iso()
             self._persist_state()
             return self._status_payload()
+        if method == "cancel":
+            return self._cancel(params)
+        if method == "context_status":
+            return self._context_status()
         if method == "get_state":
             self._touch_activity()
             self._persist_state()
             return {"ok": True, "result": {"state": public_view(self._snapshot_state())}}
-        if method == "clear_context":
-            return self._run_clear_context()
-        if method == "exec":
-            operation = str(params.get("operation") or "").strip()
-            args = params.get("args")
-            if not isinstance(args, dict):
-                args = {}
-            transport = str(params.get("transport") or "daemon")
-            remote = bool(params.get("remote", False))
-            arg_keys = ",".join(sorted(args.keys())) if args else "-"
-            logger.info(
-                "daemon.exec op=%s transport=%s remote=%s arg_keys=%s",
-                operation,
-                transport,
-                remote,
-                arg_keys,
-            )
-            result = self._run_exec(operation, args, transport=transport, remote=remote)
-            payload = result.get("result")
-            if isinstance(payload, dict):
-                meta = payload.get("meta", {})
-                logger.info(
-                    "daemon.exec.done op=%s trace_id=%s ok=%s duration_ms=%s",
-                    operation,
-                    (meta.get("trace_id") if isinstance(meta, dict) else ""),
-                    bool(payload.get("ok")),
-                    (meta.get("duration_ms") if isinstance(meta, dict) else None),
-                )
-            return result
         return {"ok": False, "error": {"code": "unknown_method", "message": f"unknown method: {method}"}}
+
+    def _register_request(self, channel: _ClientChannel) -> bool:
+        with self._requests_lock:
+            if channel.request_id in self._requests:
+                return False
+            self._requests[channel.request_id] = channel
+            return True
+
+    def _unregister_request(self, channel: _ClientChannel) -> None:
+        with self._requests_lock:
+            if self._requests.get(channel.request_id) is channel:
+                del self._requests[channel.request_id]
+            if channel.receipt:
+                self._settled[channel.request_id] = channel.receipt
+                while len(self._settled) > _SETTLED_REQUEST_LIMIT:
+                    self._settled.popitem(last=False)
+
+    def _cancel(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Cancel one request without taking the execution lock.
+
+        A queued request ends as operation_cancelled without running. A running
+        one is asked to stop at its next native-call boundary; if it has not
+        settled within the cancel grace, the worker is terminated as stuck
+        (cancel_unsettled). The receipt says how the request actually ended.
+        """
+        request_id = str(params.get("request_id") or "").strip()
+        if not request_id:
+            return {"ok": False, "error": {"code": "bad_request", "category": "validation",
+                                           "message": "request_id is required"}}
+        with self._requests_lock:
+            channel = self._requests.get(request_id)
+            settled = self._settled.get(request_id)
+        if channel is None:
+            receipt = dict(settled) if settled else {"request_id": request_id, "trace_id": "", "outcome": "not_found",
+                                                     "settled_at_ms": epoch_ms()}
+            return {"ok": True, "result": receipt}
+        logger.info("daemon.cancel request_id=%s state=%s", request_id, channel.state)
+        channel.cancel_requested.set()
+        worker = self._worker
+        if channel.state == "running" and worker is not None:
+            worker.send_cancel(request_id)
+        if not channel.settled.wait(timeout_policy.CANCEL_GRACE_S):
+            if worker is not None:
+                logger.warning("daemon.cancel request_id=%s did not settle; terminating the worker", request_id)
+                worker.terminate_running("cancel_unsettled")
+            channel.settled.wait(timeout_policy.STACK_DUMP_GRACE_S + timeout_policy.WORKER_EXIT_TIMEOUT_S * 2)
+        if not channel.settled.is_set():
+            return {"ok": False, "error": {"code": "cancel_unsettled", "category": "runtime",
+                                           "message": f"request {request_id} did not settle after its worker was terminated",
+                                           "details": {"request_id": request_id, "trace_id": channel.trace_id}}}
+        return {"ok": True, "result": dict(channel.receipt)}
+
+    def _serve_exec(self, conn: Any, params: Dict[str, Any]) -> None:
+        operation = str(params.get("operation") or "").strip()
+        args = params.get("args") if isinstance(params.get("args"), dict) else {}
+        transport = str(params.get("transport") or "daemon")
+        remote = bool(params.get("remote", False))
+        request_id = str(params.get("request_id") or "").strip() or f"req_{uuid.uuid4().hex[:16]}"
+        try:
+            no_progress_ms = timeout_policy.validate_no_progress_ms(params.get("no_progress_ms"))
+        except timeout_policy.NoProgressBudgetError as exc:
+            conn.send({"ok": False, "error": {"code": exc.code, "category": exc.category, "message": str(exc),
+                                              "details": exc.details}})
+            return
+        channel = _ClientChannel(conn, request_id, stream=bool(params.get("stream")))
+        if not self._register_request(channel):
+            conn.send({"ok": False, "error": {"code": "request_id_conflict", "category": "validation",
+                                              "message": f"request {request_id} is already queued or running",
+                                              "details": {"request_id": request_id}}})
+            return
+        logger.info("daemon.exec op=%s request_id=%s transport=%s remote=%s no_progress_ms=%s arg_keys=%s",
+                    operation, request_id, transport, remote, no_progress_ms, ",".join(sorted(args)) or "-")
+        channel.start_heartbeats()
+        response: Dict[str, Any] = {"ok": False, "error": {"code": "daemon_error", "message": "exec did not complete"}}
+        try:
+            response = self._run_exec(operation, args, transport=transport, remote=remote, request_id=request_id,
+                                      no_progress_ms=no_progress_ms, channel=channel)
+            payload = response.get("result")
+            meta = payload.get("meta") if isinstance(payload, dict) and isinstance(payload.get("meta"), dict) else {}
+            logger.info("daemon.exec.done op=%s request_id=%s trace_id=%s ok=%s duration_ms=%s", operation, request_id,
+                        meta.get("trace_id", ""), bool(isinstance(payload, dict) and payload.get("ok")),
+                        meta.get("duration_ms"))
+        finally:
+            channel.settle(response)
+            self._unregister_request(channel)
+            channel.reply(response)
+
+    def _serve_clear_context(self, conn: Any) -> None:
+        channel = _ClientChannel(conn, f"clear_{uuid.uuid4().hex[:12]}", stream=False)
+        channel.start_heartbeats()
+        response: Dict[str, Any] = {"ok": False, "error": {"code": "daemon_error", "message": "clear did not complete"}}
+        try:
+            response = self._run_clear_context(channel)
+        finally:
+            channel.reply(response)
 
     def _serve_connection(self, conn: Any) -> None:
         try:
             request = conn.recv()
-            conn.send(self.handle_request(request))
+            method = str(request.get("method") or "").strip().lower() if isinstance(request, dict) else ""
+            params = request.get("params") if isinstance(request, dict) and isinstance(request.get("params"), dict) else {}
+            if method == "exec":
+                self._serve_exec(conn, params)
+            elif method == "clear_context":
+                self._serve_clear_context(conn)
+            else:
+                conn.send(self.handle_request(request))
         except Exception as exc:  # noqa: BLE001
             try:
                 conn.send({"ok": False, "error": {"code": "daemon_error", "message": str(exc)}})
@@ -687,10 +1034,11 @@ def main() -> None:
     parser.add_argument("--idle-timeout-seconds", type=int, default=DEFAULT_IDLE_TIMEOUT_S)
     args = parser.parse_args()
 
-    logging.basicConfig(
-        level=getattr(logging, str(args.log_level).upper(), logging.INFO),
-        format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
-    )
+    # The daemon is detached with no console; its own bounded log is the only
+    # record of what it did when a request or a worker went wrong.
+    handler = rotating_log_handler(daemon_log_path(args.daemon_context))
+    handler.setFormatter(logging.Formatter("%(asctime)s pid=%(process)d [%(name)s] %(levelname)s: %(message)s"))
+    logging.basicConfig(level=getattr(logging, str(args.log_level).upper(), logging.INFO), handlers=[handler])
 
     # The client writes the IPC key to stdin so it never appears in argv.
     token = sys.stdin.readline().strip()

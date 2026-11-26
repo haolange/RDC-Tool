@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging.handlers
 import math
 import os
 import secrets
@@ -16,6 +17,16 @@ from rdc_tool.core.errors import CoreError
 from rdc_tool.platform.locks import LockTimeout, path_lock
 
 STATE_LOCK_TIMEOUT_S = 10.0
+# Process logs (daemon.log, worker.log) are bounded: the current file plus one
+# rotated generation, 2 MiB each.
+PROCESS_LOG_MAX_BYTES = 2 * 1024 * 1024
+PROCESS_LOG_BACKUPS = 1
+
+
+def rotating_log_handler(path: Path) -> logging.handlers.RotatingFileHandler:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return logging.handlers.RotatingFileHandler(path, maxBytes=PROCESS_LOG_MAX_BYTES,
+                                                backupCount=PROCESS_LOG_BACKUPS, encoding="utf-8")
 
 
 class AtomicWriteError(RuntimeError):

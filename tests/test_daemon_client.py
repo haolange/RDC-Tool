@@ -559,7 +559,7 @@ def test_parser_accepts_global_owner_pid() -> None:
     assert args.daemon_context == "ctx"
 
 
-def test_daemon_request_timeout_returns_structured_details(monkeypatch, tmp_path: Path) -> None:
+def test_control_request_timeout_returns_structured_details(monkeypatch, tmp_path: Path) -> None:
     _configure_runtime_dir(monkeypatch, tmp_path)
 
     class _FakeClient:
@@ -603,15 +603,15 @@ def test_daemon_request_timeout_returns_structured_details(monkeypatch, tmp_path
 
     try:
         daemon_client.daemon_request(
-            "exec",
-            params={"operation": "rd.texture.get_data"},
+            "get_state",
+            params={},
             timeout=0.01,
             state=state,
             context="ctx-demo",
         )
     except daemon_client.DaemonRequestTimeout as exc:
         assert exc.code == "daemon_timeout"
-        assert exc.details["operation"] == "rd.texture.get_data"
+        assert exc.details["operation"] == "get_state"
         assert exc.details["context_id"] == "ctx-demo"
         assert exc.details["timeout_seconds"] == 0.01
         assert exc.details["active_request_count"] == 2

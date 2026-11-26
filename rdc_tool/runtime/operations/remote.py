@@ -23,7 +23,6 @@ from rdc_tool.runtime import (
     renderdoc_api,
     replay_access,
 )
-from rdc_tool.timeout_policy import remote_connect_timeout_ms
 
 
 @replay_access._guard_rejection
@@ -49,7 +48,6 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
         if not host:
             host = "127.0.0.1"
         port = coerce._as_int(args.get("port"), 38920)
-        timeout_ms = remote_connect_timeout_ms(args)
         if not live_state._runtime.enable_remote:
             return envelope.capability_failure(
                 "remote_disabled",
@@ -75,7 +73,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
         try:
             if transport == "adb_android" and host not in {"", "127.0.0.1", "localhost"}:
                 return envelope.failure("Android adb transport requires host=127.0.0.1 or localhost", code="android_remote_host_invalid", category="runtime")
-            bootstrap_result, remote_server, server_info = await remote_target._connect_remote_endpoint(host, port, transport, options, timeout_ms)
+            bootstrap_result, remote_server, server_info = await remote_target._connect_remote_endpoint(host, port, transport, options)
             if bootstrap_result is not None:
                 bootstrap_detail = remote_bootstrap.describe_android_remote(bootstrap_result)
                 endpoint_host, endpoint_port = bootstrap_result.host, bootstrap_result.port
@@ -181,7 +179,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
                     "active_session_ids": active_session_ids,
                 },
             )
-        errors = await remote_target._offload_target_operation(remote_target._disconnect_remote_handle_sync, handle)
+        errors = await renderdoc_api._offload(remote_target._disconnect_remote_handle_sync, handle)
         if errors:
             return envelope.failure("Remote disconnect cleanup failed", code="remote_disconnect_failed", category="runtime",
                         details={"remote_id": remote_id, "cleanup_errors": errors})
@@ -292,7 +290,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
             )
         if action == "list_targets":
             try:
-                targets = await remote_target._offload_target_operation(remote_target._remote_list_targets_sync, handle)
+                targets = await renderdoc_api._offload(remote_target._remote_list_targets_sync, handle)
             except Exception as exc:
                 return envelope.failure(
                     f"Failed to enumerate remote targets: {exc}",
@@ -304,7 +302,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
         if action == "launch_app":
             coerce._require(args, "exe_path")
             try:
-                target = await remote_target._offload_target_operation(
+                target = await renderdoc_api._offload(
                     remote_target._launch_remote_app_sync,
                     handle,
                     exe_path=str(args.get("exe_path") or ""),
@@ -332,7 +330,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
             return envelope.success(applied=applied_options, default_capture_options=dict(handle.default_capture_options))
         if action in {"trigger_capture", "queue_capture"}:
             try:
-                result = await remote_target._offload_target_operation(
+                result = await renderdoc_api._offload(
                     remote_target._trigger_remote_capture_sync,
                     handle,
                     target_id=str(args.get("target_id") or ""),
@@ -354,15 +352,15 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
             try:
                 target_id = str(args.get("target_id") or "")
                 if target_id:
-                    captures = await remote_target._offload_target_operation(remote_target._poll_captures_for_target_sync, handle, target_id=target_id, deadline_s=1.0, max_messages=12)
+                    captures = await renderdoc_api._offload(remote_target._poll_captures_for_target_sync, handle, target_id=target_id, deadline_s=1.0, max_messages=12)
                 else:
-                    targets = await remote_target._offload_target_operation(remote_target._remote_list_targets_sync, handle)
+                    targets = await renderdoc_api._offload(remote_target._remote_list_targets_sync, handle)
                     captures = remote_target._capture_records_for_target(handle)
                     for item in targets:
                         tid = str(item.get("target_id") or "")
                         if not tid:
                             continue
-                        captures = await remote_target._offload_target_operation(remote_target._poll_captures_for_target_sync, handle, target_id=tid, deadline_s=0.5, max_messages=8)
+                        captures = await renderdoc_api._offload(remote_target._poll_captures_for_target_sync, handle, target_id=tid, deadline_s=0.5, max_messages=8)
                     captures = remote_target._capture_records_for_target(handle)
             except Exception as exc:
                 return envelope.failure(
@@ -378,7 +376,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
             record = dict(handle.known_captures.get(capture_id) or {})
             target_id = str(record.get("target_id") or "")
             if not target_id:
-                targets = await remote_target._offload_target_operation(remote_target._remote_list_targets_sync, handle)
+                targets = await renderdoc_api._offload(remote_target._remote_list_targets_sync, handle)
                 if len(targets) == 1:
                     target_id = str(targets[0].get("target_id") or "")
             ident = remote_target._remote_target_ident(target_id)
@@ -392,7 +390,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
             local_path = Path(str(args.get("local_path") or "")).resolve()
             local_path.parent.mkdir(parents=True, exist_ok=True)
             try:
-                await remote_target._offload_target_operation(remote_target._copy_remote_capture_sync, handle, ident, coerce._as_int(capture_id, 0), local_path)
+                await renderdoc_api._offload(remote_target._copy_remote_capture_sync, handle, ident, coerce._as_int(capture_id, 0), local_path)
             except Exception as exc:
                 return envelope.failure(
                     f"Failed to copy remote capture: {exc}",
@@ -407,7 +405,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
             record = dict(handle.known_captures.get(capture_id) or {})
             target_id = str(record.get("target_id") or "")
             if not target_id:
-                targets = await remote_target._offload_target_operation(remote_target._remote_list_targets_sync, handle)
+                targets = await renderdoc_api._offload(remote_target._remote_list_targets_sync, handle)
                 if len(targets) == 1:
                     target_id = str(targets[0].get("target_id") or "")
             ident = remote_target._remote_target_ident(target_id)
@@ -419,7 +417,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
                     details={"remote_id": remote_id, "capture_id": capture_id},
                 )
             try:
-                await remote_target._offload_target_operation(remote_target._delete_remote_capture_sync, handle, ident, coerce._as_int(capture_id, 0))
+                await renderdoc_api._offload(remote_target._delete_remote_capture_sync, handle, ident, coerce._as_int(capture_id, 0))
             except Exception as exc:
                 return envelope.failure(
                     f"Failed to delete remote capture: {exc}",

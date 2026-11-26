@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any, Dict, List, Optional
 
+from rdc_tool import native_calls
 from rdc_tool.core.errors import CoreError, RuntimeToolError
 from rdc_tool.core.renderdoc_status import (
     build_renderdoc_error_details,
@@ -24,9 +24,8 @@ async def _offload(fn: Any, *args: Any, **kwargs: Any) -> Any:
         "GetTargetShaderEncodings", "GetDisassemblyTargets",
     }:
         scope["effects_attempted"] = True
-    loop = asyncio.get_running_loop()
     try:
-        return await loop.run_in_executor(None, lambda: fn(*args, **kwargs))
+        return await native_calls.offload(fn, *args, **kwargs)
     except BaseException:
         if scope is not None:
             scope["effects_attempted"] = True

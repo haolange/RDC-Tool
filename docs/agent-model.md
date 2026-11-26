@@ -4,9 +4,13 @@ Agent 把 `rdc-tool` 当作纯 CLI 使用，经 shell 工具调用 `rdc-tool` �
 
 ## 就绪与 context
 
-运行时是否就绪未知或环境有变化时，运行 `rdc-tool --json doctor`；否则沿用当前有效的成功结果。执行依赖会话状态的操作前，先用 `rdc-tool context status` 查看所选 context。需要保持任务连续性时，用 `rdc-tool context update` 写入范围内的 notes 或 focus。`session_locator` 汇总所选 daemon context 当前的 capture、session 与 event。
+运行时是否就绪未知或环境有变化时，运行 `rdc-tool --json doctor`；否则沿用当前有效的成功结果。执行依赖会话状态的操作前，先用 `rdc-tool context status` 查看所选 context；它是只读的，不会启动 daemon 或 worker，判断能否恢复时也可以安全调用。需要保持任务连续性时，用 `rdc-tool context update` 写入范围内的 notes 或 focus。`session_locator` 汇总所选 daemon context 当前的 capture、session 与 event。
 
 多个 daemon context 彼此隔离。非简单的 capture 任务使用显式 `--daemon-context <id>`，并在各次调用中保持一致。daemon 状态输出报告 `endpoint`，从不输出 IPC 密钥。
+
+## 长操作与取消
+
+每次 `rdc-tool call` 受无进展预算约束而不是固定时长：用 `--no-progress-ms` 选择预算（catalog 的 `execution_budget` 声明默认值与范围），用 `--request-id` 给请求一个稳定 id，用 `--progress-stream` 在 stderr 上接收 NDJSON 帧（progress、native_call 与每 2 秒一次的 heartbeat），stdout 仍只有最终信封。不要在外层再套固定的进程超时；心跳中断时 CLI 自己返回 `daemon_unresponsive`。要中止请求，调用 `rdc-tool daemon cancel --request-id <id>` 并读取回执的 `outcome`，等 `call` 进程自行退出后再结束它。`worker_stuck`、`worker_lost`、`worker_request_failed` 与 `operation_cancelled` 的语义和恢复见[公共契约](public-contract.md#execution-budget)与[故障排查](troubleshooting.md)。
 
 ## 发现
 

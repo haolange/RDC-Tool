@@ -8,8 +8,6 @@ from rdc_tool.models import BackendType
 def manager(monkeypatch):
     value = module.SessionManager()
     value._sessions['owner'] = module.SessionState('owner', BackendType.REMOTE)
-    async def offload(fn, *args): return fn(*args)
-    monkeypatch.setattr(value, '_offload', offload)
     monkeypatch.setattr(module, '_get_rd', lambda: SimpleNamespace(ResourceId=SimpleNamespace(Null=lambda: 'null')))
     def status(value, *args, **kwargs):
         if not value: raise module.SessionError('renderdoc_error', 'native failed')

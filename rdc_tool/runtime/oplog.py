@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Sequence
 
+from rdc_tool import progress, remote_bootstrap
 from rdc_tool.context_snapshot import normalize_context_id
 from rdc_tool.runtime import context_records, live_state, settings
 from rdc_tool.runtime_state import append_runtime_log
@@ -159,7 +160,7 @@ def _record_operation_finish(
 
 
 def _current_trace_details() -> Dict[str, str]:
-    reporter = live_state._current_progress_reporter()
+    reporter = progress.current_reporter()
     if reporter is None:
         return {"trace_id": "", "operation": ""}
     return {"trace_id": str(reporter.trace_id or ""), "operation": str(reporter.operation or "")}
@@ -193,7 +194,9 @@ def _progress(
     progress_pct: float | None = None,
     details: Optional[Dict[str, Any]] = None,
 ) -> None:
-    reporter = live_state._current_progress_reporter()
+    # Reported progress is what keeps a no-progress budget alive.
+    remote_bootstrap.connection_progressed()
+    reporter = progress.current_reporter()
     if reporter is None:
         return
     _record_operation_stage(

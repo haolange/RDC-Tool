@@ -41,11 +41,7 @@ def test_counter_fetch_failures_are_not_reported_as_empty_success(monkeypatch: p
         def FetchCounters(self, counters: list[int]) -> list[object]:
             raise OSError("driver rejected counter fetch")
 
-    async def _inline_offload(fn, *args, **kwargs):
-        return fn(*args, **kwargs)
-
     monkeypatch.setattr(perf_service, "_lazy_import_renderdoc", lambda: object())
-    monkeypatch.setattr(PerfService, "_offload", staticmethod(_inline_offload))
     service = PerfService()
     sessions = _SessionManager(_Controller())
 
@@ -80,11 +76,7 @@ def test_hotspots_top_k_zero_returns_all_events_in_microseconds(
                 SimpleNamespace(eventId=13, counter=7, value=SimpleNamespace(d=0.000_002)),
             ]
 
-    async def _inline_offload(fn, *args, **kwargs):
-        return fn(*args, **kwargs)
-
     monkeypatch.setattr(perf_service, "_lazy_import_renderdoc", lambda: object())
-    monkeypatch.setattr(PerfService, "_offload", staticmethod(_inline_offload))
 
     hotspots = asyncio.run(
         PerfService().detect_hotspots("sess_demo", _SessionManager(_Controller()), top_k=0)

@@ -15,7 +15,7 @@ FORBIDDEN_ATTRIBUTES = {
     ("os", "kill"), ("os", "killpg"), ("subprocess", "STARTUPINFO"), ("subprocess", "SW_HIDE"),
 }
 FORBIDDEN_ATTRIBUTE_PREFIXES = {("subprocess", "CREATE_"), ("subprocess", "STARTF_")}
-FORBIDDEN_KEYWORDS = {"creationflags", "start_new_session", "startupinfo"}
+FORBIDDEN_KEYWORDS = {"creationflags", "start_new_session", "startupinfo", "process_group"}
 FORBIDDEN_STRINGS = ("taskkill", "cmd.exe")
 
 # Inside the platform package each OS mechanism has exactly one home.

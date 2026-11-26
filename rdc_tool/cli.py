@@ -9,16 +9,21 @@ import logging
 import os
 import re
 import sys
+import uuid
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from rdc_tool.platform import process
 from rdc_tool.platform import host as platform_host
 from rdc_tool.core.assert_service import AssertService
 from rdc_tool import __version__ as TOOL_VERSION
+from rdc_tool import timeout_policy
 from rdc_tool.core.contracts import SCHEMA_VERSION, canonical_error, canonical_success
 from rdc_tool.daemon.client import (
+    DaemonExecInterrupted,
     attach_client,
+    cancel_request,
+    read_context_status,
     cleanup_stale_daemon_states,
     clear_context,
     daemon_request,
@@ -49,7 +54,6 @@ from rdc_tool.runtime_paths import (
 )
 from rdc_tool.runtime_requirements import missing_dependencies
 from rdc_tool.runtime_identity import loaded_runtime_identity, native_manifest_status
-from rdc_tool.timeout_policy import daemon_exec_timeout_s
 
 EXIT_OK = 0
 EXIT_ASSERT_FAIL = 1
@@ -190,24 +194,53 @@ def _ensure_daemon_state(context: str) -> Dict[str, Any]:
     return state
 
 
+_REQUEST_ID_RE = re.compile(r"[A-Za-z0-9._:-]{1,128}")
+
+
+def _new_request_id() -> str:
+    return f"req_{uuid.uuid4().hex[:16]}"
+
+
+def _write_progress_frame(frame: Dict[str, Any]) -> None:
+    # Frames go to stderr as NDJSON; stdout carries only the final envelope.
+    safe_stream_write(safe_json_text(frame) + "\n", sys.stderr)
+    sys.stderr.flush()
+
+
 def _daemon_exec(
     operation: str,
     args: Dict[str, Any],
     *,
     remote: bool = False,
     context: str = "default",
+    request_id: Optional[str] = None,
+    no_progress_ms: Optional[int] = None,
+    on_frame: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> Dict[str, Any]:
     state = _ensure_daemon_state(context)
-    resp = daemon_request(
-        "exec",
-        params={"operation": operation, "args": args, "transport": "cli", "remote": remote},
-        timeout=daemon_exec_timeout_s(operation, args),
-        context=context,
-        state=state,
-    )
+    try:
+        resp = daemon_request(
+            "exec",
+            params={"operation": operation, "args": args, "transport": "cli", "remote": remote,
+                    "request_id": request_id or _new_request_id(),
+                    "no_progress_ms": timeout_policy.DEFAULT_NO_PROGRESS_MS if no_progress_ms is None else no_progress_ms,
+                    "stream": on_frame is not None},
+            context=context,
+            state=state,
+            on_frame=on_frame,
+        )
+    except DaemonExecInterrupted as exc:
+        return canonical_error(result_kind=operation, code=exc.code, category=exc.category, message=str(exc),
+                               details=exc.details, transport="cli")
     if not bool(resp.get("ok")):
+        # The daemon refused the request itself (budget, duplicate id): the
+        # operation never ran, and its result kind is still the operation.
         err = resp.get("error") if isinstance(resp.get("error"), dict) else {}
-        raise RuntimeError(str(err.get("message") or "daemon exec failed"))
+        return canonical_error(result_kind=operation, code=str(err.get("code") or "daemon_error"),
+                               category=str(err.get("category") or "runtime"),
+                               message=str(err.get("message") or "daemon rejected the request"),
+                               details=err.get("details") if isinstance(err.get("details"), dict) else {},
+                               transport="cli")
     result = resp.get("result")
     if not isinstance(result, dict):
         raise RuntimeError("daemon returned invalid result payload")
@@ -687,10 +720,12 @@ def _parse_context_value(raw: str) -> Any:
 
 
 def _cmd_context_status(args: argparse.Namespace) -> int:
+    # Read-only: never starts a daemon or a worker and never writes state, so it
+    # is safe to call while deciding whether a context can be recovered.
     context = str(getattr(args, "daemon_context", "default") or "default")
-    payload = _daemon_exec("rd.session.get_context", {}, context=context)
-    _print_json(payload)
-    return EXIT_OK if bool(payload.get("ok")) else EXIT_RUNTIME_ERR
+    _print_json(canonical_success(result_kind="rdc_tool.context.status", data=read_context_status(context),
+                                  transport="cli"))
+    return EXIT_OK
 
 
 def _cmd_context_update(args: argparse.Namespace) -> int:
@@ -773,12 +808,35 @@ def _capture_open_error_payload(
     )
 
 
+def _execution_options(args: argparse.Namespace, result_kind: str) -> tuple[Dict[str, Any] | None, Dict[str, Any] | None]:
+    """The request's execution options from --no-progress-ms/--request-id/--progress-stream, or a validation error."""
+    try:
+        no_progress_ms = timeout_policy.validate_no_progress_ms(getattr(args, "no_progress_ms", None))
+    except timeout_policy.NoProgressBudgetError as exc:
+        return None, canonical_error(result_kind=result_kind, code=exc.code, category=exc.category, message=str(exc),
+                                     details=exc.details, transport="cli")
+    options: Dict[str, Any] = {"no_progress_ms": no_progress_ms,
+                               "on_frame": _write_progress_frame if getattr(args, "progress_stream", False) else None}
+    request_id = getattr(args, "request_id", None)
+    if request_id is not None:
+        if not _REQUEST_ID_RE.fullmatch(str(request_id)):
+            return None, canonical_error(result_kind=result_kind, code="invalid_request_id", category="validation",
+                                         message="--request-id must be 1-128 characters of [A-Za-z0-9._:-]",
+                                         details={"request_id": request_id}, transport="cli")
+        options["request_id"] = str(request_id)
+    return options, None
+
+
 async def _cmd_call(args: argparse.Namespace) -> int:
     try:
         definition = describe_operation(args.operation)
     except ValueError as exc:
         _print_json(canonical_error(result_kind=args.operation, code="operation_not_found",
                                     category="not_found", message=str(exc), transport="cli"))
+        return EXIT_RUNTIME_ERR
+    options, invalid = _execution_options(args, args.operation)
+    if invalid is not None:
+        _print_json(invalid)
         return EXIT_RUNTIME_ERR
     if str(args.format) == "tsv" and definition and "projection" not in definition["input_schema"]["properties"]:
         _print_json(_tabular_projection_error_payload({"result_kind": args.operation}, "tool does not support a tabular projection"))
@@ -790,7 +848,7 @@ async def _cmd_call(args: argparse.Namespace) -> int:
             args_file=getattr(args, "args_file", None),
         ),
     )
-    payload = _daemon_exec(args.operation, call_args, remote=bool(args.remote), context=str(args.daemon_context))
+    payload = _daemon_exec(args.operation, call_args, remote=bool(args.remote), context=str(args.daemon_context), **options)
     return EXIT_OK if _render_result(payload, output_format=str(args.format)) else EXIT_RUNTIME_ERR
 
 
@@ -1341,10 +1399,13 @@ def _build_parser() -> argparse.ArgumentParser:
     p_daemon_detach = s_daemon.add_parser("detach", help=argparse.SUPPRESS)
     p_daemon_detach.add_argument("--client-id", required=True)
     s_daemon.add_parser("cleanup", help=argparse.SUPPRESS)
+    p_daemon_cancel = s_daemon.add_parser("cancel", help="Cancel a queued or running request by its --request-id")
+    p_daemon_cancel.add_argument("--request-id", required=True)
 
     p_context = sub.add_parser("context", help="Context state helpers")
     s_context = p_context.add_subparsers(dest="context_cmd", required=True)
-    p_context_status = s_context.add_parser("status", help="Print the current runtime context snapshot")
+    p_context_status = s_context.add_parser(
+        "status", help="Read-only context status: daemon and worker identity, running request, replay recovery")
     p_context_status.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
     p_context_update = s_context.add_parser("update", help="Update agent-facing context fields")
     p_context_update.add_argument("--key", required=True, choices=("notes", "focus_pixel", "focus_resource_id", "focus_shader_id"))
@@ -1362,10 +1423,24 @@ def _build_parser() -> argparse.ArgumentParser:
     p_call_args.add_argument("--args-file", default=None)
     p_call.add_argument("--format", choices=("json", "tsv"), default="json")
     p_call.add_argument("--remote", action="store_true")
+    p_call.add_argument("--request-id", default=None,
+                        help="Caller-chosen request identity for progress frames and `daemon cancel`")
+
+    def add_execution_budget_args(command_parser: argparse.ArgumentParser) -> None:
+        command_parser.add_argument(
+            "--no-progress-ms", type=int, default=None,
+            help=(f"Treat the operation as stuck after this many milliseconds without progress "
+                  f"({timeout_policy.MIN_NO_PROGRESS_MS}-{timeout_policy.MAX_NO_PROGRESS_MS}, "
+                  f"default {timeout_policy.DEFAULT_NO_PROGRESS_MS})"))
+        command_parser.add_argument("--progress-stream", action="store_true",
+                                    help="Write progress, native-call and heartbeat frames to stderr as NDJSON")
+
+    add_execution_budget_args(p_call)
 
     p_batch = sub.add_parser("batch", help="Execute a JSONL list of read-only operations; stop at first failure")
     p_batch.add_argument("source")
     p_batch.add_argument("--remote", action="store_true")
+    add_execution_budget_args(p_batch)
 
     p_capture = sub.add_parser("capture", help="Capture session helpers")
     s_capture = p_capture.add_subparsers(dest="capture_cmd", required=True)
@@ -1592,6 +1667,19 @@ async def _main_async(args: argparse.Namespace) -> int:
             cleaned = cleanup_stale_daemon_states()
             _print_json(canonical_success(result_kind="rdc_tool.daemon.cleanup", data={"cleaned": cleaned}, transport="cli"))
             return EXIT_OK
+        if args.daemon_cmd == "cancel":
+            if not _REQUEST_ID_RE.fullmatch(str(args.request_id)):
+                _print_json(canonical_error(result_kind="rdc_tool.daemon.cancel", code="invalid_request_id",
+                                            category="validation", message="--request-id must be 1-128 characters of [A-Za-z0-9._:-]",
+                                            details={"request_id": args.request_id}, transport="cli"))
+                return EXIT_RUNTIME_ERR
+            try:
+                receipt = cancel_request(context=ctx, request_id=str(args.request_id))
+            except Exception as exc:  # noqa: BLE001
+                _print_json(_exception_error_payload("rdc_tool.daemon.cancel", exc))
+                return EXIT_RUNTIME_ERR
+            _print_json(canonical_success(result_kind="rdc_tool.daemon.cancel", data=receipt, transport="cli"))
+            return EXIT_OK
 
     if args.command == "context":
         if args.context_cmd == "status":
@@ -1628,7 +1716,12 @@ async def _main_async(args: argparse.Namespace) -> int:
 
     if args.command == "batch":
         from rdc_tool.cli_batch import run_batch
-        return run_batch(args.source, lambda operation, arguments: _daemon_exec(operation, arguments, remote=bool(args.remote), context=ctx))
+        options, invalid = _execution_options(args, "rdc_tool.batch")
+        if invalid is not None:
+            _print_json(invalid)
+            return EXIT_RUNTIME_ERR
+        return run_batch(args.source, lambda operation, arguments: _daemon_exec(
+            operation, arguments, remote=bool(args.remote), context=ctx, **options))
 
     if args.command == "call":
         return await _cmd_call(args)

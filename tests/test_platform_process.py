@@ -103,3 +103,37 @@ def test_memory_reports_a_positive_value_or_none():
 @pytest.mark.skipif(host.IS_WINDOWS, reason="POSIX keeps no raw command line")
 def test_posix_has_no_raw_command_line():
     assert process.raw_command_line() is None
+
+
+@pytest.mark.skipif(host.IS_WINDOWS, reason="descendant walk is the POSIX non-leader path")
+def test_kill_tree_of_a_worker_in_a_shared_group_kills_descendants_but_not_detached_ones():
+    # A worker stays in its daemon's group, so the group cannot be killed; its
+    # descendants are walked instead. A grandchild that started its own session
+    # (an adb server) detached itself and survives, as it would a group kill.
+    code = ("import subprocess, sys, time; "
+            "kept = subprocess.Popen([sys.executable, '-c', 'import subprocess, sys, time; "
+            "c = subprocess.Popen([sys.executable, \"-c\", \"import time; time.sleep(60)\"]); "
+            "print(c.pid, flush=True); time.sleep(60)'], stdout=subprocess.PIPE, text=True); "
+            "detached = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], start_new_session=True); "
+            "print(kept.pid, kept.stdout.readline().strip(), detached.pid, flush=True); time.sleep(60)")
+    worker = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True,
+                              **process.popen_options(process.SpawnProfile.WORKER))
+    detached = None
+    try:
+        child_pid, grandchild_pid, detached_pid = (int(item) for item in worker.stdout.readline().split())
+        child, grandchild = process.identify(child_pid), process.identify(grandchild_pid)
+        detached = process.identify(detached_pid)
+        identity = process.identify(worker.pid)
+        assert process.kill_tree(identity) is True
+        worker.wait(timeout=10)
+        assert process.wait_exit(child, 10)
+        assert process.wait_exit(grandchild, 10)
+        assert process.probe(detached) is process.Liveness.ALIVE
+    finally:
+        if worker.poll() is None:
+            worker.kill()
+            worker.wait(timeout=10)
+        worker.stdout.close()
+        if detached is not None and process.probe(detached) is process.Liveness.ALIVE:
+            from rdc_tool.platform import _posix
+            _posix._signal_confirmed(detached.pid, detached.birth, 9)

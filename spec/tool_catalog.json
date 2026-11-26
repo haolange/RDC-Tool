@@ -1,7 +1,7 @@
 {
   "schema_version": "1",
   "source_path": "rdc_tool/operation_definitions.py",
-  "fingerprint": "a615f313d0f5f8fd27d627e40cf49e3a5d7eebba35c5b4b56452f50c79dc5c13",
+  "fingerprint": "c04b972c4a957255e62d994190c1b6ef555461906f6c29c43389d44a81d4a2d0",
   "tool_count": 129,
   "groups": {
     "3.7，缓冲区与网格数据访问 (Buffer & Mesh Data Access)": 6,
@@ -125,7 +125,13 @@
           "name": "output_path",
           "access": "write"
         }
-      ]
+      ],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.buffer.get_structured_data",
@@ -245,7 +251,13 @@
         "replay_position"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.buffer.search_pattern",
@@ -314,7 +326,13 @@
         "replay_position"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.capture.close_file",
@@ -353,7 +371,13 @@
         "lifecycle"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.capture.close_replay",
@@ -391,7 +415,13 @@
         "lifecycle"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.capture.get_info",
@@ -430,7 +460,13 @@
         "lifecycle"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.capture.open_file",
@@ -471,7 +507,13 @@
           "name": "file_path",
           "access": "read"
         }
-      ]
+      ],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.capture.open_replay",
@@ -523,7 +565,13 @@
         "lifecycle"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.core.get_capabilities",
@@ -550,7 +598,13 @@
       "scope": "global",
       "effects": [],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.core.get_config",
@@ -570,7 +624,13 @@
       "scope": "global",
       "effects": [],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.core.get_logs",
@@ -607,7 +667,13 @@
       "scope": "global",
       "effects": [],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.core.get_operation_history",
@@ -649,7 +715,13 @@
       "scope": "global",
       "effects": [],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.core.get_runtime_metrics",
@@ -669,7 +741,13 @@
       "scope": "global",
       "effects": [],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.core.get_tool_graph",
@@ -716,7 +794,13 @@
       "scope": "global",
       "effects": [],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.core.get_version",
@@ -736,7 +820,13 @@
       "scope": "global",
       "effects": [],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.core.healthcheck",
@@ -768,7 +858,13 @@
       "scope": "global",
       "effects": [],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.core.init",
@@ -802,7 +898,13 @@
         "global_config"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.core.list_tools",
@@ -864,7 +966,13 @@
       "scope": "global",
       "effects": [],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.core.set_config",
@@ -895,7 +1003,13 @@
         "global_config"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.core.set_log_level",
@@ -926,7 +1040,13 @@
         "global_config"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.core.shutdown",
@@ -948,7 +1068,13 @@
         "global_config"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.debug.clear_breakpoints",
@@ -995,14 +1121,20 @@
         "replay_position"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.debug.continue",
       "group": "3.9，Shader Debugger 与像素/顶点级调试 (Shader Debugging)",
       "description": "继续执行 debugger（直到断点/结束/超时）。",
-      "parameter_raw": "session_id (string): session_id (str)<br>shader_debug_id (string): shader_debug_id (str), current owning replay only; stale/foreign handles fail before native effects<br>timeout_ms (integer, optional): timeout_ms (int, 可选, 默认 10000)",
-      "returns_raw": "ok (bool)<br>data (dict): {state, stopped_reason}<br>artifacts (list)<br>error (dict|null)<br>meta (dict)<br>projections (dict, 可选)",
+      "parameter_raw": "session_id (string): session_id (str)<br>shader_debug_id (string): shader_debug_id (str), current owning replay only; stale/foreign handles fail before native effects<br>timeout_ms (integer, optional): stepping budget in milliseconds (default 10000)",
+      "returns_raw": "ok (bool)<br>data (dict): {state, stopped_reason: breakpoint|finished|timeout}; a timeout also reports effects_attempted and context_preserved<br>artifacts (list)<br>error (dict|null)<br>meta (dict)<br>projections (dict, 可选)",
       "param_names": [
         "session_id",
         "shader_debug_id",
@@ -1047,7 +1179,13 @@
         "replay_position"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.debug.evaluate_expression",
@@ -1100,7 +1238,13 @@
         "replay_position"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.debug.finish",
@@ -1147,7 +1291,13 @@
         "replay_position"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.debug.get_callstack",
@@ -1194,7 +1344,13 @@
         "replay_position"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.debug.get_variables",
@@ -1256,14 +1412,20 @@
         "replay_position"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.debug.run_to",
       "group": "3.9，Shader Debugger 与像素/顶点级调试 (Shader Debugging)",
       "description": "逐项运行到指定trace stepIndex（target.pc），不支持后退或源码位置。",
-      "parameter_raw": "session_id (string): session_id (str)<br>shader_debug_id (string): shader_debug_id (str)<br>target (object): See input_schema for constraints.<br>timeout_ms (integer, optional): timeout_ms (int, 可选, 默认 10000)",
-      "returns_raw": "ok (bool)<br>data (dict): {state}<br>artifacts (list)<br>error (dict|null)<br>meta (dict)<br>projections (dict, 可选)",
+      "parameter_raw": "session_id (string): session_id (str)<br>shader_debug_id (string): shader_debug_id (str)<br>target (object): See input_schema for constraints.<br>timeout_ms (integer, optional): stepping budget in milliseconds (default 10000)",
+      "returns_raw": "ok (bool)<br>data (dict): {state} once target.pc is reached; {state, stopped_reason=finished} when the trace ends first; when the stepping budget runs out, {state, stopped_reason=timeout, target_pc, target_reached=false, effects_attempted, context_preserved}: the debugger advanced to the reported state and the replay event is not moved by debugger steps<br>artifacts (list)<br>error (dict|null)<br>meta (dict)<br>projections (dict, 可选)",
       "param_names": [
         "session_id",
         "shader_debug_id",
@@ -1323,7 +1485,13 @@
         "replay_position"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.debug.set_breakpoints",
@@ -1389,7 +1557,13 @@
         "replay_position"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.debug.step",
@@ -1444,7 +1618,13 @@
         "replay_position"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.diag.scan_common_issues",
@@ -1494,7 +1674,13 @@
         "replay_position"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.event.diff_pipeline_state",
@@ -1556,7 +1742,13 @@
         "replay_position"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.event.get_action_details",
@@ -1599,7 +1791,13 @@
       "scope": "replay",
       "effects": [],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.event.get_action_tree",
@@ -1711,7 +1909,13 @@
       "supports_projection": {
         "tabular": true
       },
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.event.get_active",
@@ -1749,7 +1953,13 @@
       "scope": "replay",
       "effects": [],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.event.get_callstack",
@@ -1801,7 +2011,13 @@
         "replay_position"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.event.get_parent_chain",
@@ -1848,7 +2064,13 @@
         "replay_position"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.event.get_resource_usage",
@@ -1895,7 +2117,13 @@
         "replay_position"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.event.list_passes",
@@ -1940,7 +2168,13 @@
         "replay_position"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.event.search_actions",
@@ -1991,7 +2225,13 @@
         "replay_position"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.event.set_active",
@@ -2038,7 +2278,13 @@
         "replay_position"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.export.buffer",
@@ -2108,7 +2354,13 @@
           "name": "output_path",
           "access": "write"
         }
-      ]
+      ],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.export.cbuffer_dump",
@@ -2190,7 +2442,13 @@
           "name": "output_dir",
           "access": "write"
         }
-      ]
+      ],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.export.mesh",
@@ -2270,7 +2528,13 @@
           "name": "output_path",
           "access": "write"
         }
-      ]
+      ],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.export.screenshot",
@@ -2357,7 +2621,13 @@
           "name": "output_path",
           "access": "write"
         }
-      ]
+      ],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.export.shader_bundle",
@@ -2435,7 +2705,13 @@
           "name": "output_dir",
           "access": "write"
         }
-      ]
+      ],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.export.texture",
@@ -2537,7 +2813,13 @@
           "name": "output_path",
           "access": "write"
         }
-      ]
+      ],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.macro.find_state_change_point",
@@ -2614,7 +2896,13 @@
         "replay_position"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.mesh.decode_index_data",
@@ -2685,7 +2973,13 @@
         "replay_position"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.mesh.get_drawcall_mesh_config",
@@ -2743,7 +3037,13 @@
         "replay_position"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.mesh.get_post_transform_data",
@@ -2831,7 +3131,13 @@
         "replay_position"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.perf.describe_counter",
@@ -2875,7 +3181,13 @@
       "scope": "replay",
       "effects": [],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.perf.enumerate_counters",
@@ -2913,7 +3225,13 @@
       "scope": "replay",
       "effects": [],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.perf.get_event_durations",
@@ -2977,7 +3295,13 @@
         "replay_position"
       ],
       "evidence_kind": "measurement",
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.perf.sample_counters",
@@ -3048,7 +3372,13 @@
         "replay_position"
       ],
       "evidence_kind": "measurement",
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.pipeline.get_constant_buffers",
@@ -3125,7 +3455,13 @@
         "replay_position"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.pipeline.get_index_buffer",
@@ -3171,7 +3507,13 @@
         "replay_position"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.pipeline.get_resource_bindings",
@@ -3233,7 +3575,13 @@
         "replay_position"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.pipeline.get_shader",
@@ -3285,7 +3633,13 @@
         "replay_position"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.pipeline.get_stage_state",
@@ -3342,7 +3696,13 @@
         "replay_position"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.pipeline.get_state",
@@ -3427,7 +3787,13 @@
         "replay_position"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.pipeline.get_vertex_buffers",
@@ -3473,7 +3839,13 @@
         "replay_position"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.remote.inspect_installation",
@@ -3511,26 +3883,24 @@
       "scope": "global",
       "effects": [],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.remote.connect",
       "preparation_policy": "automatic",
-      "timeout_policy": {
-        "argument": "timeout_ms",
-        "default_timeout_ms": 200000,
-        "worker_grace_ms": 85000,
-        "transport_grace_ms": 5000,
-        "process_grace_ms": 5000
-      },
       "group": "3.12，远程连接与自动化抓帧 (Remote Capture & Target Control)",
       "description": "连接远程 RenderDoc server。选择 Android 设备即自动准备：缺失时安装、兼容时启动或借用、不兼容时覆盖，必要时降级或卸载重装目标辅助程序（可能清除其数据）。busy 和未知归属服务不抢占。",
-      "parameter_raw": "host (string, optional)<br>port (integer, optional): default 38920<br>timeout_ms (integer, optional): total preparation and connection budget<br>options (object, optional): {transport, device_serial, local_port, push_config}",
-      "returns_raw": "data: {context_id, remote_id, server_info}; success requires native handshake and Ping. Android bootstrap records ownership, install_mode, installed_apk, uninstalled_existing, expected_version, apk_sha256, installed_apk_path, installed_apk_sha256, apk_identity_status and apk_identity_reason. APK byte identity does not decide service compatibility. Missing installation receipts are resolved by serial read-only PackageManager and target APK identity checks within the original deadline; no blind reinstall. Unresolved completion returns remote_install_unconfirmed with details.device_action and bounded original install output. Progress checking/installing/starting/verifying is reported by daemon active_operation. Cancellation joins native actions, preserves installation facts and only releases owned resources; installed packages are not rolled back. timeout_policy declares the native argument/default and worker/transport/process join grace.",
+      "parameter_raw": "host (string, optional)<br>port (integer, optional): default 38920<br>options (object, optional): {transport, device_serial, local_port, push_config}",
+      "returns_raw": "data: {context_id, remote_id, server_info}; success requires native handshake and Ping. Android bootstrap records ownership, install_mode, installed_apk, uninstalled_existing, expected_version, apk_sha256, installed_apk_path, installed_apk_sha256, apk_identity_status and apk_identity_reason. APK byte identity does not decide service compatibility. Missing installation receipts are resolved by serial read-only PackageManager and target APK identity checks within the original connection budget; no blind reinstall. Unresolved completion returns remote_install_unconfirmed with details.device_action and bounded original install output. Progress checking/installing/starting/verifying is reported by daemon active_operation. Cancellation joins native actions, preserves installation facts and only releases owned resources; installed packages are not rolled back. The attempt runs under the request no-progress budget (execution_budget): every reported bootstrap stage moves its deadline forward, and a silent attempt ends with remote_connect_timeout before the worker watchdog fires.",
       "param_names": [
         "host",
         "port",
-        "timeout_ms",
         "options"
       ],
       "prerequisites": [
@@ -3553,12 +3923,6 @@
           "port": {
             "description": "port (int, optional, default 38920)",
             "type": "integer"
-          },
-          "timeout_ms": {
-            "description": "total native deadline in milliseconds (default 200000)",
-            "type": "integer",
-            "minimum": 1,
-            "default": 200000
           },
           "options": {
             "type": "object",
@@ -3593,7 +3957,13 @@
         "remote_control"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.remote.copy_capture",
@@ -3651,7 +4021,13 @@
         "remote_control"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.remote.delete_capture",
@@ -3703,7 +4079,13 @@
         "remote_control"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.remote.disconnect",
@@ -3749,7 +4131,13 @@
         "remote_control"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.remote.launch_app",
@@ -3821,7 +4209,13 @@
         "remote_control"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.remote.list_captures",
@@ -3867,7 +4261,13 @@
         "remote_control"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.remote.list_targets",
@@ -3913,7 +4313,13 @@
         "remote_control"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.remote.ping",
@@ -3959,7 +4365,13 @@
         "remote_control"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.remote.queue_capture",
@@ -4015,7 +4427,13 @@
         "remote_control"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.remote.set_capture_options",
@@ -4067,7 +4485,13 @@
         "remote_control"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.remote.trigger_capture",
@@ -4128,7 +4552,13 @@
         "remote_control"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.replay.get_api_properties",
@@ -4168,7 +4598,13 @@
         "replay_position"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.replay.get_driver_info",
@@ -4208,7 +4644,13 @@
         "replay_position"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.replay.get_frame_info",
@@ -4253,7 +4695,13 @@
         "replay_position"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.replay.set_frame",
@@ -4299,7 +4747,13 @@
         "replay_position"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.resource.estimate_memory",
@@ -4345,7 +4799,13 @@
         "replay_position"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.resource.get_details",
@@ -4395,7 +4855,13 @@
       "scope": "replay",
       "effects": [],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.resource.get_usage",
@@ -4446,7 +4912,13 @@
         "replay_position"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.resource.list_all",
@@ -4510,7 +4982,13 @@
         "replay_position"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.resource.set_alias",
@@ -4562,7 +5040,13 @@
         "context_metadata"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.session.clear_context",
@@ -4596,7 +5080,13 @@
         "lifecycle"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.session.close_preview",
@@ -4625,7 +5115,13 @@
         "desktop_window"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.session.create_context",
@@ -4661,7 +5157,13 @@
         "lifecycle"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.session.get_context",
@@ -4688,7 +5190,13 @@
       "scope": "context",
       "effects": [],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.session.get_replay_events",
@@ -4728,7 +5236,13 @@
       "scope": "context",
       "effects": [],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.session.list_contexts",
@@ -4755,7 +5269,13 @@
       "scope": "context",
       "effects": [],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.session.list_sessions",
@@ -4782,7 +5302,13 @@
       "scope": "context",
       "effects": [],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.session.observe",
@@ -4857,7 +5383,13 @@
           "name": "out_path",
           "access": "write"
         }
-      ]
+      ],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.session.open_preview",
@@ -4891,7 +5423,13 @@
         "desktop_window"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.session.resume",
@@ -4925,7 +5463,13 @@
         "lifecycle"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.session.select_session",
@@ -4961,7 +5505,13 @@
         "lifecycle"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.session.update_context",
@@ -5001,7 +5551,13 @@
         "context_metadata"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.shader.compile",
@@ -5120,20 +5676,25 @@
           "name": "output_path",
           "access": "write"
         }
-      ]
+      ],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.shader.debug_start",
       "group": "3.9，Shader Debugger 与像素/顶点级调试 (Shader Debugging)",
       "description": "启动事件绑定的 pixel shader debugger。未指定 target 时按当前 Event 的输出目标查找；目标没有本 Event 的像素历史命中时，不接受 native debugger 句柄为成功。remote replay 会先读取 capability matrix。",
-      "parameter_raw": "session_id (string): session_id (str)<br>mode (string, optional): mode (str, 可选, 默认 'pixel'): 当前正式支持 `pixel`；传入其他 mode 会返回结构化 `validation_error`，并在 details 中附带 `supported_modes` / `requested_mode` / `failure_stage` / `failure_reason`<br>event_id (integer, optional): event_id (int, 可选): 缺省为当前 active event<br>params (object): params (dict): pixel 模式下使用 {x, y, sample?, target?, view?, primitive?}；显式 target 只验证该目标，不回退到其他输出；缺省时使用当前 Event 输出，找不到时才尝试默认目标<br>timeout_ms (integer, optional): timeout_ms (int, 可选, 默认 10000)<br>context_id (string, optional): context_id (str, optional): choose the context to use; defaults to the current daemon context",
+      "parameter_raw": "session_id (string): session_id (str)<br>mode (string, optional): mode (str, 可选, 默认 'pixel'): 当前正式支持 `pixel`；传入其他 mode 会返回结构化 `validation_error`，并在 details 中附带 `supported_modes` / `requested_mode` / `failure_stage` / `failure_reason`<br>event_id (integer, optional): event_id (int, 可选): 缺省为当前 active event<br>params (object): params (dict): pixel 模式下使用 {x, y, sample?, target?, view?, primitive?}；显式 target 只验证该目标，不回退到其他输出；缺省时使用当前 Event 输出，找不到时才尝试默认目标<br>context_id (string, optional): context_id (str, optional): choose the context to use; defaults to the current daemon context",
       "returns_raw": "ok (bool)<br>data (dict): {shader_debug_id, initial_state, resolved_context, debug_qualification?, resolved_event_id, pixel_history_summary, selected_target_source, failure_stage, failure_reason, attempts}<br>artifacts (list)<br>error (dict|null): remote backend/session 明确不支持时，优先返回 capability-style 错误，而不是等到 trace 创建后才报 `debugger_handle_missing`. When a target requires an unsupported Vulkan input-attachment Pixel History, returns pixel_history_unsupported_input_attachment after replay position restoration.<br>meta (dict)<br>projections (dict, 可选)<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.",
       "param_names": [
         "session_id",
         "mode",
         "event_id",
         "params",
-        "timeout_ms",
         "context_id"
       ],
       "prerequisites": [
@@ -5167,10 +5728,6 @@
             "description": "params (dict): pixel 模式下使用 {x, y, sample?, target?, view?, primitive?}；显式 target 不回退，缺省按当前 Event 输出选择",
             "type": "object"
           },
-          "timeout_ms": {
-            "description": "timeout_ms (int, 可选, 默认 10000)",
-            "type": "integer"
-          },
           "context_id": {
             "description": "context_id (str, optional): choose the context to use; defaults to the current daemon context",
             "type": "string"
@@ -5188,7 +5745,13 @@
         "replay_position"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.shader.edit_and_replace",
@@ -5351,7 +5914,13 @@
           "name": "include_dirs",
           "access": "read_directory"
         }
-      ]
+      ],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.shader.extract_binary",
@@ -5436,7 +6005,13 @@
           "name": "output_path",
           "access": "write"
         }
-      ]
+      ],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.shader.get_bindpoint_mapping",
@@ -5501,7 +6076,13 @@
         "replay_position"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.shader.get_constant_block_layout",
@@ -5574,7 +6155,13 @@
         "replay_position"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.shader.get_constant_buffer_contents",
@@ -5664,7 +6251,13 @@
         "replay_position"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.shader.get_debug_state",
@@ -5725,7 +6318,13 @@
         "replay_position"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.shader.get_disassembly",
@@ -5801,7 +6400,13 @@
         "replay_position"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.shader.get_messages",
@@ -5852,7 +6457,13 @@
         "replay_position"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.shader.get_reflection",
@@ -5933,7 +6544,13 @@
         "replay_position"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.shader.get_source",
@@ -6004,7 +6621,13 @@
         "replay_position"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.shader.list_entry_points",
@@ -6069,7 +6692,13 @@
         "replay_position"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.shader.list_replacements",
@@ -6115,7 +6744,13 @@
         "replay_position"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.shader.revert_replacement",
@@ -6168,7 +6803,13 @@
         "replay_position"
       ],
       "evidence_kind": "rollback",
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.texture.compute_stats",
@@ -6243,7 +6884,13 @@
         "replay_position"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.texture.diff",
@@ -6368,7 +7015,13 @@
         "replay_position"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.texture.get_data",
@@ -6493,7 +7146,13 @@
           "name": "output_path",
           "access": "write"
         }
-      ]
+      ],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.texture.get_histogram",
@@ -6577,7 +7236,13 @@
         "replay_position"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.texture.get_pixel_history",
@@ -6679,7 +7344,13 @@
         "replay_position"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.texture.get_pixel_value",
@@ -6768,7 +7439,13 @@
         "replay_position"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.texture.get_region_values",
@@ -6855,7 +7532,13 @@
         "artifact_write"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.texture.render_overlay",
@@ -6945,7 +7628,13 @@
           "name": "output_path",
           "access": "write"
         }
-      ]
+      ],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.util.cleanup_artifacts",
@@ -6998,7 +7687,13 @@
         "artifact_delete"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.util.diff_images",
@@ -7098,7 +7793,13 @@
           "name": "output_path",
           "access": "write"
         }
-      ]
+      ],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.util.list_artifacts",
@@ -7139,7 +7840,13 @@
       "scope": "global",
       "effects": [],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.vfs.cat",
@@ -7176,7 +7883,13 @@
         "artifact_write"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.vfs.ls",
@@ -7233,7 +7946,13 @@
         "artifact_write"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.vfs.resolve",
@@ -7270,7 +7989,13 @@
         "artifact_write"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.vfs.tree",
@@ -7315,7 +8040,13 @@
         "artifact_write"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.capture.get_thumbnail",
@@ -7379,7 +8110,13 @@
           "name": "output_path",
           "access": "write"
         }
-      ]
+      ],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.event.get_api_calls",
@@ -7495,7 +8232,13 @@
       "scope": "replay",
       "effects": [],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.resource.get_descriptors",
@@ -7568,7 +8311,13 @@
         "replay_position"
       ],
       "evidence_kind": null,
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     },
     {
       "name": "rd.perf.get_frame_timing",
@@ -7621,7 +8370,13 @@
         "replay_position_temporary"
       ],
       "evidence_kind": "measurement",
-      "path_inputs": []
+      "path_inputs": [],
+      "execution_budget": {
+        "rule": "no_progress",
+        "default_no_progress_ms": 300000,
+        "min_no_progress_ms": 30000,
+        "max_no_progress_ms": 3600000
+      }
     }
   ]
 }

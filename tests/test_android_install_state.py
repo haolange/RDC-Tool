@@ -10,7 +10,7 @@ from rdc_tool.runtime import dispatch, live_state
 
 @pytest.fixture(autouse=True)
 def short_private_install_budget(monkeypatch):
-    monkeypatch.setattr(rb, "DEFAULT_ANDROID_TIMEOUT_MS", 5)
+    monkeypatch.setattr(rb, "_request_budget", lambda cancelled=None: rb.ConnectionBudget(5, cancelled))
 
 
 PACKAGE = "org.renderdoc.renderdoccmd.arm64"
