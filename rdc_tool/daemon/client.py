@@ -12,6 +12,7 @@ from typing import Any, Callable, Dict, Iterable, Optional, Tuple
 
 from rdc_tool import timeout_policy
 from rdc_tool.context_snapshot import clear_context_snapshot, context_snapshot_path, normalize_context_id
+from rdc_tool.daemon import context_status
 from rdc_tool.daemon.ownership import DaemonOwnerUnavailable, owner_is_busy, wait_for_owner_exit
 from rdc_tool.daemon.state import (
     DEFAULT_IDLE_TIMEOUT_S, DEFAULT_LEASE_TIMEOUT_S, clear_state, context_from_state_path, daemon_process,
@@ -435,6 +436,23 @@ def daemon_request(
     if not isinstance(response, dict):
         raise RuntimeError(f"Invalid daemon response: {type(response).__name__}")
     return response
+
+
+def read_context_status(context: Optional[str] = "default") -> Dict[str, Any]:
+    """The context's read-only status. Asks a live daemon; otherwise reads the
+    recorded state and probes its identities. Never starts or cleans up anything."""
+    chosen_ctx = normalize_context_id(context)
+    status, state = load_json_with_status(state_path(chosen_ctx))
+    if status != "ok" or not is_complete(state) or not process.is_alive(daemon_process(state)):
+        return context_status.from_state_files(chosen_ctx)
+    try:
+        response = daemon_request("context_status", params={}, context=chosen_ctx, state=state)
+    except Exception as exc:  # noqa: BLE001
+        return context_status.from_state_files(chosen_ctx, daemon_error=f"daemon_unreachable: {exc}")
+    if not bool(response.get("ok")) or not isinstance(response.get("result"), dict):
+        error = response.get("error") if isinstance(response.get("error"), dict) else {}
+        return context_status.from_state_files(chosen_ctx, daemon_error=f"daemon_rejected: {error.get('code', '')}")
+    return dict(response["result"])
 
 
 def cancel_request(*, context: Optional[str] = "default", request_id: str) -> Dict[str, Any]:

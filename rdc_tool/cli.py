@@ -23,6 +23,7 @@ from rdc_tool.daemon.client import (
     DaemonExecInterrupted,
     attach_client,
     cancel_request,
+    read_context_status,
     cleanup_stale_daemon_states,
     clear_context,
     daemon_request,
@@ -719,10 +720,12 @@ def _parse_context_value(raw: str) -> Any:
 
 
 def _cmd_context_status(args: argparse.Namespace) -> int:
+    # Read-only: never starts a daemon or a worker and never writes state, so it
+    # is safe to call while deciding whether a context can be recovered.
     context = str(getattr(args, "daemon_context", "default") or "default")
-    payload = _daemon_exec("rd.session.get_context", {}, context=context)
-    _print_json(payload)
-    return EXIT_OK if bool(payload.get("ok")) else EXIT_RUNTIME_ERR
+    _print_json(canonical_success(result_kind="rdc_tool.context.status", data=read_context_status(context),
+                                  transport="cli"))
+    return EXIT_OK
 
 
 def _cmd_context_update(args: argparse.Namespace) -> int:
@@ -1401,7 +1404,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_context = sub.add_parser("context", help="Context state helpers")
     s_context = p_context.add_subparsers(dest="context_cmd", required=True)
-    p_context_status = s_context.add_parser("status", help="Print the current runtime context snapshot")
+    p_context_status = s_context.add_parser(
+        "status", help="Read-only context status: daemon and worker identity, running request, replay recovery")
     p_context_status.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
     p_context_update = s_context.add_parser("update", help="Update agent-facing context fields")
     p_context_update.add_argument("--key", required=True, choices=("notes", "focus_pixel", "focus_resource_id", "focus_shader_id"))

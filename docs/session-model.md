@@ -8,7 +8,7 @@ CLI → daemon（每个 `--daemon-context` 一个）→ worker。CLI 只解析�
 
 ## Context
 
-`rdc-tool context status` 返回所选 context 的当前状态；`rdc-tool context update` 修改面向 Agent 的字段，如 notes 与 focus。`session_locator` 汇总当前的 `.rdc`、session、frame 与 event。
+`rdc-tool context status` 只读地返回所选 context 的当前状态：daemon 与 worker 的进程身份、正在执行的请求（`active_operation`，含最近的原生调用与进度时间）、排队的请求、各 session 的恢复状态（含 `requires_restart` 与上一 worker 的 `worker_exit` 回执）、有界的 worker 生命周期历史（`worker_lifecycle`）、preview、notes 与 focus。daemon 存活时由它的只读方法 `context_status` 回答，该方法不写状态文件、不启动 worker；没有存活的 daemon 时，CLI 读取记录的状态文件并按 `(pid, birth)` 探测其中的身份，从不启动 daemon 或清理残留。需要实时回放快照时调用 `rd.session.get_context`。`rdc-tool context update` 修改面向 Agent 的字段，如 notes 与 focus。`session_locator` 汇总当前的 `.rdc`、session、frame 与 event。
 
 `--daemon-context <id>` 选择持续的运行时命名空间，不是 daemon 模式开关；省略时为 `default`。`rdc-tool context list` 列出已知命名空间，`rdc-tool context clear` 清除所选命名空间。读取其他命名空间时，在该 daemon context 下调用 `rd.session.get_context`；不存在修改隐式“当前命名空间”的选择操作。
 
@@ -42,7 +42,7 @@ daemon 启动按 canonical context 状态路径跨 CLI 进程串行执行状态�
 
 客户端清理与 daemon 生命周期共用同一“未释放资源”检查。仅因空闲不能停止仍持有 capture、replay、远端所有权或活动请求的 daemon；丢失 owner 的租约过期后仍允许清理。不可读的所有权状态保留给受控恢复。
 
-新启动或替换的 worker 在分派请求前把持久化的 replay session 标记为 `requires_restart` 并保留其元数据；请求从不隐式拉起替代 worker。显式 context 清理始终可用。worker 替换前后，持久化的 session ID 与相同的图像哈希都不能证明连续性。
+worker 丢失后（卡死被终止、意外退出或 daemon 重启），下一个请求会启动新的 worker，但从不恢复回放：新 worker 在分派请求前先把持久化的 replay session 标记为 `requires_restart` 并保留其元数据与上一 worker 的退出回执，回放只能经显式的关闭与重开恢复。只读的 `context status` 不发送请求，因此不会启动 worker。显式 context 清理始终可用。worker 替换前后，持久化的 session ID 与相同的图像哈希都不能证明连续性。
 
 ## Worker 与回放执行
 

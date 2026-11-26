@@ -18,6 +18,7 @@ from rdc_tool import timeout_policy
 from rdc_tool.context_snapshot import normalize_context_id
 from rdc_tool.core.contracts import canonical_error
 from rdc_tool.io_utils import rotating_log_handler
+from rdc_tool.daemon import context_status
 from rdc_tool.daemon.client import context_has_unreleased_resources, owner_lost_should_stop
 from rdc_tool.daemon.state import (
     DEFAULT_IDLE_TIMEOUT_S, DEFAULT_LEASE_TIMEOUT_S, daemon_log_path, epoch_ms, iso_to_ms, normalize_timeout,
@@ -271,6 +272,33 @@ class DaemonRuntime:
             payload["attached_clients"] = [dict(item) for item in payload.get("attached_clients", [])]
             payload["worker"] = dict(payload.get("worker") or {})
         return payload
+
+    def _context_status(self) -> Dict[str, Any]:
+        """Read-only: no state write, no worker start, no activity touch."""
+        with self._state_lock:
+            daemon = {"state": "alive", "pid": int(self.state.get("pid") or 0),
+                      "start_generation": str(self.state.get("birth") or ""),
+                      "started_at": str(self.state.get("started_at") or ""),
+                      "last_activity_at": str(self.state.get("last_activity_at") or "")}
+            active = dict(self.state.get("active_operation") or {})
+            lifecycle = [dict(item) for item in self.state.get("worker_lifecycle") or [] if isinstance(item, dict)]
+        worker = self._worker
+        if worker is not None and worker.is_running():
+            identity = worker.previous_identity()
+            worker_view = {"state": "alive", "pid": identity.pid, "start_generation": identity.birth}
+        elif worker is not None:
+            try:
+                identity = worker.previous_identity()
+            except RuntimeError:
+                identity = process.ProcessIdentity(0)
+            worker_view = context_status.probe_identity(identity.pid, identity.birth)
+        else:
+            worker_view = context_status.worker_from_state_file(self.daemon_context)
+        with self._requests_lock:
+            queued = [channel.request_id for channel in self._requests.values() if channel.state == "queued"]
+        return {"ok": True, "result": {**context_status.report(
+            self.daemon_context, source="daemon", daemon=daemon, worker=worker_view, active_operation=active,
+            worker_lifecycle=lifecycle), "queued_request_ids": queued}}
 
     def _status_payload(self) -> Dict[str, Any]:
         state = self._snapshot_state()
@@ -836,6 +864,8 @@ class DaemonRuntime:
             return self._status_payload()
         if method == "cancel":
             return self._cancel(params)
+        if method == "context_status":
+            return self._context_status()
         if method == "get_state":
             self._touch_activity()
             self._persist_state()

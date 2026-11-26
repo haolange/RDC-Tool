@@ -293,7 +293,7 @@ def _verify_tools_catalog(root: Path) -> None:
 
 def _verify_cli_contract(root: Path) -> None:
     checks = [
-        (["context", "status", "--json"], "rd.session.get_context"),
+        (["context", "status", "--json"], "rdc_tool.context.status"),
         (["context", "list", "--json"], "rd.session.list_contexts"),
         (["--daemon-context", "package-contract", "context", "update", "--key", "notes", "--value", "package-verify", "--json"], "rd.session.update_context"),
         (["--daemon-context", "package-contract", "context", "clear", "--json"], "rdc_tool.context.clear"),
