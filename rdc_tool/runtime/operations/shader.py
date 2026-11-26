@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import difflib
 import hashlib
 import json
@@ -10,7 +9,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 
-from rdc_tool import timeout_policy
 from rdc_tool.host_tools import HostToolUnavailableError
 from rdc_tool.platform import dxc
 from rdc_tool.core.errors import CoreError, RuntimeToolError
@@ -510,7 +508,6 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
         cross_event_rejections = 0
         debugger_missing_count = 0
         matched_event_hit_seen = False
-        pixel_history_timeout_count = 0
         pixel_history_conflicts: List[pixel_trace.PixelHistoryInputAttachmentConflict] = []
 
         for target_source, target_candidate in target_candidates:
@@ -554,13 +551,12 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
                 "target": resolved_target,
             }
             last_target_source = target_source
-            history_timed_out = False
             view_format, raw_typeless = await pixel_trace._pixel_history_view(controller, target_rid, target_texture_desc)
             cast = view_format.compType if view_format is not None else (renderdoc_api._get_rd().CompType.UInt if raw_typeless else None)
 
             try:
                 history_options = {"type_cast": cast} if cast is not None else {}
-                history_raw = await pixel_trace._pixel_history_raw_with_timeout(
+                history_raw = await pixel_trace._checked_pixel_history_raw(
                     controller,
                     target_rid,
                     x,
@@ -576,33 +572,6 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
                                      "usage_event_id": exc.usage_event_id,
                                      "image_usage_flags": exc.image_usage_flags})
                 continue
-            except asyncio.TimeoutError:
-                pixel_history_timeout_count += 1
-                history_items = []
-                history_summary = {
-                    "hit_count": 0,
-                    "matched_event_hit_count": 0,
-                    "passed_hit_count": 0,
-                    "viable_hit_count": 0,
-                    "primitive_ids": [],
-                    "error": pixel_trace._pixel_history_timeout_message(timeout_policy.PIXEL_HISTORY_TIMEOUT_S),
-                    "timeout_seconds": float(timeout_policy.PIXEL_HISTORY_TIMEOUT_S),
-                }
-                history_timed_out = True
-                attempts_log.append(
-                    {
-                        "target_source": target_source,
-                        "stage": "pixel_history",
-                        "resolved_context": {
-                            "event_id": int(event_id),
-                            "x": int(x),
-                            "y": int(y),
-                            "target": resolved_target,
-                        },
-                        "error": pixel_trace._pixel_history_timeout_message(timeout_policy.PIXEL_HISTORY_TIMEOUT_S),
-                        "timeout_seconds": float(timeout_policy.PIXEL_HISTORY_TIMEOUT_S),
-                    },
-                )
             except Exception as exc:
                 history_items: List[Dict[str, Any]] = []
                 history_summary = {
@@ -626,8 +595,6 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
             last_history_summary = history_summary
             if int(history_summary.get("matched_event_hit_count", 0)) > 0:
                 matched_event_hit_seen = True
-            if history_timed_out:
-                continue
             if int(history_summary.get("matched_event_hit_count", 0)) == 0:
                 cross_event_hits = sum(
                     1 for item in history_items
@@ -826,12 +793,6 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
                 error_code = "shader_debug_start_failed"
                 error_category = "runtime"
                 error_message = "Shader debug trace was created without a usable debugger handle"
-            elif pixel_history_timeout_count > 0 and debug_attempt_count == 0:
-                failure_stage = "pixel_history"
-                failure_reason = "pixel_history_timeout"
-                error_code = "shader_debug_start_failed"
-                error_category = "runtime"
-                error_message = "Shader debug target discovery timed out while collecting pixel history"
             elif not matched_event_hit_seen and cross_event_rejections > 0:
                 failure_stage = "pixel_history"
                 failure_reason = "cross_event_only"
@@ -857,7 +818,6 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
                 "cross_event_rejections": int(cross_event_rejections),
                 "matched_event_hit_seen": bool(matched_event_hit_seen),
                 "debugger_missing_count": int(debugger_missing_count),
-                "pixel_history_timeout_count": int(pixel_history_timeout_count),
             }
             if error_category == "runtime":
                 return envelope.failure(

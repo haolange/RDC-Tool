@@ -248,3 +248,22 @@ def test_debug_variable_snapshots_include_immutable_native_inputs(native_debug):
     assert d.call('continue').data['stopped_reason'] == 'finished'
     assert d.call('get_variables', name_filter='_IN').data['variables'] == first['variables']
     assert d.call('get_variables', name_filter='x').data['variables'][0]['value']['f32v'] == [3.0]
+
+
+@pytest.mark.parametrize("action, args", [("run_to", {"target": {"pc": 10_000}}), ("continue", {})])
+def test_exhausted_stepping_budget_reports_where_the_debugger_stopped(native_debug, monkeypatch, action, args):
+    from rdc_tool.runtime import settings
+    d = native_debug
+    pcs = iter(range(1, 100))
+    d.controller.ContinueDebug = lambda debugger: [SimpleNamespace(stepIndex=next(pcs), changes=[], callstack=['main'])]
+    clock = iter(range(0, 10_000, 4))
+    monkeypatch.setattr(settings, "_now_ms", lambda: next(clock))
+    result = d.call(action, timeout_ms=10, **args)
+    assert result.ok is True
+    assert result.data["stopped_reason"] == "timeout"
+    assert result.data["state"]["pc"] >= 1
+    assert result.data["effects_attempted"] is True
+    assert result.data["context_preserved"] is True
+    if action == "run_to":
+        assert (result.data["target_pc"], result.data["target_reached"]) == (10_000, False)
+    assert d.handle.stopped_reason == "timeout"

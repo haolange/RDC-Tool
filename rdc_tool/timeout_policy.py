@@ -49,7 +49,6 @@ WORKER_EXIT_TIMEOUT_S = 5.0
 STACK_DUMP_GRACE_S = 2.0
 # The worker re-arms its stack-dump timer at most this often while frames flow.
 STACK_DUMP_REARM_INTERVAL_S = 1.0
-PIXEL_HISTORY_TIMEOUT_S = 20.0
 
 
 class NoProgressBudgetError(ValueError):

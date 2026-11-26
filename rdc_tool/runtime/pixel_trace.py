@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import asyncio
 import math
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Sequence, Tuple
 
-from rdc_tool import timeout_policy
 from rdc_tool.core import replay_facts
 from rdc_tool.core.errors import CoreError
 from rdc_tool.core.texture_view import bound_texture_view_format
@@ -58,10 +56,6 @@ async def _pixel_history_raw(controller: Any, resource_id: Any, x: int, y: int, 
     return list(history_raw or [])
 
 
-def _pixel_history_timeout_message(timeout_s: float) -> str:
-    return f"PixelHistory timed out after {timeout_s:.1f}s"
-
-
 class PixelHistoryInputAttachmentConflict(Exception):
     def __init__(self, usage_event_id: int, image_usage_flags: int) -> None:
         self.usage_event_id = usage_event_id
@@ -91,25 +85,23 @@ async def _pixel_history_conflict_error(session_id: str, original_event: int,
     )
 
 
-async def _pixel_history_raw_with_timeout(
+async def _checked_pixel_history_raw(
     controller: Any,
     resource_id: Any,
     x: int,
     y: int,
     subresource: Any,
     *,
-    timeout_s: Optional[float] = None,
     type_cast: Any = None,
 ) -> List[Any]:
+    # PixelHistory is one native call: the request's no-progress budget governs
+    # it, and a cancellation waits for it to return before it takes effect.
     conflict = await renderdoc_api._offload(replay_facts.pixel_history_input_attachment_conflict, renderdoc_api._get_rd(), controller, resource_id)
     if conflict is not None:
         raise PixelHistoryInputAttachmentConflict(*conflict)
-    effective_timeout = float(timeout_policy.PIXEL_HISTORY_TIMEOUT_S if timeout_s is None else timeout_s)
-    return await asyncio.wait_for(
-        (_pixel_history_raw(controller, resource_id, x, y, subresource, type_cast) if type_cast is not None
-         else _pixel_history_raw(controller, resource_id, x, y, subresource)),
-        timeout=effective_timeout,
-    )
+    if type_cast is not None:
+        return await _pixel_history_raw(controller, resource_id, x, y, subresource, type_cast)
+    return await _pixel_history_raw(controller, resource_id, x, y, subresource)
 
 
 async def _pixel_history_view(controller: Any, resource_id: Any, texture_desc: Any) -> Tuple[Any, bool]:

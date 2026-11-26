@@ -436,7 +436,7 @@ def test_pixel_history_resolves_explicit_output_target(monkeypatch: pytest.Monke
     monkeypatch.setattr(replay_access, "_get_controller", _fake_get_controller)
     monkeypatch.setattr(replay_access, "_ensure_event", _fake_ensure_event)
     monkeypatch.setattr(visual_target, "_resolve_visual_target_for_event", _fake_resolve_visual_target_for_event)
-    monkeypatch.setattr(pixel_trace, "_pixel_history_raw_with_timeout", _fake_history)
+    monkeypatch.setattr(pixel_trace, "_checked_pixel_history_raw", _fake_history)
     monkeypatch.setattr(replay_facts, "pixel_history_input_attachment_conflict", lambda *args: None)
     monkeypatch.setattr(truth_matrix, "_event_truth_metadata", _fake_truth)
     monkeypatch.setattr(renderdoc_api, "_get_rd", lambda: SimpleNamespace(

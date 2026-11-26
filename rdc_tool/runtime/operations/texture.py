@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import base64
 import io
 import shutil
@@ -12,7 +11,6 @@ from typing import Any, Dict
 
 import numpy as np
 
-from rdc_tool import timeout_policy
 from rdc_tool.core.errors import CoreError
 from rdc_tool.core.render_service import TextureDecodeError
 from rdc_tool.runtime import (
@@ -256,7 +254,7 @@ async def _dispatch_texture_impl(action: str, args: Dict[str, Any]) -> envelope.
         cast = view_format.compType if view_format is not None else (rd.CompType.UInt if raw_typeless else None)
         try:
             history_options = {"type_cast": cast} if cast is not None else {}
-            history_raw = await pixel_trace._pixel_history_raw_with_timeout(
+            history_raw = await pixel_trace._checked_pixel_history_raw(
                 controller,
                 rid,
                 coerce._as_int(args["x"]),
@@ -266,20 +264,6 @@ async def _dispatch_texture_impl(action: str, args: Dict[str, Any]) -> envelope.
             )
         except pixel_trace.PixelHistoryInputAttachmentConflict as exc:
             return await pixel_trace._pixel_history_conflict_error(session_id, original_event, exc)
-        except asyncio.TimeoutError:
-            return envelope.failure(
-                pixel_trace._pixel_history_timeout_message(timeout_policy.PIXEL_HISTORY_TIMEOUT_S),
-                code="pixel_history_timeout",
-                category="runtime",
-                details={
-                    "session_id": session_id,
-                    "texture_id": str(rid),
-                    "x": coerce._as_int(args["x"]),
-                    "y": coerce._as_int(args["y"]),
-                    "timeout_seconds": float(timeout_policy.PIXEL_HISTORY_TIMEOUT_S),
-                    "resolved_event_id": int(event_id),
-                },
-            )
         except Exception as exc:
             return envelope.failure(f"PixelHistory unavailable: {exc}", code="runtime_error")
         color_type = ("uint" if raw_typeless else pixel_trace._pixel_history_color_type(

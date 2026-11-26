@@ -68,9 +68,24 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
     event_before = replay_before.active_event_id if replay_before is not None else None
     controller = await replay_access._get_controller(session_id)
 
+    stepped = {"count": 0}
+
+    def timed_out(**extra: Any) -> envelope.Outcome:
+        # The step budget ran out with the trace still running: report where the
+        # debugger stopped, that it advanced, and whether the replay context
+        # around it is unchanged. Debugger steps never move the replay event.
+        handle.stopped_reason = "timeout"
+        preserved = (replay_before is not None and live_state._runtime.replays.get(session_id) is replay_before
+                     and replay_before.active_event_id == event_before
+                     and live_state._runtime.shader_debugs.get(debug_id) is handle)
+        return envelope.success(state=shader_debug._shader_debug_state_payload(handle), stopped_reason="timeout",
+                                effects_attempted=stepped["count"] > 0, context_preserved=preserved, **extra)
+
     async def continue_once() -> Optional[Any]:
-        if not handle.pending_states and not await renderdoc_api._offload(_continue_debug_into, controller, handle):
-            return None
+        if not handle.pending_states:
+            stepped["count"] += 1
+            if not await renderdoc_api._offload(_continue_debug_into, controller, handle):
+                return None
         state = handle.pending_states.popleft()
         for change in state.changes:
             before_name = str(change.before.name or "")
@@ -103,8 +118,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
                 if any(bp.get("pc") == pc for bp in handle.breakpoints):
                     handle.stopped_reason = "breakpoint"
                     return envelope.success(state=shader_debug._shader_debug_state_payload(handle), stopped_reason="breakpoint")
-        handle.stopped_reason = "timeout"
-        return envelope.success(state=shader_debug._shader_debug_state_payload(handle), stopped_reason="timeout")
+        return timed_out()
     if action == "run_to":
         target = coerce._as_dict(args.get("target"), default={})
         target_pc = target.get("pc")
@@ -127,7 +141,7 @@ async def dispatch(action: str, args: Dict[str, Any]) -> envelope.Outcome:
             pc = int(getattr(state, "stepIndex", 0))
             if pc == int(target_pc):
                 return envelope.success(state=shader_debug._shader_debug_state_payload(handle))
-        return envelope.failure("run_to timeout", code="runtime_error")
+        return timed_out(target_pc=int(target_pc), target_reached=False)
     if action == "set_breakpoints":
         bps = coerce._as_list(args.get("breakpoints"), default=[])
         handle.breakpoints = [coerce._as_dict(bp) for bp in bps]

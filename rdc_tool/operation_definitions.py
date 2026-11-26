@@ -634,9 +634,9 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'group': '3.9，Shader Debugger 与像素/顶点级调试 (Shader Debugging)',
   'description': '继续执行 debugger（直到断点/结束/超时）。',
   'parameter_raw': 'session_id (string): session_id (str)<br>shader_debug_id (string): '
-                   'shader_debug_id (str), current owning replay only; stale/foreign handles fail before native effects<br>timeout_ms (integer, optional): timeout_ms (int, 可选, '
-                   '默认 10000)',
-  'returns_raw': 'ok (bool)<br>data (dict): {state, stopped_reason}<br>artifacts (list)<br>error '
+                   'shader_debug_id (str), current owning replay only; stale/foreign handles fail before native effects<br>timeout_ms (integer, optional): stepping budget in milliseconds (default 10000)',
+  'returns_raw': 'ok (bool)<br>data (dict): {state, stopped_reason: breakpoint|finished|timeout}; a timeout '
+                 'also reports effects_attempted and context_preserved<br>artifacts (list)<br>error '
                  '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
   'param_names': ['session_id', 'shader_debug_id', 'timeout_ms'],
   'prerequisites': [{'requires': 'session_id',
@@ -766,8 +766,11 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
   'description': '逐项运行到指定trace stepIndex（target.pc），不支持后退或源码位置。',
   'parameter_raw': 'session_id (string): session_id (str)<br>shader_debug_id (string): '
                    'shader_debug_id (str)<br>target (object): See input_schema for '
-                   'constraints.<br>timeout_ms (integer, optional): timeout_ms (int, 可选, 默认 10000)',
-  'returns_raw': 'ok (bool)<br>data (dict): {state}<br>artifacts (list)<br>error '
+                   'constraints.<br>timeout_ms (integer, optional): stepping budget in milliseconds (default 10000)',
+  'returns_raw': 'ok (bool)<br>data (dict): {state} once target.pc is reached; {state, stopped_reason=finished} '
+                 'when the trace ends first; when the stepping budget runs out, {state, stopped_reason=timeout, '
+                 'target_pc, target_reached=false, effects_attempted, context_preserved}: the debugger advanced to '
+                 'the reported state and the replay event is not moved by debugger steps<br>artifacts (list)<br>error '
                  '(dict|null)<br>meta (dict)<br>projections (dict, 可选)',
   'param_names': ['session_id', 'shader_debug_id', 'target', 'timeout_ms'],
   'prerequisites': [{'requires': 'session_id',
@@ -2994,8 +2997,7 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                    '中附带 `supported_modes` / `requested_mode` / `failure_stage` / '
                    '`failure_reason`<br>event_id (integer, optional): event_id (int, 可选): 缺省为当前 '
                    'active event<br>params (object): params (dict): pixel 模式下使用 {x, y, sample?, '
-                   'target?, view?, primitive?}；显式 target 只验证该目标，不回退到其他输出；缺省时使用当前 Event 输出，找不到时才尝试默认目标<br>timeout_ms (integer, optional): timeout_ms '
-                   '(int, 可选, 默认 10000)<br>context_id (string, optional): context_id (str, '
+                   'target?, view?, primitive?}；显式 target 只验证该目标，不回退到其他输出；缺省时使用当前 Event 输出，找不到时才尝试默认目标<br>context_id (string, optional): context_id (str, '
                    'optional): choose the context to use; defaults to the current daemon context',
   'returns_raw': 'ok (bool)<br>data (dict): {shader_debug_id, initial_state, resolved_context, debug_qualification?, '
                  'resolved_event_id, pixel_history_summary, selected_target_source, failure_stage, '
@@ -3005,7 +3007,7 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                  'Pixel History, returns pixel_history_unsupported_input_attachment after replay position '
                  'restoration.<br>meta (dict)<br>projections (dict, 可选)'
                  '<br>Missing-event rejection includes failure_stage=validate_event, effects_attempted=false and context_preserved=true with category validation only when no native effects were attempted and the entry replay, event, replacements and affected records are unchanged; otherwise category runtime and no such proof.',
-  'param_names': ['session_id', 'mode', 'event_id', 'params', 'timeout_ms', 'context_id'],
+  'param_names': ['session_id', 'mode', 'event_id', 'params', 'context_id'],
   'prerequisites': [{'requires': 'session_id',
                      'via_tools': ['rd.capture.open_file', 'rd.capture.open_replay'],
                      'reason': 'This tool operates on a live replay session.'}],
@@ -3026,8 +3028,6 @@ OPERATIONS = [{'name': 'rd.buffer.get_data',
                                   'params': {'description': 'params (dict): pixel 模式下使用 {x, y, '
                                                             'sample?, target?, view?, primitive?}；显式 target 不回退，缺省按当前 Event 输出选择',
                                              'type': 'object'},
-                                  'timeout_ms': {'description': 'timeout_ms (int, 可选, 默认 10000)',
-                                                 'type': 'integer'},
                                   'context_id': {'description': 'context_id (str, optional): '
                                                                 'choose the context to use; '
                                                                 'defaults to the current daemon '
