@@ -16,13 +16,23 @@ VFS、facade 命令、`diff pipeline` 或 `assert pipeline` 报告 `session_requ
 
 worker 退出后的 `requires_restart` 会话只有在旧 worker 退出身份可核实、没有活动 replacement 且远程归属可确认时才允许继续清理。原生清理失败时保留会话和未确认的句柄；不要把重试或进程身份不可读当作释放证明。
 
-### session 操作超时
+### 操作卡住、取消与 worker 丢失
 
-`rd.session.*` 的 worker 预算与 65 秒传输截止时间见 [session-model.md](session-model.md)，它们与宿主应用的外层进程超时相互独立。宿主在 65 秒之前就报告超时时，确认它使用的是当前打包的 RDC-Tool，且外层 CLI 截止时间大于 65 秒。不要添加单次调用的超时覆盖，也不要原地修改已安装的包；更新并重新安装 RDC-Tool，让策略与测试保持唯一真源。
+操作没有固定时长上限，只有无进展预算（默认 300 秒，见[公共契约](public-contract.md#execution-budget)）。正在报告进度或原生调用帧的慢操作不会被判为卡住；用 `call … --progress-stream` 可以在 stderr 上看到 progress、native_call 与 heartbeat 帧。宿主不应再在外层套一个固定进程超时，判断 daemon 是否仍在服务看心跳即可。
+
+- `worker_stuck`，`reason=no_progress`：在预算内没有任何帧，worker 已在打印栈之后被终止。读取 `details.stack_log.tail`（从栈转储开始，完整内容在 `details.stack_log.path` 指向的 `worker.log`）与 `details.last_progress.native_call` 定位卡在哪个原生调用。`details.replay_requires_restart=true` 时，所属回放已隔离为 `requires_restart`：先用 `rdc-tool context status --json` 核对 `sessions[].recovery.worker_exit`，再关闭并重新打开 capture。若同一个原生调用在真实数据上确实需要更久，对该请求调大 `--no-progress-ms`（上限 3600000），不要重试同一请求来“碰运气”。
+- `worker_stuck`，`reason=cancel_unsettled`：取消后 10 秒内运行中的原生调用仍未返回，worker 已被终止；按上一条恢复。
+- `worker_lost`：worker 在回复前退出，`stack_log.tail` 中通常有致命信号的 Python 栈。`worker_request_failed`：帧无效、请求无法送达或 worker 自身报错。两者都是未知结果，daemon 从不重新提交；按上文核对后再决定是否重开。
+- `operation_cancelled`：请求按调用方要求取消。`outcome=not_started` 表示从未开始；`outcome=cancelled` 表示在原生调用边界停下，已完成的原生调用不回滚，worker 与回放继续可用。
+- `daemon_lost` / `daemon_unresponsive`：CLI 与 daemon 的连接中断或 daemon 停止发送心跳。结果未知；用只读的 `context status` 查看 daemon、worker 与活动请求的实际状态，它不会启动任何进程。
+
+取消运行中的请求用 `rdc-tool daemon cancel --request-id <id>`（id 即 `call --request-id` 传入的值），回执的 `outcome` 说明请求的实际结局。不要通过结束 CLI 进程来取消：daemon 会继续执行该请求并占用执行锁。
+
+daemon 与 worker 的有界日志分别是运行目录中的 `daemon.log`（非 `default` context 为 `daemon_<context>.log`）与 worker 状态目录中的 `worker.log`（`worker_<context>.log`），各保留当前文件与一代轮转。
 
 ## Daemon 启动与状态锁
 
-`daemon_start_lock_timeout`：本调用方 30 秒内未取得该 context 的启动锁，另一调用方可能仍在检查或启动 daemon。查看报告的 context 与等待阶段，等现有启动完成后重试同一 context。不要删除 `.start.lock`、清除 context 状态或停止存活的 owner 来绕过等待。它不同于 daemon 就绪超时与操作响应超时，不能证明现有 owner 已失败。
+`daemon_start_lock_timeout`：本调用方 30 秒内未取得该 context 的启动锁，另一调用方可能仍在检查或启动 daemon。查看报告的 context 与等待阶段，等现有启动完成后重试同一 context。不要删除 `.start.lock`、清除 context 状态或停止存活的 owner 来绕过等待。它不同于 daemon 就绪超时与操作无进展，不能证明现有 owner 已失败。
 
 `state_lock_timeout`：另一写入方在 10 秒内仍持有 context 状态或快照文件的锁。等并发写入完成后重试，不要删除锁文件。
 
@@ -32,7 +42,7 @@ worker 退出后的 `requires_restart` 会话只有在旧 worker 退出身份可
 
 ## 回放
 
-`rd.capture.open_replay` 复用同一 context 中同一 capture 的 live session。重开前用 `rd.capture.close_replay` 释放回放资源。daemon 超时后，先查看 `rdc-tool context status --json` 与操作历史，再决定是否清除或停止 context。过期清理失败时返回 `stale_session_requires_restart` 与恢复命令。
+`rd.capture.open_replay` 复用同一 context 中同一 capture 的 live session。重开前用 `rd.capture.close_replay` 释放回放资源。请求以 `worker_stuck`、`worker_lost` 或 `daemon_lost` 结束后，先查看只读的 `rdc-tool context status --json` 与操作历史，再决定是否清除或停止 context。过期清理失败时返回 `stale_session_requires_restart` 与恢复命令。
 
 `rd.capture.open_replay` 返回 `local_replay_unsupported`：本主机的 RenderDoc 运行库不能在本地回放该 capture 的图形 API（例如 Linux 上的 D3D11/D3D12 capture），请求在创建任何回放之前就被拒绝。`details.capture_api` 与 `details.host_target` 给出具体组合，分类见[公共契约](public-contract.md)。改在支持该 API 的主机上回放，或先 `rd.remote.connect`，再通过 `options.remote_id` 远端回放。
 
@@ -84,7 +94,7 @@ preview 看着不全、留黑边或像是畸形：检查 `preview.display`，确
 
 ## Android
 
-Android 准备、借用、未决安装与超时策略的契约见 [public-contract.md](public-contract.md) 的 Android 远端一节，helper 与 forward 的生命周期见 [session-model.md](session-model.md)。
+Android 准备、借用、未决安装与连接预算的契约见 [public-contract.md](public-contract.md) 的 Android 远端一节，helper 与 forward 的生命周期见 [session-model.md](session-model.md)。
 
 ### 设备列表为空与主机工具缺失
 
@@ -92,7 +102,7 @@ Android 准备、借用、未决安装与超时策略的契约见 [public-contra
 
 ### ADB 查询与设备状态
 
-Android bootstrap 在同一连接 deadline 与取消范围内，先确保所选 ADB server 就绪，再查询设备状态、准备 helper/socket、forward 与握手。已有明确 serial 时只对该设备执行 `get-state` 并要求 `device`，不重新枚举或自动选择其他设备；只有未指定 serial 的独立 CLI 调用才枚举并严格校验设备列表响应头。错误详情保留有界的实际命令、退出码、stdout 与 stderr。
+Android bootstrap 在同一连接预算与取消范围内，先确保所选 ADB server 就绪，再查询设备状态、准备 helper/socket、forward 与握手。已有明确 serial 时只对该设备执行 `get-state` 并要求 `device`，不重新枚举或自动选择其他设备；只有未指定 serial 的独立 CLI 调用才枚举并严格校验设备列表响应头。错误详情保留有界的实际命令、退出码、stdout 与 stderr。
 
 - `adb_server_start_failed`：server 启动失败，不继续创建 helper。
 - `adb_devices_invalid_response`：退出码为零但缺少设备列表响应头，不能当作没有设备。

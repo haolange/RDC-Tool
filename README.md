@@ -57,11 +57,15 @@ smoke 脚本直接调用 `bin/rdc-tool`，执行 `doctor`、轻量发现，以�
 
 ## 会话状态
 
-用 `rdc-tool context status` 读取 context 状态，用 `rdc-tool context update` 更新 notes、focus 等 Agent 可见的元数据。`--daemon-context <id>` 选择持续的运行时命名空间，省略时使用 `default`。多个 daemon context 相互隔离，由调用方选择要操作的 context id。状态包含 `session_locator`、当前 capture/session ID、preview 状态与远端生命周期字段。`remote_handle_consumed` 表示远端句柄已绑定到某个回放会话，不能再当作空闲的远端连接复用。
+用 `rdc-tool context status` 只读地查看 context 状态（daemon 与 worker 身份、正在执行的请求、各回放 session 的恢复状态与 worker 生命周期；它不会启动 daemon 或 worker），用 `rdc-tool context update` 更新 notes、focus 等 Agent 可见的元数据。`--daemon-context <id>` 选择持续的运行时命名空间，省略时使用 `default`。多个 daemon context 相互隔离，由调用方选择要操作的 context id。状态包含 `session_locator`、当前 capture/session ID 与 preview 状态；实时回放快照与远端生命周期字段由 `rd.session.get_context` 返回。`remote_handle_consumed` 表示远端句柄已绑定到某个回放会话，不能再当作空闲的远端连接复用。
 
 ## Preview CLI 契约
 
-`session preview on|status|off` 经 daemon 调用 `rd.session.open_preview`。`rdc-tool context status` 报告 `rd.session.get_context.preview` 与 `preview.display`；preview 应展示完整 framebuffer，而不是按 viewport / scissor 裁剪。原生 preview 窗口只在 Windows 上提供；其他主机返回结构化错误 `preview_unsupported_platform`，`rd.core.get_capabilities` 报告 `preview_window.available=false`，需要图像时使用无窗口的 `rd.session.observe`。
+`session preview on|status|off` 经 daemon 调用 `rd.session.open_preview`。`rdc-tool context status` 报告与 `rd.session.get_context.preview` 相同的 preview 状态与 `preview.display`；preview 应展示完整 framebuffer，而不是按 viewport / scissor 裁剪。原生 preview 窗口只在 Windows 上提供；其他主机返回结构化错误 `preview_unsupported_platform`，`rd.core.get_capabilities` 报告 `preview_window.available=false`，需要图像时使用无窗口的 `rd.session.observe`。
+
+## 长操作与取消
+
+操作不受固定时长限制，只在持续没有进展时被判为卡住（默认 300 秒，可用 `--no-progress-ms` 在 30 秒到 1 小时之间选择，catalog 的 `execution_budget` 声明这一规则）。`rdc-tool call <rd.*> --request-id <id> --progress-stream` 把进度、原生调用与心跳帧以 NDJSON 写到 stderr，stdout 仍是唯一的结果信封；`rdc-tool daemon cancel --request-id <id>` 取消排队或运行中的请求并返回实际结局。卡住的 worker 会在留下全部线程栈之后被连同子进程一起终止，结果为结构化的 `worker_stuck`；错误码与恢复见 [公共契约](docs/public-contract.md#execution-budget) 与 [故障排查](docs/troubleshooting.md)。
 
 ## 批量只读查询
 

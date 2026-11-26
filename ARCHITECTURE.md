@@ -15,6 +15,13 @@ rdc-tool（CLI 进程，短命）
 - worker 是唯一触碰原生库的进程；它随 daemon 退出而退出。
 - 跨进程的存活与归属一律以进程身份 `(pid, birth)` 判断，见下文平台层。
 
+一次操作请求的生命周期：
+
+- CLI 把 `exec`（携带 `request_id`、`no_progress_ms` 与 `stream`）发给 daemon，并保持连接等待回复，不设总截止时间；daemon 在该连接上每 2 秒发送心跳，并按需转发 progress 与 native_call 帧。daemon 的 `(pid, birth)` 退出或心跳中断时 CLI 返回 `daemon_lost` / `daemon_unresponsive`。
+- daemon 以一把执行锁串行化请求；排队的请求以 1 秒切片等待，期间可被取消。`cancel` 与只读的 `context_status` 不占用执行锁。
+- worker 每收到一个帧，daemon 就把该请求的截止时间前移一个无进展预算；到期时 daemon 等待 worker 的 faulthandler 栈转储，终止 worker 进程树并确认退出，回放被隔离为 `requires_restart`。worker 的 stdin 由独立线程读取，取消控制行不排在它所取消的请求之后。
+- 预算与各控制期限只在 `rdc_tool/timeout_policy.py` 声明；daemon 与 worker 的 stderr 写入各自有界轮转的 `daemon.log` / `worker.log`。
+
 ## 分层与依赖方向
 
 依赖只能自上而下：
@@ -25,6 +32,7 @@ rdc-tool（CLI 进程，短命）
 | daemon | `rdc_tool/daemon/` | context 所有权、state 文件（`daemon/state.py` 唯一所有者）、IPC 服务、worker 生命周期 |
 | 运行时 | `rdc_tool/runtime/`、`rdc_tool/core/` | worker 内执行 `rd.*` 操作：路由、操作实现与回放服务（结构见下文） |
 | 契约 | `rdc_tool/operation_definitions.py`、`rdc_tool/runtime_catalog.py` | 操作定义唯一真源；catalog 与参考文档由它生成 |
+| 执行边界 | `rdc_tool/native_calls.py`、`rdc_tool/progress.py`、`rdc_tool/timeout_policy.py` | 原生调用唯一入口、每请求的进度与取消作用域、执行预算与控制期限 |
 | 平台 | `rdc_tool/platform/` | 所有操作系统差异 |
 
 ## 运行时结构
@@ -42,6 +50,8 @@ rdc-tool（CLI 进程，短命）
 
 - 模块之间以 `module.name` 引用，每个函数只存在于一个命名空间；测试替换一次即对所有调用方生效。
 - 可变的进程内状态只在 `live_state`；可被替换的外部协作者（如 `remote_bootstrap`、`timeout_policy`）同样以模块引用。
+- 阻塞的原生工作只经 `rdc_tool/native_calls.py` 进入 replay executor（`renderdoc_api._offload` 只在其上记录拒绝作用域的效果）：调用方的 context 变量随调用进入执行线程，名称变化或至多每 0.5 秒发送一个 native_call enter 帧、超过 1 秒的调用发送 exit 帧，取消先等待原生调用返回再生效。它位于 `runtime/` 之外，`core/` 的服务同样使用它；`tests/test_native_calls.py` 保证没有其他执行器入口。
+- 每请求的上下文（进度 reporter、`RequestScope` 的 request id、trace id、预算与取消事件）在 `rdc_tool/progress.py` 中，`core/` 与 `runtime/` 都可读取；在单个原生调用内循环的代码（调试器步进、ADB 传输、远端 bootstrap）轮询其取消事件。
 - 唯一允许的循环是 replay 服务组之间的互相恢复与探测；服务层不导入操作层与执行层（VFS 读取重新进入完整执行流程时在函数内显式导入 `dispatch`）。
 - `rdc_tool/runtime` 之外的代码不导入它。`tests/test_runtime_layering.py` 守住以上规则与路由覆盖。
 
@@ -62,7 +72,7 @@ rdc-tool（CLI 进程，短命）
 |---|---|---|
 | 主机 | `host.py` | `host_target()`（如 `windows-x64`、`linux-x64`）；唯一读取操作系统信息的位置 |
 | 锁 | `locks.py` | `path_lock`：进程内 mutex 与文件锁共用一个单调截止时间，文件锁只做非阻塞重试；`HeldLock`：进程生命周期内持有 |
-| 进程 | `process.py` | `ProcessIdentity(pid, birth)` 与 `probe()`：PID 复用或僵尸为 `EXITED`，不可读为 `UNKNOWN`（既不证明退出也不授权终止）；`kill_tree` 先确认身份；`SpawnProfile` 决定 daemon、worker、工具的启动方式 |
+| 进程 | `process.py` | `ProcessIdentity(pid, birth)` 与 `probe()`：PID 复用或僵尸为 `EXITED`，不可读为 `UNKNOWN`（既不证明退出也不授权终止）；`kill_tree` 先确认身份：领导独立进程组的 daemon 整组结束，同组内的 worker 先暂停自身与仍在同一 session 的后代、再从叶到根逐个复核身份后结束（Windows 为 `taskkill /T`）；`SpawnProfile` 决定 daemon、worker、工具的启动方式；`start_tool` 启动需要轮询的主机工具 |
 | IPC | `ipc.py` | 本机 endpoint（Windows named pipe；POSIX 私有 0700 目录内的 Unix socket），每个连接先完成 HMAC 认证再解码请求 |
 | 原生加载 | `native.py` | 让确切的 RenderDoc 原生库可加载，并观察进程实际映射的文件 |
 | preview | `preview.py` | 原生 preview 窗口是主机能力；无实现的主机返回结构化 `preview_unsupported_platform` |
